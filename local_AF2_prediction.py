@@ -46,7 +46,8 @@ def main(fasta_in, workingdir):
 	subprocess.run(lcf_call, shell=True)
 
 	#move best PDB model to workingdir
-	subprocess.run("cp {}/*_relaxed_rank_001*.pdb {}".format(results_folder, workingdir), shell=True)
+	subprocess.run("cp {}/*_relaxed_rank_001*.pdb {}/{}.AF2.pdb".format(results_folder, workingdir, name), shell=True)
+	
 
 if __name__ == "__main__":
 	
