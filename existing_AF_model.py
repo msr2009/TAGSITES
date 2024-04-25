@@ -20,55 +20,76 @@ Returns:
 Matt Rich, 4/2024
 """
 
-import subprocess
-from site_selection_util import read_fasta
+import subprocess, re
+from site_selection_util import get_sequence, uniprot_accession_regex, save_fasta
 
-#EBI_CLIENTS = "./ebi_api_clients/"
-
-def main(fasta_in, email, workingdir, evalue, percentid, clients_folder):
+def main(fasta_in, email, workingdir, name, evalue, percentid, clients_folder):
 	
-	#read sequence from fasta
-	name, seq = read_fasta(fasta_in)
+	match_accession = ""
+	match_eval = 1e-200
+	match_id = 100.0
+	move_fasta = False
 
-	#make ncbiblast command
-	ncbi_call = "python {}ncbiblast.py \
-					--email {} \
-					--program blastp \
-					--stype protein \
-					--sequence {} \
-					--database uniprotkb \
-					--outformat tsv \
-					--outfile {}/{}.ncbiblast".format(clients_folder, email, seq, workingdir, name)
-	#call ncbiblast command
-	subprocess.run(ncbi_call, shell=True)
+	#if the input is an accession
+	if uniprot_accession_regex(fasta_in) != None:
+		match_accession = fasta_in
+		move_fasta = True
+	#otherwise, we need to find a match in the AF2 db
+	else:
+		#read sequence from fasta
+		seq = get_sequence(fasta_in)
 
-	#open ncbiblast output
-	ncbi_out = open("{}/{}.ncbiblast.tsv.tsv".format(workingdir, name), "r")
-	#we only care about the best match (the second line)
-	l = ncbi_out.readlines()[1].strip().split("\t")
-	match_id = float(l[7])
-	match_eval = float(l[9])
-	match_accession = l[2]
+		#make ncbiblast command
+		ncbi_call = "python {}ncbiblast.py \
+						--email {} \
+						--program blastp \
+						--stype protein \
+						--sequence {} \
+						--database uniprotkb \
+						--outformat tsv \
+						--outfile {}/{}.ncbiblast".format(clients_folder, email, seq, workingdir, name)
+		#call ncbiblast command
+		subprocess.run(ncbi_call, shell=True)
 
-	#check if there's a close match
-	if match_id >= percentid and match_eval <= evalue:
+		#open ncbiblast output
+		ncbi_out = open("{}/{}.ncbiblast.tsv.tsv".format(workingdir, name), "r")
+		#we only care about the best match (the second line)
+		l = ncbi_out.readlines()[1].strip().split("\t")
+		match_id = float(l[7])
+		match_eval = float(l[9])
+		match_accession = l[2]
+
+	#download AF2 model if it exists
+	if match_id >= percentid and match_eval <= evalue and match_accession != "":
 		#if we have a close match, then see if there's an AF2 model
 		#this uses dbfetch from EBI
 		dbfetch_call = "python {}dbfetch.py fetchData \
-							afdb:{} pdb raw".format(clients_folder, match_accession)
-
+						afdb:{} pdb raw".format(clients_folder, match_accession)
+	
 		#call dbfetch command
 		pdb_out = subprocess.run(dbfetch_call, shell=True, capture_output=True, text=True).stdout
 
 		#if this call returns an error, there isn't a predicted structure
 		no_af_error = "ERROR 11 Unable to connect to database [afdb]."
 		if pdb_out != no_af_error:
+			#otherwise, we found a good pdb
 			f_out = open("{}/{}.pdb".format(workingdir, name), "w")
+			#save it in the working dir
 			print(pdb_out, file=f_out)
-			print("saving pdb file to {}/{}.pdb".format(workingdir, name))
+			print("saving {} pdb file to {}/{}.pdb".format(match_accession, workingdir, name))
 			f_out.close()
+			
+			#also, make a fasta from the pdb if we went straight from accession
+			if move_fasta:
+				save_fasta(name, 
+							get_sequence("{}/{}.pdb".format(workingdir, name)), 
+							"{}/{}.fa".format(workingdir, name))
+			print("saving fasta from {} pdb to {}/{}.fa".format(match_accession, workingdir, name))
+
+			return 0
 		else:
 			print("pdb not found")
+			return 1
 
 if __name__ == "__main__":
 	
@@ -81,6 +102,8 @@ if __name__ == "__main__":
 		help = "email address, required by EBI job submission.", required=True)
 	parser.add_argument('--dir', action='store', type=str, dest='WORKINGDIR', 
 		help = "working directory for output", required=True)
+	parser.add_argument('--name', action='store', type=str, dest='NAME', 
+		help = "name for output", required=True)
 	parser.add_argument('--evalue', action='store', type=float, dest='EVALUE', 
 		help = "evalue threshold for BLAST hit (1e-20)", default=1e-20)
 	parser.add_argument('--percentid', action='store', type=float, dest='PERCENTID', 
@@ -91,6 +114,6 @@ if __name__ == "__main__":
 
 	args = parser.parse_args()
 	
-	main(args.FASTA_IN, args.EMAIL, args.WORKINGDIR, args.EVALUE,
+	main(args.FASTA_IN, args.EMAIL, args.WORKINGDIR, args.NAME, args.EVALUE,
 					args.PERCENTID, args.CLIENTS_FOLDER)	
 

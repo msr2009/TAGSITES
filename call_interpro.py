@@ -36,7 +36,7 @@ def main(fasta_in, email, workingdir, clients_folder):
 	for line in open("{}/{}.interpro.tsv.tsv".format(workingdir, name), "r").readlines():
 		l = line.strip().split("\t")
 		#print output
-		f_out = open("{}/{}.interpro.out", "w")
+		f_out = open("{}/{}.interpro.out".format(workingdir, name), "w")
 		print("\t".join([l[3], l[6], l[7], l[5]]), file=f_out)
 		f_out.close()
 

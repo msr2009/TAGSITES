@@ -16,14 +16,15 @@ Returns:
 Matt Rich, 4/2024
 """
 
-import subprocess, sys
+import subprocess
+from sys import exit
 from site_selection_util import read_fasta
 
 def check_localcolabfold_install():
 	check = subprocess.run("colabfold_batch -h", shell=True, 
 							capture_output=True, text=True).stdout
 	if check.startswith("usage: colabfold_batch") != True:
-		sys.exit("LocalColabfold installation not found. Exiting.")
+		exit("LocalColabfold installation not found. Exiting.")
 
 def main(fasta_in, workingdir):
 	

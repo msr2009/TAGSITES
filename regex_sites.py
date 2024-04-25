@@ -9,15 +9,21 @@ functional
 Matt Rich, 4/2024
 """
 
-def main(seq, site_res, fout):
+from site_selection_util import read_fasta
+
+def main(fasta_in, site_res, fout):
+
+	#read sequence from fasta
+	name, seq = read_fasta(fasta_in)
+	
 	site_ranges = []
 
 	for line in open(site_res, "r"):
 		l = line.strip().split("\t")
-		desc = l[0] 
+		description = l[0] 
 		regex = l[1]
-		for match in re.finditer(regex, seq):
-			site_ranges = [desc, match.start(), match.end()]
+		for match in re.finditer(regex, str(seq)):
+			site_ranges = [description, match.start(), match.end()]
 			print("\t".join(str(x) for x in site_ranges), file=fout)
 
 if __name__ == "__main__":
@@ -25,9 +31,9 @@ if __name__ == "__main__":
 	from argparse import ArgumentParser
 
 	parser = ArgumentParser()
-	parser.add_argument('-s', '--seq', action = 'store', type = str, dest = 'SEQ', 
-		help = "protein sequence")
-	parser.add_argument('-f', action = 'store', type = str, dest = 'SITE_FILE', 
+	parser.add_argument('-f', '--fasta', action = 'store', type = str, dest = 'FASTA', 
+		help = "fasta file containing protein sequence")
+	parser.add_argument('--sites', action = 'store', type = str, dest = 'SITES_FILE', 
 		help = "tab-delimited file containing name and regular expression for site")
 	parser.add_argument('-o', action = 'store', type = str, dest = 'OUTPUT_FILE', 
 		help = "file to store output, default=STDOUT", default = None)
@@ -35,9 +41,9 @@ if __name__ == "__main__":
 	
 	if args.OUTPUT_FILE != None:
 		fout = open(args.OUTPUT_FILE, "w")		
-		main(args.SEQ, args.SITE_FILE, args.OUTPUT_FILE)
+		main(args.FASTA, args.SITES_FILE, fout)
 		fout.close()
 	else:
-		main(args.SEQ, args.SITE_FILE, sys.stdout)
+		main(args.FASTA, args.SITES_FILE, sys.stdout)
 		
 
