@@ -3,146 +3,6 @@ from scipy.signal import find_peaks
 import re, string, sys
 from Bio import SeqIO, PDB 
 
-def filter_functional_sites(seq, sites_to_filter):
-    """
-    function for finding known functional sites in sequence
-    e.g., myristoylation = N-MGxxxS
-    
-    Parameters:
-        seq (str): sequence of protein
-        sites_to_filter (dict): dictionary of "function: [regex]"
-    
-    Returns:
-        list of sites to be excluded. 
-    """
-    
-    filtered_indices = []
-    
-    for r in sites_to_filter:
-        for match in re.finditer(sites_to_filter[r], seq):
-            for i in range(match.start(), match.end()):
-                filtered_indices.append([r, i])
-    
-    return list(zip(*filtered_indices))
-
-def smooth_iterative(data, windowsize):
-    """
-    function to (potentially) iteratively smooth data. Calls numpy convolve
-    for smoothing.
-    
-    Parameters:
-        data (list): data to be smoothed
-        windowsize (int or list): if windowsize is a list, smoothing is performed
-            iteratively using window sizes in list.
-        
-    Returns:
-        smoothed data (list)
-    """
-    
-    # If windowsize is an int, change it into a list
-    if not isinstance(windowsize, list):
-        windowsize = list(windowsize)
-     
-    # Perform iterative smoothing
-    tmp_smoothed = data
-    for w in windowsize:
-        window = np.ones(w) / w
-        tmp_smoothed = np.convolve(tmp_smoothed, window, mode='valid')
-        
-    return tmp_smoothed 
-        
-def split_minima(minima, min_dist):
-    """
-    Recursively splits a set of local minima into subsets that are separated
-    by at least `min_dist` distance between adjacent elements.
-    
-    Parameters:
-        minima (list): List of indices of local minima.
-        min_dist (int): Minimum distance allowed between adjacent elements.
-    
-    Returns:
-        List of mean indices for each subset.
-    """
-    
-    # Check if minima is a single value
-    if len(minima) == 1:
-        return [minima]
-    
-    # Compute the differences between adjacent elements in the `minima` list.
-    diffs = np.diff(minima)
-    
-    # Find the index of the largest difference between adjacent elements.
-    max_diff_idx = np.argmax(diffs)
-    
-    # If the largest difference is less than the minimum distance, return
-    # the mean index of the `minima` list.
-    if diffs[max_diff_idx] < min_dist:
-        return [np.mean(minima)]
-    
-    # Recursively split the set of local minima at the index with the
-    # largest difference.
-    left_subset = minima[:max_diff_idx+1]
-    right_subset = minima[max_diff_idx+1:]
-    subsets = []
-    if len(left_subset) > 0:
-        subsets += split_minima(left_subset, min_dist)
-    if len(right_subset) > 0:
-        subsets += split_minima(right_subset, min_dist)
-    
-    # Compute the mean index for each subset and return the list of means.
-    return [np.floor(np.mean(subset)) for subset in subsets]
-
-
-def find_insertion_sites(data, window_size, num_minima, min_dist, exclude_list=[], max_score=100):
-    """
-    Uses pLDDT scores from AlphaFold2 structural predictions to 
-    identify sites that may be permissive for tag insertion. 
-    Specifically, finds local minima in the pLDDT scores. These 
-    minima are then filtered by various methods (they must be far
-    enough apart, they don't overlap functional sites, etc...).
-    
-    Parameters:
-        data (list): pLDDT scores for prediction
-        window_size (int or list): if windowsize is a list, smoothing is performed
-            iteratively using window sizes in list.
-        num_minima (int): number of sites in return
-        min_dist (int): minimum distance between 'clusters' of sites
-        exclude_list (list): list of indices to exclude from returned sites
-        max_score (int): pLDDT threshold for returning sites
-
-    Returns:
-        List of potentially permissive sites for tag insertion
-    """    
-    
-    # Apply sliding window smoothing and identify local minima
-    smoothed = smooth_iterative(data, window_size)
-    minima_indices, _ = find_peaks(-smoothed, prominence=1)
-    
-    # Split minima that are too close together
-    if len(minima_indices) > 1:
-        minima_indices = np.sort(minima_indices)
-        minima_indices = split_minima(minima_indices, min_dist)
-    
-    # Exclude minima in exclude_list
-    # these could be functional sites, etc...
-    indices = []
-    for idx in minima_indices:
-        if idx not in exclude_list:
-            indices.append(idx)
-    
-    # Calculate scores for each local minimum and sort
-    scores = []
-    indices_to_keep = []
-    for idx in indices:
-        score = smoothed[int(idx)]
-        if score < max_score:
-            scores.append(smoothed[int(idx)])
-            indices_to_keep.append(int(idx))
-    sorted_indices = [x for _, x in sorted(zip(scores, indices_to_keep))]
-    
-    # Return the top num_minima minima
-    return sorted_indices[:num_minima]
-
 def insert_tag(target_seq, tag_seq, site):
     """
     Function for inserting tag sequences at specific sites
@@ -175,13 +35,11 @@ def get_sequence(infile):
     
     Returns: protein sequence (str).
     """
-    
     # if it's a PDB, we can read the 
     # protein seq from the PDB file
     if infile.endswith(".pdb"):
         for s in SeqIO.parse(infile, "pdb-seqres"):
             return str(s.seq)
-            break
             
     # if it's a fasta file, we need to determine 
     # (1) if it's DNA or protein
@@ -200,35 +58,40 @@ def get_sequence(infile):
             
 
 def sequence_type(sequence):
-    """
-    Determines whether a sequence is a DNA, protein, or 
-    contains unknown bases. From ChatGPT.
+	"""
+	Determines whether a sequence is a DNA, protein, or 
+	contains unknown bases. From ChatGPT and edited by me.
 
-    Parameters:
-        sequence (str): The sequence to check.
+	If unknown bases, then use RE to see if it's a 
+	uniprot accession.
 
-    Returns:
-        str: "DNA" if the sequence is a DNA sequence, 
-             "protein" if the sequence is a protein sequence, or 
-             "unknown" if the sequence contains unknown bases.
-    """
-    dna_bases = set('ACTGN')
-    protein_bases = set('ACDEFGHIKLMNPQRSTVWYX')
+	Parameters:
+		sequence (str): The sequence to check.
 
-    # Convert the sequence to uppercase to make it case-insensitive
-    sequence = sequence.upper()
+	Returns:
+		str:	"DNA" if the sequence is a DNA sequence, 
+				"protein" if the sequence is a protein sequence, or 
+				"unknown" if the sequence contains unknown bases.
+	"""
+	from re import match
+   
+	dna_bases = set('ACTGN')
+	protein_bases = set('ACDEFGHIKLMNPQRSTVWYX')
+    
+	# Convert the sequence to uppercase to make it case-insensitive	
+	sequence = sequence.upper()
 
-    # Check whether the sequence contains only DNA bases
-    if set(sequence).issubset(dna_bases):
-        return "dna"
+	# Check whether the sequence contains only DNA bases
+	if set(sequence).issubset(dna_bases):
+		return "dna"
 
-    # Check whether the sequence contains protein bases
-    elif set(sequence).issubset(protein_bases):
-        return "protein"
-
-    # If the sequence contains unknown bases, return "unknown"
-    else:
-        return "unknown"
+	# Check whether the sequence contains protein bases
+	elif set(sequence).issubset(protein_bases):
+		return "protein"
+        
+	# If the sequence contains unknown bases, return "unknown"
+	else:	
+		return "unknown"
     
 def remove_lowercase(seq):
     """
@@ -354,3 +217,58 @@ def read_fasta(fasta_in):
 
 	for record in SeqIO.parse(fasta_in, "fasta"):
 		return [record.id.strip(","), record.seq]
+
+def check_input_type(inputfile):
+	"""
+	determines whether input is PDB or FASTA.
+	currently very dumb -- looks at file extension lol
+	
+	Parameters: 
+	- inputfile (str): name of input file
+
+	Returns:
+	- inputtype (str): fasta or pdb
+	"""
+	
+	file_extension = inputfile.split(".")[-1]
+
+	if uniprot_accession_regex(inputfile) != None:
+		return("uniprot")
+	elif file_extension == "pdb":
+		return("pdb")
+	elif file_extension in ["fasta", "fsa", "fa"]:
+		return("fasta")
+	else:
+		return("err")
+	
+def save_fasta(name, seq, outfile):
+	"""
+	writes fasta very simply.
+
+	Parameters: 
+	- name (str): name for header
+	- seq (str): sequence
+	- outfile (str): name for output file
+	"""
+
+	f_out = open(outfile, "w")
+	print(">{}".format(name), file=f_out)
+	print(seq, file=f_out)
+	f_out.close()
+	
+	return
+
+def uniprot_accession_regex(_str):
+	"""
+	according to uniprot (https://www.uniprot.org/help/accession_numbers)
+	this regex will match all accessions
+
+	Parameters:
+		- _str (str): string to be matched by regex
+	
+	Returns:
+		- None if no match
+		- match object if match
+	"""
+	from re import match
+	return match("[OPQ][0-9][A-Z0-9]{3}[0-9]|[A-NR-Z][0-9]([A-Z][A-Z0-9]{2}[0-9]){1,2}", _str)
