@@ -49,7 +49,7 @@ def main(fasta_in, email, workingdir, name, n, evalue, db, length_percent, align
 					--database {} \
 					--outformat json \
 					--alignments 0 --scores {} --exp {} \
-					--outfile {} --pollFreq 10".format(clients_folder, email, seq, db, 5*n, evalue, out_prefix)
+					--outfile {} --pollFreq 5".format(clients_folder, email, seq, db, 5*n, evalue, out_prefix)
 
 	print(ncbi_call)
 	#call ncbiblast command
@@ -117,8 +117,9 @@ def main(fasta_in, email, workingdir, name, n, evalue, db, length_percent, align
 #				print(dbfetch_call)
 				acc_fasta = subprocess.run(dbfetch_call, shell=True,capture_output=True, text=True).stdout
 				#truncate the name for each seq	
-				acc_fasta_name = acc_fasta.split("\n")[0].split()[0:2]
-				acc_fasta_seq = acc_fasta.split("\n")[1:]
+				print(acc_fasta)
+				acc_fasta_name = acc_fasta.split("\n")[0].split()[0]
+				acc_fasta_seq = "\n".join(acc_fasta.split("\n")[1:])
 				
 				#add to fasta_str
 				fasta_str += acc_fasta_name+"\n"
@@ -158,8 +159,7 @@ def main(fasta_in, email, workingdir, name, n, evalue, db, length_percent, align
 	#this is the first seq in the fasta file
 	best_hit_name = open("{}/{}.blast_close.fasta".format(workingdir, name), "r").readline()[1:]
 
-	js_call = "python {}/score_conservation_py3.py -i {}/{}.blast_close.aln -a {} -o {}/{}.blast_close.jsd".format(clients_folder, 
-																											workingdir, name, 
+	js_call = "python ./score_conservation_py3.py -i {}/{}.blast_close.aln -a {} -o {}/{}.blast_close.jsd".format(workingdir, name, 
 																											best_hit_name,
 																											workingdir, name)
 
@@ -193,12 +193,15 @@ if __name__ == "__main__":
 	parser.add_argument('--align-full-sequence', action='store_true', dest='FULLSEQS', 
 		help = "fetch and align full protein sequences (by default, uses BLAST alignment)")
 	parser.add_argument('--clients-folder', action='store', type=str, dest='CLIENTS_FOLDER', 
-		help = "path to EBI webservice clients (default=./ebi_api_clients/)",
-		default = "./ebi_api_clients/")	
+		help = "path to EBI webservice clients (default=ebi_api_clients/)",
+		default = "ebi_api_clients/")	
 
 	args = parser.parse_args()
 	
+#	main(args.FASTA_IN, args.EMAIL, args.WORKINGDIR, args.NAME, 
+#		 args.MAX_HITS, args.EVALUE, args.DB, args.LENGTH, args.FULLSEQS,
+#		 args.CLIENTS_FOLDER+"/")	
 	main(args.FASTA_IN, args.EMAIL, args.WORKINGDIR, args.NAME, 
 		 args.MAX_HITS, args.EVALUE, args.DB, args.LENGTH, args.FULLSEQS,
-		 args.CLIENTS_FOLDER+"/")	
+		 "ebi_api_clients/")	
 
