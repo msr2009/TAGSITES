@@ -47,7 +47,7 @@ def main(fasta_in, email, workingdir, name, n, evalue, db, length_percent, align
 					--stype protein \
 					--sequence {} \
 					--database {} \
-					--outformat out,json,accs,ids \
+					--outformat json \
 					--alignments 0 --scores {} --exp {} \
 					--outfile {} --pollFreq 10".format(clients_folder, email, seq, db, 5*n, evalue, out_prefix)
 
@@ -114,9 +114,16 @@ def main(fasta_in, email, workingdir, name, n, evalue, db, length_percent, align
 			if align_full_seqs: 
 				## then we need to dbfetch the accessions we want
 				dbfetch_call = "python {}/dbfetch.py fetchData UNIPROT:{} fasta raw".format(clients_folder, h["acc"])
-				print(dbfetch_call)
+#				print(dbfetch_call)
 				acc_fasta = subprocess.run(dbfetch_call, shell=True,capture_output=True, text=True).stdout
-				fasta_str += acc_fasta.rstrip('\n')+"\n"
+				#truncate the name for each seq	
+				acc_fasta_name = acc_fasta.split("\n")[0].split()[0:2]
+				acc_fasta_seq = acc_fasta.split("\n")[1:]
+				
+				#add to fasta_str
+				fasta_str += acc_fasta_name+"\n"
+				fasta_str += acc_fasta_seq.rstrip('\n')+"\n"
+				print(fasta_str)
 			else:
 				#we can make a fasta str (and save a file) for the alignment
 				fasta_str += ">{}\n{}\n".format(h["acc"], h["hitseq"])
