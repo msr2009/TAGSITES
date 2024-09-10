@@ -1,0 +1,93 @@
+{
+	"global": {
+		"email": "msr2009@gmail.com",
+		"directory": "",
+		"name": "",
+		"input": "",
+		"input-type": ["fasta","pdb"],
+		"scripts-folder": "./scripts/"
+	},
+
+	"scripts": {
+		"blast": "blast_orthologs.py",
+		"plddt": "pLDDT_minima.py", 
+		"modifications": "regex_sites.py", 
+		"domains": "call_interpro.py",
+		"scores": "calculate_protein_scores.py"
+	},	
+
+	"analyses": {
+		"blast": {
+			"name": "", 
+			"type": "blast",
+			"args": {
+				"fasta": "",
+				"taxid": "", 
+				"taxid_file": "",
+				"evalue": [1e-200, 1e-100, 1e-50, 1e-10, 1e-5, 1e-3, 1e-1, 1.0],
+				"maxhits": "",
+				"db": ["uniprotkb", "uniprotkb_swissprot", "uniprotkb_trembl"],
+				"length": ""
+			},
+			"tooltips": {
+				"fasta": "path to fasta file of sequence",
+				"taxid": "uniprot taxonomic IDs of sequence (can be determined)", 
+				"taxid_file": "file containing taxonomic IDs to constrain BLAST search",
+				"evalue": "E-value for BLAST results",
+				"max_hits": "maximum number of BLAST hits to report",
+				"db": "Database to search (swissprot: human-curated; trembl: computer curation (large); uniprot: all",
+				"length": "threshold to choose as a protein match, in % of subject length"
+			}
+		},
+		"plddt": {
+			"name": "",
+			"type": "plddt", 
+			"args": {
+				"pdb": "",
+				"output": "",
+				"evalue": [1e-200, 1e-100, 1e-50, 1e-10, 1e-5, 1e-3, 1e-1, 1.0],
+				"percent_id": ""
+			},
+			"tooltips": {
+				"pdb": "path to AlphaFold pdb containing pLDDT scores. If blank, will attempt to find correct one.",
+				"output": "output filename",
+				"evalue": "if finding pdb required, E-value for BLAST results",
+				"percent_id": "if finding pdb required, %ID for good hits" 
+			}
+		},
+		"modifications": {
+			"name": "",
+			"type": "modifications",
+			"args": {
+				"fasta": "",
+				"sites_file": "",
+				"output": ""
+			},
+			"tooltips": {
+				"fasta": "path to fasta file of sequence",
+				"sites_file": "file containing regular expressions for modifications",
+				"output": "output filename"
+			}
+		},
+		"domains": {
+			"name": "",
+			"type": "domains",
+			"args": {},
+			"tooltips": {}
+		},
+		"scores": {
+			"name": "",
+			"type": "scores",
+			"args": {
+				"fasta": "",
+				"scores_file": "",
+				"output": ""
+			},
+			"tooltips": {
+				"fasta": "path to fasta of sequence",
+				"scores_file": "file containing amino acid scores (e.g., hydrophobicity)",
+				"output": "output filename"
+			}
+		}
+	}
+}
