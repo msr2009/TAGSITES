@@ -1,0 +1,31 @@
+human	Homo sapiens	
+orangutan	Pongo pygmaeus abelii
+rhesus	Macaca mulata
+mouse lemur	Microcebus murinus
+mouse	Mus musculus
+cow	Bos taurus
+dolphin	Tursiops truncatus
+dog	Canis lupus familiaris
+cat	Felis catus
+elephant	Loxodonta africana
+platypus	Ornithorynchus anatinus
+chicken	Gallus gallus
+alligator	Alligator mississippiensis
+turtle	Chrysemys picta belli
+xenopus	Xenopus tropicalis
+coelocanth	Latimeria chalumnae
+zebrafish	Danio rerio
+stickleback	Gasterosteus aculeatus
+medaka	Oryzia latipes
+lamprey	Petromyzon marinus
+ciona	Ciona intestinalis
+fruitfly	Drosophila melanogaster
+mosquito	Anopheles gambiae
+c. elegans	Caenorhabditis elegans
+p. pacificus	Pristionchus pacificus
+brugia	Brugia malayi
+yeast	Saccharomyces cerevisiae
+bacteria	Escherichia coli
+lancelet	Branchiostom californiense 
+sturgeon	Acipenser brevirostrum
+
