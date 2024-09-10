@@ -27,7 +27,8 @@
 				"evalue": [1e-200, 1e-100, 1e-50, 1e-10, 1e-5, 1e-3, 1e-1, 1.0],
 				"maxhits": "",
 				"db": ["uniprotkb", "uniprotkb_swissprot", "uniprotkb_trembl"],
-				"length": ""
+				"length": "",
+				"output": ".jsd"
 			},
 			"tooltips": {
 				"fasta": "path to fasta file of sequence",
@@ -44,13 +45,12 @@
 			"type": "plddt", 
 			"args": {
 				"pdb": "",
-				"output": "",
 				"evalue": [1e-200, 1e-100, 1e-50, 1e-10, 1e-5, 1e-3, 1e-1, 1.0],
-				"percent_id": ""
+				"percent_id": "",
+				"output": ".txt"
 			},
 			"tooltips": {
 				"pdb": "path to AlphaFold pdb containing pLDDT scores. If blank, will attempt to find correct one.",
-				"output": "output filename",
 				"evalue": "if finding pdb required, E-value for BLAST results",
 				"percent_id": "if finding pdb required, %ID for good hits" 
 			}
@@ -60,19 +60,20 @@
 			"type": "modifications",
 			"args": {
 				"fasta": "",
-				"sites_file": "",
-				"output": ""
+				"sites_file": "./tables/modifications.txt",
+				"output": ".txt"
 			},
 			"tooltips": {
 				"fasta": "path to fasta file of sequence",
 				"sites_file": "file containing regular expressions for modifications",
-				"output": "output filename"
 			}
 		},
 		"domains": {
 			"name": "",
 			"type": "domains",
-			"args": {},
+			"args": {
+				"output": ".txt"
+			},
 			"tooltips": {}
 		},
 		"scores": {
@@ -81,7 +82,7 @@
 			"args": {
 				"fasta": "",
 				"scores_file": "",
-				"output": ""
+				"output": ".tsv"
 			},
 			"tooltips": {
 				"fasta": "path to fasta of sequence",

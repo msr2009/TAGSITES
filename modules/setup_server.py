@@ -17,7 +17,7 @@ def setup_server(input: Inputs, output: Outputs, session: Session):
 			out_dir = INPUT_JSON["global"]["directory"]
 
 		if input.run_name():
-			ui.update_text("working_dir", value=f"{out_dir}/{input.run_name()}")
+			ui.update_text("working_dir", value=f"{out_dir}/{input.run_name()}/")
 
 
 	# checks that a name was added for a task before allowing button push
