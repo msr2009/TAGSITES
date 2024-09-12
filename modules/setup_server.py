@@ -5,7 +5,7 @@ from config import INPUT_JSON, TASK_PARAMETERS, AVAILABLE_TASKS, EXCLUDE_ARGS
 import json, os, shutil
 from pathlib import Path
 
-def setup_server(input: Inputs, output: Outputs, session: Session):
+def setup_server(input: Inputs, output: Outputs, session: Session, shared_values):
 		
 	#for updating working directory once run_name is set
 	@reactive.effect
@@ -45,17 +45,27 @@ def setup_server(input: Inputs, output: Outputs, session: Session):
 		param_list = []
 		for p in task["params"]:
 			if p in EXCLUDE_ARGS: continue
+
 			#if parameters are a list, then make it a dropdown
 			if isinstance(task["params"][p], list) == True:
+				#retrieve the current value for a dropdown
+				current_value = task_values().get(task['id'], {}).get(p)
+				#use the currect value if it exists, otherwise use default
+				selected_value = current_value if current_value is not None else task["params"][p][0]
+
+				print("{}:{} current: {}, selected: {}".format(task['id'], p, current_value, selected_value))
+
 				param_list.append(ui.input_select(f"{task['id']}_{p}", 
 						label=p,
-						selected=task_values().get(task['id'], {}).get(p, task["params"][p][0]),
+						selected=selected_value,
 						choices=task["params"][p], size=1))
+
 			#otherwise it's free text input
 			else:
 				param_list.append(ui.input_text(f"{task['id']}_{p}",
 						value=task_values().get(task['id'], {}).get(p, task["params"][p]),			
 						label=p))
+
 		#add remove task button
 #		param_list.append(ui.input_action_button("remove_task", "Remove"))
 		return param_list
@@ -106,7 +116,6 @@ def setup_server(input: Inputs, output: Outputs, session: Session):
 #			print(task)
 			task_id = task['id']
 			task_params = task['params']
-			#task_params = TASK_PARAMETERS["analyses"][task["name"]]["args"]
 
 			task_ui = ui.div(
 				ui.h3(f"{'_'.join(task['id'].split('_')[0:-1])} ({task['name']}) parameters"),
@@ -131,12 +140,22 @@ def setup_server(input: Inputs, output: Outputs, session: Session):
 				}
 			}
 		#add all the inputted parameters (and defaults if not changed)
-		for p in task['params'].keys():
+		for p in TASK_PARAMETERS[task["name"]]["args"]:
 			input_id = f"{task['id']}_{p}"
-			param_value = input[input_id]()  # Add parentheses to call the reactive value
+			input_set = input[input_id].is_set()
+			param_value = ""
+			if not input_set:
+				param_value = TASK_PARAMETERS[task["name"]]["args"][p]
+			else:
+				param_value = input[input_id]()  # Add parentheses to call the reactive value
+
+			print(p,param_value)
+			
 			task_json[task['id']]['args'][p] = param_value
 		#and add all the globals -- we can sort out the requirements later
 		task_json[task['id']]['args'] = {**task_json[task['id']]['args'], **global_params}
+		#and update output name
+		task_json[task['id']]['args']['output'] = f"{input.run_name()}.{task['id']}{TASK_PARAMETERS[task['name']]['args']['output']}"
 		return task_json
 
 	#save analyses and parameters to json
@@ -174,7 +193,7 @@ def setup_server(input: Inputs, output: Outputs, session: Session):
 		task_list = []
 
 		for task in selected_tasks():
-			print(f"Task ID: {task['id']}, Task Name: {task['name']}")  # Debug: Print task details
+#			print(f"Task ID: {task['id']}, Task Name: {task['name']}")  # Debug: Print task details
 			out_json = {**out_json, **write_task_json(task, global_parameters)}
 
 			# Collect the task parameters (assuming they exist)

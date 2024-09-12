@@ -45,15 +45,15 @@ if __name__ == "__main__":
 	from argparse import ArgumentParser
 
 	parser = ArgumentParser()
-	parser.add_argument('-f', '--fasta', action='store', type=str, dest='FASTA_IN', 
+	parser.add_argument('-f', '--fasta', '--input_file', action='store', type=str, dest='FASTA_IN', 
 		help = "name of fasta file containing seq.", required=True)
 	parser.add_argument('--email', action='store', type=str, dest='EMAIL', 
 		help = "email address, required by EBI job submission.", required=True)
-	parser.add_argument('--dir', action='store', type=str, dest='WORKINGDIR', 
+	parser.add_argument('--dir', '--working_dir', action='store', type=str, dest='WORKINGDIR', 
 		help = "working directory for output", required=True)
 	parser.add_argument('--clients-folder', action='store', type=str, dest='CLIENTS_FOLDER',
-		help = "path to EBI webservice clients (default=./ebi_api_clients/)",
-		default = "./ebi_api_clients/")
+		help = "path to EBI webservice clients",
+		default = "scripts/")
 
 	args = parser.parse_args()
 	

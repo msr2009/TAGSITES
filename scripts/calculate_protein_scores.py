@@ -77,14 +77,22 @@ if __name__ == "__main__":
 	from argparse import ArgumentParser
 
 	parser = ArgumentParser()
-	parser.add_argument('-f', '--fasta', action='store', type=str, dest='FASTA_IN', 
+	parser.add_argument('-f', '--fasta', '--input_file', action='store', type=str, dest='FASTA_IN', 
 		help = "fasta file containing sequence", required=True)
-	parser.add_argument('-s', '--scores', action='store', type=str, dest='SCORES_FILE', 
+	parser.add_argument('-s', '--scores', '--scores_file', action='store', type=str, dest='SCORES_FILE', 
 		help = "tab-delimited file containing property scores for each amino acid", required=True)
 	parser.add_argument('-w', '--window', action='store', type=int, dest='WINDOW', 
-		help = "sliding window width, default = 11", default = 11)
+		help = "sliding window width, default = 1", default = 1)
 	parser.add_argument('-o', '--output', action='store', type=str, dest='OUTFILE', 
 		help = "output file, default=stdout", default = sys.stdout)
+	
+	parser.add_argument('--email', action='store', type=str, dest='EMAIL', 
+		help = "email address, required by EBI job submission.", required=True)
+	parser.add_argument('--dir', '--working_dir', action='store', type=str, dest='WORKINGDIR', 
+		help = "working directory for output", required=True)
+	parser.add_argument('--name', '--run_name', action='store', type=str, dest='NAME', 
+		help = "prefix name for output", required=True)
+
 	args = parser.parse_args()
 	
 	if args.OUTFILE != sys.stdout:

@@ -1,6 +1,6 @@
 from shiny import reactive
 
-def results_server(input, output, session):
+def results_server(input, output, session, shared_values):
 	@reactive.Effect
 	@reactive.event(input.input1)
 	def _():

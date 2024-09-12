@@ -22,17 +22,17 @@
 			"type": "blast",
 			"args": {
 				"fasta": "",
-				"taxid": "", 
+				"taxids": "", 
 				"taxid_file": "",
-				"evalue": [1e-200, 1e-100, 1e-50, 1e-10, 1e-5, 1e-3, 1e-1, 1.0],
-				"maxhits": "",
+				"evalue": ["", 1e-200, 1e-100, 1e-50, 1e-10, 1e-5, 1e-3, 1e-1, 1.0],
+				"max_hits": "",
 				"db": ["uniprotkb", "uniprotkb_swissprot", "uniprotkb_trembl"],
 				"length": "",
 				"output": ".jsd"
 			},
 			"tooltips": {
 				"fasta": "path to fasta file of sequence",
-				"taxid": "uniprot taxonomic IDs of sequence (can be determined)", 
+				"taxids": "uniprot taxonomic IDs to search (can be comma-delimited list)", 
 				"taxid_file": "file containing taxonomic IDs to constrain BLAST search",
 				"evalue": "E-value for BLAST results",
 				"max_hits": "maximum number of BLAST hits to report",
@@ -45,7 +45,7 @@
 			"type": "plddt", 
 			"args": {
 				"pdb": "",
-				"evalue": [1e-200, 1e-100, 1e-50, 1e-10, 1e-5, 1e-3, 1e-1, 1.0],
+				"evalue": ["", 1e-200, 1e-100, 1e-50, 1e-10, 1e-5, 1e-3, 1e-1, 1.0],
 				"percent_id": "",
 				"output": ".txt"
 			},
@@ -65,7 +65,7 @@
 			},
 			"tooltips": {
 				"fasta": "path to fasta file of sequence",
-				"sites_file": "file containing regular expressions for modifications",
+				"sites_file": "file containing regular expressions for modifications"
 			}
 		},
 		"domains": {

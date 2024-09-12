@@ -27,7 +27,7 @@ def hit_to_dict(j):
 
 	return hit_dict
 
-def main(fasta_in, email, workingdir, name, 
+def main(fasta_in, email, workingdir, name, output, 
 				n, evalue, db, length_percent,
 				align_full_seqs, taxids, clients_folder):
 
@@ -178,16 +178,19 @@ if __name__ == "__main__":
 
 	parser = ArgumentParser()
 
-	parser.add_argument('-f', '--fasta', action='store', type=str, dest='FASTA_IN', 
+	parser.add_argument('-f', '--fasta', '--input_file', action='store', type=str, dest='FASTA_IN', 
 		help = "name of fasta file containing seq.", required=True)	
 
 	parser.add_argument('--email', action='store', type=str, dest='EMAIL', 
 		help = "email address, required by EBI job submission.", required=True)
-	parser.add_argument('--dir', action='store', type=str, dest='WORKINGDIR', 
+	parser.add_argument('--dir', '--working_dir', action='store', type=str, dest='WORKINGDIR', 
 		help = "working directory for output", required=True)
-	parser.add_argument('--name', action='store', type=str, dest='NAME', 
+	parser.add_argument('--name', '--run_name', action='store', type=str, dest='NAME', 
 		help = "prefix name for output", required=True)
-	
+	parser.add_argument('--output', action='store', type=str, dest='OUTPUT',
+		help = "user-supplied output filename", default=None)
+		
+
 	parser.add_argument('--taxids', action='store', type=str, dest='TAXIDS',
 		help = "comma-delimited list of taxids to use for blast search",
 		default = "")
@@ -204,8 +207,8 @@ if __name__ == "__main__":
 	parser.add_argument('--align-blast-sequence', action='store_false', dest='FULLSEQS', 
 		help = "only align BLAST hit sequences")
 	parser.add_argument('--clients-folder', action='store', type=str, dest='CLIENTS_FOLDER', 
-		help = "path to EBI webservice clients (default=ebi_api_clients/)",
-		default = "ebi_api_clients/")	
+		help = "path to EBI webservice clients",
+		default = "scripts/")	
 
 	args = parser.parse_args()
 
@@ -215,10 +218,7 @@ if __name__ == "__main__":
 	elif args.TAXIDS != "":
 		parsed_taxids = args.TAXIDS.split(",")
 
-#	main(args.FASTA_IN, args.EMAIL, args.WORKINGDIR, args.NAME, 
-#		 args.MAX_HITS, args.EVALUE, args.DB, args.LENGTH, args.FULLSEQS,
-#		 args.CLIENTS_FOLDER+"/")	
-	main(args.FASTA_IN, args.EMAIL, args.WORKINGDIR, args.NAME, 
-		 args.MAX_HITS, args.EVALUE, args.DB, args.LENGTH, args.FULLSEQS,
-		 parsed_taxids, "ebi_api_clients/")	
+	main(args.FASTA_IN, args.EMAIL, args.WORKINGDIR, args.NAME, args.OUTPUT,
+		 args.MAX_HITS, args.EVALUE, args.DB, args.LENGTH, args.FULLSEQS,		 
+		 args.CLIENTS_FOLDER+"/")	
 
