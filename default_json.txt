@@ -24,7 +24,7 @@
 				"fasta": "",
 				"taxids": "", 
 				"taxid_file": "",
-				"evalue": ["", 1e-200, 1e-100, 1e-50, 1e-10, 1e-5, 1e-3, 1e-1, 1.0],
+				"evalue": ["", "1e-200", "1e-100", "1e-50", "1e-10", "1e-5", "1e-1", "1.0"],
 				"max_hits": "",
 				"db": ["uniprotkb", "uniprotkb_swissprot", "uniprotkb_trembl"],
 				"length": "",
@@ -44,10 +44,12 @@
 			"name": "",
 			"type": "plddt", 
 			"args": {
+				"fasta": "",
 				"pdb": "",
 				"evalue": ["", 1e-200, 1e-100, 1e-50, 1e-10, 1e-5, 1e-3, 1e-1, 1.0],
 				"percent_id": "",
-				"output": ".txt"
+				"output": ".txt",
+				"existing_AF2": 0
 			},
 			"tooltips": {
 				"pdb": "path to AlphaFold pdb containing pLDDT scores. If blank, will attempt to find correct one.",
