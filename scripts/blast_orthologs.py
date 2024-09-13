@@ -49,7 +49,7 @@ def main(fasta_in, email, workingdir, name, output,
 	###########################
 
 	#blast seq against database
-	ncbi_call = ncbiblast_call(clients_folder, email, seq, db, 5*n, evalue, taxids, out_prefix)
+	ncbi_call = ncbiblast_call(clients_folder, email, seq, db, 500, evalue, taxids, out_prefix)
 
 	print(ncbi_call)
 	#call ncbiblast command
@@ -165,9 +165,9 @@ def main(fasta_in, email, workingdir, name, output,
 	#this is the first seq in the fasta file
 	best_hit_name = open("{}.aln".format(out_prefix), "r").readline()[1:]
 
-	js_call = 'python ./score_conservation_py3.py -i {}.aln -a "{}" -o {}.jsd'.format(out_prefix,
+	js_call = 'python {}score_conservation_py3.py -i {}.aln -a "{}" -o {}.jsd -m {}matrix/blosum62.bla'.format(clients_folder, out_prefix,
 																					  best_hit_name.rstrip(),
-																					  out_prefix)
+																					  out_prefix, clients_folder)
 
 	print(js_call)
 	subprocess.run(js_call, shell=True)
@@ -205,10 +205,9 @@ if __name__ == "__main__":
 	parser.add_argument('-l', '--length', action='store', type=float, dest='LENGTH', 
 		help = "minimum length of matches, as percent of input (.7)", default=0.7)
 	parser.add_argument('--align-blast-sequence', action='store_false', dest='FULLSEQS', 
-		help = "only align BLAST hit sequences")
+		help = "only align BLAST hit sequences", default=True)
 	parser.add_argument('--clients-folder', action='store', type=str, dest='CLIENTS_FOLDER', 
-		help = "path to EBI webservice clients",
-		default = "scripts/")	
+		help = "path to EBI webservice clients", default = "scripts/")	
 
 	args = parser.parse_args()
 
@@ -219,6 +218,6 @@ if __name__ == "__main__":
 		parsed_taxids = args.TAXIDS.split(",")
 
 	main(args.FASTA_IN, args.EMAIL, args.WORKINGDIR, args.NAME, args.OUTPUT,
-		 args.MAX_HITS, args.EVALUE, args.DB, args.LENGTH, args.FULLSEQS,		 
-		 args.CLIENTS_FOLDER+"/")	
+		 args.MAX_HITS, args.EVALUE, args.DB, args.LENGTH, args.FULLSEQS,
+		 args.TAXIDS, args.CLIENTS_FOLDER)	
 
