@@ -21,7 +21,6 @@
 			"name": "", 
 			"type": "blast",
 			"args": {
-				"fasta": "",
 				"taxids": "", 
 				"taxid_file": "",
 				"evalue": ["", "1e-200", "1e-100", "1e-50", "1e-10", "1e-5", "1e-1", "1.0"],
@@ -31,7 +30,6 @@
 				"output": ".jsd"
 			},
 			"tooltips": {
-				"fasta": "path to fasta file of sequence",
 				"taxids": "uniprot taxonomic IDs to search (can be comma-delimited list)", 
 				"taxid_file": "file containing taxonomic IDs to constrain BLAST search",
 				"evalue": "E-value for BLAST results",
@@ -44,7 +42,6 @@
 			"name": "",
 			"type": "plddt", 
 			"args": {
-				"fasta": "",
 				"pdb": "",
 				"evalue": ["", 1e-200, 1e-100, 1e-50, 1e-10, 1e-5, 1e-3, 1e-1, 1.0],
 				"percent_id": "",
@@ -62,7 +59,7 @@
 			"type": "modifications",
 			"args": {
 				"fasta": "",
-				"sites_file": "./tables/modifications.txt",
+				"sites_file": "./tables/modification_sites.txt",
 				"output": ".txt"
 			},
 			"tooltips": {
