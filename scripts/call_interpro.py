@@ -17,7 +17,7 @@ Matt Rich, 4/2024
 import subprocess
 from site_selection_util import read_fasta
 
-def main(fasta_in, email, workingdir, clients_folder):
+def main(fasta_in, email, workingdir, clients_folder, outputfile):
 	
 	#read sequence from fasta
 	name, seq = read_fasta(fasta_in)
@@ -32,13 +32,13 @@ def main(fasta_in, email, workingdir, clients_folder):
 	#call interpro command
 	subprocess.run(interpro_call, shell=True)
 
+	#print output
+	f_out = open(outputfile, "w")
 	#process interpro output
 	for line in open("{}/{}.interpro.tsv.tsv".format(workingdir, name), "r").readlines():
 		l = line.strip().split("\t")
-		#print output
-		f_out = open("{}/{}.interpro.out".format(workingdir, name), "w")
 		print("\t".join([l[3], l[6], l[7], l[5]]), file=f_out)
-		f_out.close()
+	f_out.close()
 
 if __name__ == "__main__":
 	
@@ -52,10 +52,14 @@ if __name__ == "__main__":
 	parser.add_argument('--dir', '--working_dir', action='store', type=str, dest='WORKINGDIR', 
 		help = "working directory for output", required=True)
 	parser.add_argument('--clients-folder', action='store', type=str, dest='CLIENTS_FOLDER',
-		help = "path to EBI webservice clients",
-		default = "scripts/")
+		help = "path to EBI webservice clients", default = "scripts/")
+
+	parser.add_argument('--output', action='store', type=str, dest="OUTPUT", 
+		help = "output file name")
+	parser.add_argument('--run_name', action='store', type=str, dest="RUN_NAME", 
+		help = "run name (from app)")
 
 	args = parser.parse_args()
 	
-	main(args.FASTA_IN, args.EMAIL, args.WORKINGDIR, args.CLIENTS_FOLDER)	
+	main(args.FASTA_IN, args.EMAIL, args.WORKINGDIR, args.CLIENTS_FOLDER, args.OUTPUT)	
 

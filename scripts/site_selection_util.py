@@ -288,3 +288,23 @@ def ncbiblast_call(script_dir, email, seq, db, scores, evalue, taxids, outfile):
 					--scores {} --exp {} --outfile {} --pollFreq 5 --taxids {}".format(script_dir, email, seq, db, scores, evalue, outfile, " ".join(taxids))
 
 	return ncbi_call
+
+
+def extract_seq_from_pdb(pdb_file):
+	"""
+	use biopython to extract the amino acid sequence from a pdb file
+	"""
+	pdb_parser = PDB.PDBParser()
+	structure = pdb_parser.get_structure("foo", pdb_file)
+	seq = "".join([three_to_one(r.get_resname()) for r in PDB.Selection.unfold_entities(structure, "R")])
+	return seq
+
+def extract_bfactors_from_pdb(pdb_file):
+	"""
+	use biopython to extract b-factor values from a pdb file
+	"""
+	pdb_parser = PDB.PDBParser()
+	structure = pdb_parser.get_structure("foo", pdb_file)
+	bf = [float(r["CA"].get_bfactor()) for r in PDB.Selection.unfold_entities(structure, "R")]
+	return bf
+
