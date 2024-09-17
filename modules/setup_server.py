@@ -1,12 +1,38 @@
 from shiny import ui, reactive, render, Inputs, Outputs, Session
 
 from config import INPUT_JSON, TASK_PARAMETERS, AVAILABLE_TASKS, EXCLUDE_ARGS
+from config import UNIPROT_SPECIES
 
-import json, os, shutil
+from utils.helpers import load_taxonomic_mapping
+
+import json, os, shutil, pandas
 from pathlib import Path
 
+
 def setup_server(input: Inputs, output: Outputs, session: Session, shared_values):
-		
+	
+
+	# Dynamically populate the selectize input with species names
+#	@reactive.event(input.species_search, ignore_none=False)
+	def populate_species_selectize():
+		# Send the list of species as choices to the selectize box
+		species_list = list(taxonomic_mapping.keys())
+		ui.update_selectize("species_search", choices=species_list)
+		ui.update_selectize("species_search", selected="")
+
+	#load uniprot species file and update dropdown
+	taxonomic_mapping = load_taxonomic_mapping(UNIPROT_SPECIES)
+	session.on_flush(populate_species_selectize, once=True)
+
+	@reactive.effect
+	@reactive.event(input.species_search)
+	def selected_species():	
+		selected_species = input.species_search()
+		if selected_species != "":
+			INPUT_JSON["global"]["species"] = selected_species
+			INPUT_JSON["global"]["taxid"] = taxonomic_mapping[selected_species]
+			print(taxonomic_mapping[selected_species])
+
 	#for updating working directory once run_name is set
 	@reactive.effect
 	@reactive.event(input.run_name)
@@ -155,7 +181,7 @@ def setup_server(input: Inputs, output: Outputs, session: Session, shared_values
 		#and add all the globals -- we can sort out the requirements later
 		task_json[task['id']]['args'] = {**task_json[task['id']]['args'], **global_params}
 		#and update output name
-		task_json[task['id']]['args']['output'] = f"{input.run_name()}.{task['id']}{TASK_PARAMETERS[task['name']]['args']['output']}"
+		task_json[task['id']]['args']['output'] = f"{input.working_dir()}{input.run_name()}.{task['id']}{TASK_PARAMETERS[task['name']]['args']['output']}"
 		return task_json
 
 	#save analyses and parameters to json
@@ -178,11 +204,11 @@ def setup_server(input: Inputs, output: Outputs, session: Session, shared_values
 		
 		#save uploaded input file with better name
 		tmp_input = Path(input.input_file()[0]["datapath"])
-		new_input_filename = input.run_name() + tmp_input.suffix
+		new_input_filename = input.working_dir() + input.run_name() + tmp_input.suffix
 		global_parameters["input_file"] = new_input_filename
 
 		#now, copy the temp input file into the working directory
-		shutil.copy(tmp_input, input.working_dir()+"/"+new_input_filename)
+		shutil.copy(tmp_input, new_input_filename)
 		
 		#open a file to dump json into
 		out_json_file = open(input.working_dir() + "/" + input.run_name() + ".json", "w")

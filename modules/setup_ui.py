@@ -1,12 +1,10 @@
 from shiny import ui
 
-from config import INPUT_JSON, TASK_PARAMETERS, AVAILABLE_TASKS
+from config import INPUT_JSON, TASK_PARAMETERS, AVAILABLE_TASKS, UNIPROT_SPECIES
 
-##SETUP TAB UI
+from utils.helpers import load_taxonomic_mapping
+
 def setup_ui():
-
-	#check for output directory in json, 
-	#if there isn't one, then use os.get_cwd()
 
 	return ui.page_fluid(
 		
@@ -20,8 +18,12 @@ def setup_ui():
 		ui.h3("Sequence Input"),
 		ui.row(
 			ui.column(2, ui.input_file("input_file", "Choose Input File (.fa, .fasta, or .pdb)", accept=[".fa", ".fasta",".pdb"])),
-#			ui.column(2, ui.input_radio_buttons("input_type", "Input Type",
-#					{"fasta": "FASTA", "pdb": "PDB"}, selected=None))
+			ui.column(3, ui.input_selectize("species_search", "Species",
+#						choices=list(load_taxonomic_mapping(UNIPROT_SPECIES).keys()), 
+						choices=[],
+						multiple=False, selected=None,
+						options={'create': False}, width='100%'),
+			),
 		),
 		ui.hr(),
 
