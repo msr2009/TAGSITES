@@ -1,10 +1,10 @@
 {
 	"global": {
 		"email": "msr2009@gmail.com",
-		"directory": "",
-		"name": "",
-		"input": "",
-		"input-type": ["fasta","pdb"],
+		"working_dir": "",
+		"run_name": "",
+		"input_file": "",
+		"pdb": "",
 		"scripts-folder": "./scripts/"
 	},
 
@@ -21,7 +21,7 @@
 			"name": "", 
 			"type": "blast",
 			"args": {
-				"taxids": "", 
+				"taxid": "", 
 				"taxid_file": "",
 				"evalue": ["", "1e-200", "1e-100", "1e-50", "1e-10", "1e-5", "1e-1", "1.0"],
 				"max_hits": "",

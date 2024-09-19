@@ -24,9 +24,16 @@ def searchAFDB_required(j):
 def build_task_args_string(targs, EXCLUDE=[]):
 	return "".join([" --{} {}".format(arg, targs[arg]) for arg in targs if targs[arg] != "" and arg not in EXCLUDE])
 
-def main(json_in):
+def main(json_input_file):
 	
+	#load json
+	try:
+		json_in = json.load(open(json_input_file, "r"))
+	except json.decoder.JSONDecodeError:
+		raise IOError("Incorrectly formatted JSON file!")
+
 	task_scripts = json_in.pop("scripts", None)
+	global_args = json_in.pop("global", None)
 	#json_in is now just tasks
 	
 	#print(json_in)
@@ -41,12 +48,41 @@ def main(json_in):
 		#do AFDB search
 		af2_search_call = "python {}existing_AF_model.py {}".format(scripts_folder, search_afdb)
 		print("SEARCHING AFDB: " + af2_search_call)
-		subprocess.call(af2_search_call, shell=True)
-		#if successful, then extract fasta from pdb
+		af_proc = subprocess.call(af2_search_call, shell=True)
+#		af_exit = af_proc.returncode
+
+		#if existing_AF_model.py finds new pdb, then it doesn't return 1
+		#it will write new fasta as [run_name].AF.fa
+		if af_proc != 1:
+			#then we need to rename original fasta and update json
+			os.rename("{}/{}.fa".format(global_args["working_dir"], global_args["run_name"]),
+					  "{}/user_{}.fa".format(global_args["working_dir"], global_args["run_name"]))
+				
 		#then update json to save old inputs (user_[input]) 
 		#correct inputs and outputs for those in found pdb
 		#set existing_AF2=0, 
-
+		
+		for task in json_in: 
+			#for each task, move the current input_file (.fa) to user_input_file
+			#make an old_args to store these
+			json_in[task]["old_args"] = {}
+			json_in[task]["old_args"]["user_input_file"] = "user" + json_in[task]["args"]["input_file"]
+			#and rename the input_file to the new .AF.fa
+			json_in[task]["args"]["input_file"] = json_in[task]["args"]["input_file"].replace(".fa", ".AF.fa")
+			#if plddt task, then set existing_AF2=0
+			if json_in[task]["analysis"] == "plddt":
+				json_in[task]["args"]["existing_AF2"] = 0
+				json_in[task]["args"]["pdb"] = "{}/{}.AF.pdb".format(global_args["working_dir"], global_args["run_name"])
+		
+		#also append global and scripts for new json
+		
+	
+		#write a new json file for posterity
+		new_json_out = {**json_in, **global_args, **task_scripts}
+		new_json_out_file = open(json_input_file.replace(".json", ".AF.json"), "w")
+		print(json.dumps(json_in, indent=4), file=new_json_out_file) 
+		new_json_out_file.close()
+	
 	return
 	commands = []
 
@@ -77,12 +113,9 @@ if __name__ == "__main__":
 
 	parser = ArgumentParser()
 	parser.add_argument('-i', '--input', '--json', action = 'store', type = str,
-					dest = 'JSON_IN', help = "HELP")
+					dest = 'JSON_INPUT', help = "HELP")
 	args = parser.parse_args()
 	
-	try:
-		main(json.load(open(args.JSON_IN, "r")))	
-	except json.decoder.JSONDecodeError:
-		print("Incorrectly formatted JSON input!")
+	main(args.JSON_INPUT)	
 
 

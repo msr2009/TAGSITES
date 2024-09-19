@@ -742,7 +742,7 @@ if __name__ == "__main__":
 		help = "window size. Number of residues on either side included in the window. Default=3 [int]", 
 		default = 3)
 
-	args = parser.parse_args()
+	args, unknowns = parser.parse_known_args()
 	
 	if args.OUTFILE != None:
 		outfile = open(args.OUTFILE, "w")

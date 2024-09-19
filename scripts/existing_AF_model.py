@@ -23,17 +23,19 @@ Matt Rich, 4/2024
 import subprocess, re
 from site_selection_util import get_sequence, uniprot_accession_regex, save_fasta
 
-def search_AFDB(fasta_in, email, workingdir, name, evalue, percentid, clients_folder):
+def search_AFDB(fasta_in, email, workingdir, name, taxid, evalue, percentid, clients_folder):
 	
 	match_accession = ""
 	match_eval = 1e-200
 	match_id = 100.0
-	move_fasta = False
+#	move_fasta = False
+
+	outfile_prefix = "{}/{}.AF".format(workingdir, name)
 
 	#if the input is an accession
 	if uniprot_accession_regex(fasta_in) != None:
 		match_accession = fasta_in
-		move_fasta = True
+#		move_fasta = True
 	#otherwise, we need to find a match in the AF2 db
 	else:
 		#read sequence from fasta
@@ -45,14 +47,16 @@ def search_AFDB(fasta_in, email, workingdir, name, evalue, percentid, clients_fo
 						--program blastp \
 						--stype protein \
 						--sequence {} \
-						--database afdb \
+						--database uniprotkb \
+						--taxid {} \
 						--outformat tsv \
-						--outfile {}/{}.ncbiblast".format(clients_folder, email, seq, workingdir, name)
+						--outfile {}.ncbiblast".format(clients_folder, email, seq, taxid, outfile_prefix)
 		#call ncbiblast command
+		print(ncbi_call)
 		subprocess.run(ncbi_call, shell=True)
 
 		#open ncbiblast output
-		ncbi_out = open("{}/{}.ncbiblast.tsv.tsv".format(workingdir, name), "r")
+		ncbi_out = open("{}.ncbiblast.tsv.tsv".format(outfile_prefix), "r")
 		#we only care about the best match (the second line)
 		l = ncbi_out.readlines()[1].strip().split("\t")
 		match_id = float(l[7])
@@ -73,23 +77,23 @@ def search_AFDB(fasta_in, email, workingdir, name, evalue, percentid, clients_fo
 		no_af_error = "ERROR 11 Unable to connect to database [afdb]."
 		if pdb_out != no_af_error:
 			#otherwise, we found a good pdb
-			f_out = open("{}/{}.pdb".format(workingdir, name), "w")
+			f_out = open("{}.pdb".format(outfile_prefix), "w")
 			#save it in the working dir
 			print(pdb_out, file=f_out)
-			print("saving {} pdb file to {}/{}.pdb".format(match_accession, workingdir, name))
+			print("saving {} pdb file to {}.pdb".format(match_accession, outfile_prefix))
 			f_out.close()
 			
-			#also, make a fasta from the pdb if we went straight from accession
-			if move_fasta:
-				save_fasta(name, 
-							get_sequence("{}/{}.pdb".format(workingdir, name)), 
-							"{}/{}.fa".format(workingdir, name))
-			print("saving fasta from {} pdb to {}/{}.fa".format(match_accession, workingdir, name))
-
-			return match_accession
+			#also, make a fasta from the pdb
+#			if move_fasta:
+			save_fasta(name, get_sequence("{}.pdb".format(outfile_prefix)), "{}.fa".format(outfile_prefix))
+			print("saving fasta from {} pdb to {}.fa".format(match_accession, outfile_prefix))
+			return "{}.fa".format(outfile_prefix)
 		else:
 			print("pdb not found")
 			return 1
+	else:
+		print("no BLAST hit better than E={} and %ID={}".format(evalue, percentid))
+		return 1
 
 if __name__ == "__main__":
 	
@@ -104,16 +108,18 @@ if __name__ == "__main__":
 		help = "working directory for output", required=True)
 	parser.add_argument('--name', '--run_name', action='store', type=str, dest='NAME', 
 		help = "name for output", required=True)
+	parser.add_argument('--taxid', action='store', type=str, dest='TAXID', 
+		help = "uniprot taxid to limit BLAST search to", default="1")
 	parser.add_argument('--evalue', action='store', type=float, dest='EVALUE', 
 		help = "evalue threshold for BLAST hit (1e-100)", default=1e-100)
 	parser.add_argument('--percent_id', action='store', type=float, dest='PERCENTID', 
 		help = "Identity threshold for BLAST hit (99)", default=99)
-	parser.add_argument('--clients-folder', action='store', type=str, dest='CLIENTS_FOLDER', 
+	parser.add_argument('--clients_folder', action='store', type=str, dest='CLIENTS_FOLDER', 
 		help = "path to EBI webservice clients (default=./ebi_api_clients/)",
 		default = "./scripts/")
 
-	args = parser.parse_args()
+	args, unknowns = parser.parse_known_args()
 	
-	search_AFDB(args.FASTA_IN, args.EMAIL, args.WORKINGDIR, args.NAME, args.EVALUE,
-					args.PERCENTID, args.CLIENTS_FOLDER)	
+	search_AFDB(args.FASTA_IN, args.EMAIL, args.WORKINGDIR, args.NAME, 
+					args.TAXID, args.EVALUE, args.PERCENTID, args.CLIENTS_FOLDER)	
 

@@ -9,8 +9,10 @@ def progress_ui():
 		#load analyses json
 		ui.h3("Load Analysis"),
 		#load json button
-		ui.input_file("analysis_json", "Load Analysis JSON file",
-				accept=['.txt']),
+#		ui.input_file("analysis_json", "Load Analysis JSON file",
+#				accept=['.txt']),
+
+		ui.output_ui("show_or_upload_json"),
 		ui.hr(),
 
 		#maybe something here to show the steps of the analysis?

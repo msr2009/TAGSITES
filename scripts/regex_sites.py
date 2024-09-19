@@ -38,17 +38,7 @@ if __name__ == "__main__":
 	parser.add_argument('--output', action = 'store', type = str, dest = 'OUTPUT_FILE', 
 		help = "file to store output, default=STDOUT", default = None)
 
-	
-	parser.add_argument('--email', action='store', type=str, dest='EMAIL', 
-		help = "email address, required by EBI job submission.", required=True)
-	parser.add_argument('--dir', '--working_dir', action='store', type=str, dest='WORKINGDIR', 
-		help = "working directory for output", required=True)
-	parser.add_argument('--name', '--run_name', action='store', type=str, dest='NAME', 
-		help = "prefix name for output", required=True)
-
-	
-
-	args = parser.parse_args()
+	args, unknowns = parser.parse_known_args()
 	
 	if args.OUTPUT_FILE != None:
 		fout = open(args.OUTPUT_FILE, "w")		

@@ -86,14 +86,7 @@ if __name__ == "__main__":
 	parser.add_argument('-o', '--output', action='store', type=str, dest='OUTFILE', 
 		help = "output file, default=stdout", default = sys.stdout)
 	
-	parser.add_argument('--email', action='store', type=str, dest='EMAIL', 
-		help = "email address, required by EBI job submission.", required=True)
-	parser.add_argument('--dir', '--working_dir', action='store', type=str, dest='WORKINGDIR', 
-		help = "working directory for output", required=True)
-	parser.add_argument('--name', '--run_name', action='store', type=str, dest='NAME', 
-		help = "prefix name for output", required=True)
-
-	args = parser.parse_args()
+	args, unknowns = parser.parse_known_args()
 	
 	if args.OUTFILE != sys.stdout:
 		args.OUTFILE = open(args.OUTFILE, "w")

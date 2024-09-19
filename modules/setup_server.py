@@ -3,16 +3,17 @@ from shiny import ui, reactive, render, Inputs, Outputs, Session
 from config import INPUT_JSON, TASK_PARAMETERS, AVAILABLE_TASKS, EXCLUDE_ARGS
 from config import UNIPROT_SPECIES
 
-from utils.helpers import load_taxonomic_mapping
+from scripts.site_selection_util import get_sequence, save_fasta 
+from utils.helpers import load_taxonomic_mapping, update_shared_dict
 
 import json, os, shutil, pandas
 from pathlib import Path
 
 
-def setup_server(input: Inputs, output: Outputs, session: Session, shared_values):
+def setup_server(input: Inputs, output: Outputs, session: Session, shared_json):
 	
 
-	# Dynamically populate the selectize input with species names
+		# Dynamically populate the selectize input with species name
 #	@reactive.event(input.species_search, ignore_none=False)
 	def populate_species_selectize():
 		# Send the list of species as choices to the selectize box
@@ -37,14 +38,16 @@ def setup_server(input: Inputs, output: Outputs, session: Session, shared_values
 	@reactive.effect
 	@reactive.event(input.run_name)
 	def update_working_dir():
-	
-		out_dir = os.getcwd()
-		if INPUT_JSON["global"]["directory"] != "":
-			out_dir = INPUT_JSON["global"]["directory"]
+		
+		out_dir = os.getcwd()	
+		if INPUT_JSON["global"]["working_dir"] != "":
+			out_dir = INPUT_JSON["global"]["working_dir"]
+
+#		out_dir = INPUT_JSON["global"]["working_dir"]
 
 		if input.run_name():
 			ui.update_text("working_dir", value=f"{out_dir}/{input.run_name()}/")
-
+			INPUT_JSON["global"]["working_dir"] = input.working_dir()
 
 	# checks that a name was added for a task before allowing button push
 	@reactive.effect
@@ -125,7 +128,7 @@ def setup_server(input: Inputs, output: Outputs, session: Session, shared_values
 
 			# Append the task with default parameters
 			selected_tasks.set(selected_tasks() + [{"id": task_id, "name": task_name, "params": task_params, "tooltips": task_tooltips}])
-			
+			print(selected_tasks())
 			ui.update_text("task_desc_name", value="")
 
 	@reactive.effect
@@ -195,39 +198,54 @@ def setup_server(input: Inputs, output: Outputs, session: Session, shared_values
 		except FileExistsError:
 			pass
 
-		#global parameters
-		global_parameters = {
-						"email": input.email(),
-						"working_dir": input.working_dir(),
-						"run_name": input.run_name(),
-						}
+		#update global parameters in INPUT_JSON
+		INPUT_JSON["global"]["email"] = input.email()
+		INPUT_JSON["global"]["run_name"] = input.run_name()
 		
 		#save uploaded input file with better name
 		tmp_input = Path(input.input_file()[0]["datapath"])
 		new_input_filename = input.working_dir() + input.run_name() + tmp_input.suffix
-		global_parameters["input_file"] = new_input_filename
+		INPUT_JSON["global"]["input_file"] = new_input_filename
 
 		#now, copy the temp input file into the working directory
 		shutil.copy(tmp_input, new_input_filename)
-		
+
+		#if input is pdb, then we need to extract the fasta
+		if tmp_input.suffix == ".pdb":
+			INPUT_JSON["global"]["pdb"] = INPUT_JSON["global"]["input_file"]
+			#extract and save FASTA
+			new_fasta_name = INPUT_JSON["global"]["pdb"].replace(".pdb", ".fa")
+			save_fasta(Path(INPUT_JSON["global"]["pdb"]).stem, 
+					   get_sequence(INPUT_JSON["global"]["pdb"]),
+					   new_fasta_name)
+			#and update input_file in json
+			INPUT_JSON["global"]["input_file"] = new_fasta_name
+	
 		#open a file to dump json into
-		out_json_file = open(input.working_dir() + "/" + input.run_name() + ".json", "w")
+		out_json_name = input.working_dir() + "/" + input.run_name() + ".json"
+		out_json_file = open(out_json_name, "w")
 		out_json = {}
 		out_json["scripts"] = INPUT_JSON["scripts"]
+		out_json["global"] = INPUT_JSON["global"]
 
 		#print all tasks to json file
 		task_list = []
 
 		for task in selected_tasks():
+			#we need to check plddt and input type
+			if task["name"] == "plddt":
+				#if there isn't a pdb file in the input
+				if INPUT_JSON["global"]["pdb"] == "" or task["params"]["pdb"] == "":
+					task["params"]["existing_AF2"] = 1
+	
 #			print(f"Task ID: {task['id']}, Task Name: {task['name']}")  # Debug: Print task details
-			out_json = {**out_json, **write_task_json(task, global_parameters)}
+			out_json = {**out_json, **write_task_json(task, INPUT_JSON["global"])}
 
 			# Collect the task parameters (assuming they exist)
-			task_params = {param: input[f"{task['id']}_{param}"]() for param in task['params'].keys()}
-			task_list.append({"id": task['id'], "name": task['name'], "params": task_params})
+#			task_params = {param: input[f"{task['id']}_{param}"]() for param in task['params'].keys()}
+#			task_list.append({"id": task['id'], "name": task['name'], "params": task_params})
 
 		#write task jsons to new json file in working directory
-		print(out_json)
 		print(json.dumps(out_json, indent=4), file=out_json_file)
 		out_json_file.close()
-
+		shared_json.set(out_json_name)

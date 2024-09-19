@@ -5,7 +5,7 @@ from modules.reagents_server import reagents_server
 
 from shiny import reactive
 
-shared_values = reactive.Value([])
+shared_values = reactive.Value("")
 
 def app_server(input, output, session):
 	#call each server

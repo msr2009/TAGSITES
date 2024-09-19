@@ -209,7 +209,7 @@ if __name__ == "__main__":
 	parser.add_argument('--clients-folder', action='store', type=str, dest='CLIENTS_FOLDER', 
 		help = "path to EBI webservice clients", default = "scripts/")	
 
-	args = parser.parse_args()
+	args, unknowns = parser.parse_known_args()
 
 	parsed_taxids = []
 	if args.TAX_FILE != None:

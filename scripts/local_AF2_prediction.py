@@ -60,7 +60,7 @@ if __name__ == "__main__":
 	parser.add_argument('--dir', action='store', type=str, dest='WORKINGDIR', 
 		help = "working directory for output", required=True)
 
-	args = parser.parse_args()
+	args, unknowns = parser.parse_known_args()
 	
 	main(args.FASTA_IN, args.WORKINGDIR)	
 

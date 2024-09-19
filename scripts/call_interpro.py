@@ -56,10 +56,8 @@ if __name__ == "__main__":
 
 	parser.add_argument('--output', action='store', type=str, dest="OUTPUT", 
 		help = "output file name")
-	parser.add_argument('--run_name', action='store', type=str, dest="RUN_NAME", 
-		help = "run name (from app)")
 
-	args = parser.parse_args()
+	args, unknowns = parser.parse_known_args()
 	
 	main(args.FASTA_IN, args.EMAIL, args.WORKINGDIR, args.CLIENTS_FOLDER, args.OUTPUT)	
 

@@ -71,7 +71,7 @@ if __name__ == "__main__":
 		help = "path to EBI webservice clients (default=./ebi_api_clients/)",
 		default = "./ebi_api_clients/")
 
-	args = parser.parse_args()
+	args, unknowns = parser.parse_known_args()
 	
 	output = main(args.TAXID, args.TAXLEVEL, args.EMAIL, args.CLIENTS_FOLDER)	
 	print(output)
