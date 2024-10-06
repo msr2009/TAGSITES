@@ -1,9 +1,10 @@
 from shiny import reactive, render, ui
+from shiny.run import ShinyAppProc
+
 import json, subprocess
 
-from utils.helpers import update_shared_dict
-
 def progress_server(input, output, session, shared_json):
+
 
 	# Display JSON content if it exists
 	@output
@@ -14,7 +15,6 @@ def progress_server(input, output, session, shared_json):
 		# make a persistent file upload button
 		ui_elements.append(ui.input_file("upload_json", "Upload/Reload JSON File"))
 
-		# Check if session.user_data has the "setup_json_out" saved
 		if shared_json.get():
 			# Display the JSON content
 			filename = shared_json.get()
@@ -36,17 +36,18 @@ def progress_server(input, output, session, shared_json):
 	@reactive.Effect
 	@reactive.event(input.upload_json)
 	def handle_file_upload():
+#		print("INIT: {}".format(shared_json.get()))
 		file_info = input.upload_json()
 		if file_info:
 			# Save the uploaded file path to session.user_data["setup_json_out"]
 			uploaded_file_path = file_info[0]["datapath"]  # Get the file path of the uploaded file
-#			shared_values.set("setup_json_out") = uploaded_file_path
 			shared_json.set(uploaded_file_path)
-
+#			print("UP_FP: {}".format(file_info))
+#			print("UPLOAD: {}".format(shared_json.get()))
 			# Optionally read and print the file to the console (for testing)
-			with open(uploaded_file_path, "r") as f:
-				json_data = json.load(f)
-				print("Uploaded JSON content:", json.dumps(json_data, indent=4))
+#			with open(uploaded_file_path, "r") as f:
+#				json_data = json.load(f)
+#				print("Uploaded JSON content:", json.dumps(json_data, indent=4))
 
 	# upon loading a json file, you can run the analysis
 	@reactive.effect
@@ -62,4 +63,7 @@ def progress_server(input, output, session, shared_json):
 		#load json file
 		with open(shared_json.get()) as f:
 			INPUT_JSON = json.load(f)
-		subprocess.call('python {}run_tag_sites_from_json.py -i {}'.format(INPUT_JSON["global"]["scripts-folder"], shared_json.get()), shell=True)
+
+		run_command = 'python {}run_tag_sites_from_json.py -i {}'.format(INPUT_JSON["global"]["scripts-folder"], shared_json.get())
+		proc = subprocess.Popen(run_command, shell=True, start_new_session=True)
+		proc.wait()

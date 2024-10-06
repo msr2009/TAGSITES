@@ -1,8 +1,6 @@
 from site_selection_util import save_fasta, check_input_type
 from site_selection_util import extract_bfactors_from_pdb, extract_seq_from_pdb
 
-from existing_AF2_model import search_AFDB
-
 def main(input_file, output_file):
 	
 	bf_out = open(output_file, "w")
@@ -12,7 +10,9 @@ def main(input_file, output_file):
 	bf = extract_bfactors_from_pdb(input_file)
 	
 	for aa in range(len(bf)):
-		print("\t".join([str(aa+1), bf[aa]]), bf_out)
+		print("\t".join([str(aa+1), str(bf[aa])]), file=bf_out)
+	
+	return 0
 		
 if __name__ == "__main__":
 	
@@ -25,12 +25,15 @@ if __name__ == "__main__":
 					help = "AlphaFold2 PDB file. B-factors must contain pLDDTs for each residue.")
 	parser.add_argument('--output', action = 'store', type=str, dest="OUTPUT",
 					help = "output filename")
+	parser.add_argument('--working_dir', action = 'store', type = str, dest = 'WORKINGDIR', 
+					help = "working directory")
 
-	outputfilename = args.WORKINGDIR + "/" args.OUTPUT
+	args, unknowns = parser.parse_known_args() 
 
-	if check_input_type(args.INPUT_FILE) != "pdb":
+#	outputfilename = args.WORKINGDIR + "/" + args.OUTPUT
+
+	if check_input_type(args.INPUT_PDB) != "pdb":
 		raise IOError("File type must be .pdb!")
 
-	args, unknowns = parser.parse_known_args(args.INPUT_PDB, args.outputfilename) 
-
+	main(args.INPUT_PDB, args.OUTPUT)
 	

@@ -70,7 +70,7 @@ def main(fasta_in, fout, window, scores_file):
 	h_scores = calculate_property_sliding_window(seq, window, scores_dict)
 
 	for i in range(len(h_scores)):
-		print("\t".join([str(i), str(h_scores[i])]), file=fout)
+		print("\t".join([str(i+1), str(h_scores[i])]), file=fout)
 
 if __name__ == "__main__":
 	

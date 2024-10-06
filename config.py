@@ -9,4 +9,11 @@ import json
 INPUT_JSON = json.load(open(DEFAULT_JSON, "r"))
 TASK_PARAMETERS = INPUT_JSON["analyses"]
 AVAILABLE_TASKS = list(INPUT_JSON["analyses"].keys())
-EXCLUDE_ARGS = ["fasta", "input", "output", "existing_AF2"]
+EXCLUDE_ARGS = ["fasta", "input", "output", "pdb"]
+
+#analysis result types
+#add new analysis types here
+RESULTS_TYPE_DICT = {
+	"CONTINUOUS": ["blast", "plddt", "scores"], 
+	"RANGE": ["domains", "modifications"]
+}

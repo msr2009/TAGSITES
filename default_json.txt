@@ -10,7 +10,7 @@
 
 	"scripts": {
 		"blast": "blast_orthologs.py",
-		"plddt": "pLDDT_minima.py", 
+		"plddt": "extract_from_pdb.py", 
 		"modifications": "regex_sites.py", 
 		"domains": "call_interpro.py",
 		"scores": "calculate_protein_scores.py"
@@ -46,7 +46,7 @@
 				"evalue": ["", 1e-200, 1e-100, 1e-50, 1e-10, 1e-5, 1e-3, 1e-1, 1.0],
 				"percent_id": "",
 				"output": ".txt",
-				"existing_AF2": 0
+				"existing_AF2": ""
 			},
 			"tooltips": {
 				"pdb": "path to AlphaFold pdb containing pLDDT scores. If blank, will attempt to find correct one.",

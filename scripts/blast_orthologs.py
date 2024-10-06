@@ -7,6 +7,7 @@ Matt Rich, 9/2024
 import subprocess, json
 from site_selection_util import read_fasta, ncbiblast_call
 
+from pathlib import Path
 
 def hit_to_dict(j):
 	"""
@@ -29,27 +30,19 @@ def hit_to_dict(j):
 
 def main(fasta_in, email, workingdir, name, output, 
 				n, evalue, db, length_percent,
-				align_full_seqs, taxids, clients_folder):
+				align_full_seqs, taxid, clients_folder, exclude_paralogs):
 
 	name, seq = read_fasta(fasta_in)
 	seq_len = float(len(seq))
 	
-	blast_set = ""
-	if len(taxids) == 1:
-		blast_set = taxids[0]
-	elif len(taxids) > 1: 
-		blast_set = taxids[0] + "-" + taxids[-1]
-	else:
-		blast_set = db
-		
-	out_prefix = "{}/{}.{}".format(workingdir, name, blast_set)
+	out_prefix = Path(output).with_suffix('')
 
 	############################
 	# BLAST TO FIND ORTHOLOGS
 	###########################
 
 	#blast seq against database
-	ncbi_call = ncbiblast_call(clients_folder, email, seq, db, 500, evalue, taxids, out_prefix)
+	ncbi_call = ncbiblast_call(clients_folder, email, seq, db, n, evalue, taxid, out_prefix)
 
 	print(ncbi_call)
 	#call ncbiblast command
@@ -83,20 +76,26 @@ def main(fasta_in, email, workingdir, name, output,
 			continue
 		if d_hit["length"]/float(len(seq)) < length_percent or d_hit["length"]/float(len(seq)) > 1/length_percent:
 			continue
-
-		#store all isoforms/paralogs from target species
-		if d_hit["species"] == query_species:
-			blast_hits[query_species].append(d_hit)
-		#otherwise, save teh best hit from other species
+		
+		if exclude_paralogs:	#do shenanigans to filter for best hits
+			#store all isoforms/paralogs from target species
+			if d_hit["species"] == query_species:
+				blast_hits[query_species].append(d_hit)
+			#otherwise, save teh best hit from other species
+			else:
+				#if we haven't seen that species yet
+				if d_hit["species"] not in blast_hits:
+					blast_hits[d_hit["species"]] = [d_hit]
+				#otherwise, we need to see if the new hit is better
+				###I think we can just assume that this is true?
+				elif blast_hits[d_hit["species"]][0]["evalue"] > d_hit["evalue"]:
+					blast_hits[d_hit["species"]] = [d_hit]
 		else:
-			#if we haven't seen that species yet
-			if d_hit["species"] not in blast_hits:
+			if d_hit["species"] in blast_hits:
+				blast_hits[d_hit["species"]].append(d_hit)
+			else:
 				blast_hits[d_hit["species"]] = [d_hit]
-			#otherwise, we need to see if the new hit is better
-			###I think we can just assume that this is true?
-			elif blast_hits[d_hit["species"]][0]["evalue"] > d_hit["evalue"]:
-				blast_hits[d_hit["species"]] = [d_hit]
-
+		
 		#check each time if there are _n_ hits in the blast_hits dict, 
 		#stop iterating once we get enough.
 		if len(blast_hits) >= n: 
@@ -171,6 +170,7 @@ def main(fasta_in, email, workingdir, name, output,
 
 	print(js_call)
 	subprocess.run(js_call, shell=True)
+	return 0
 
 if __name__ == "__main__":
 	
@@ -190,10 +190,8 @@ if __name__ == "__main__":
 	parser.add_argument('--output', action='store', type=str, dest='OUTPUT',
 		help = "user-supplied output filename", default=None)
 		
-
-	parser.add_argument('--taxids', action='store', type=str, dest='TAXIDS',
-		help = "comma-delimited list of taxids to use for blast search",
-		default = "")
+	parser.add_argument('--taxid', action='store', type=str, dest='TAXID',
+		help = "taxid to use for blast search", default = 1)
 	parser.add_argument('--taxid_file', action='store', type=str, dest='TAX_FILE', 
 		help = "file containing taxids for BLAST, one per line", default=None)
 	parser.add_argument('-e', '--evalue', action='store', type=float, dest='EVALUE', 
@@ -207,17 +205,19 @@ if __name__ == "__main__":
 	parser.add_argument('--align-blast-sequence', action='store_false', dest='FULLSEQS', 
 		help = "only align BLAST hit sequences", default=True)
 	parser.add_argument('--clients-folder', action='store', type=str, dest='CLIENTS_FOLDER', 
-		help = "path to EBI webservice clients", default = "scripts/")	
+		help = "path to EBI webservice clients", default = "./scripts/")	
+
+	parser.add_argument("--exclude-paralogs", action="store_true", dest="EXCLUDE_PARALOGS", 
+		help="filter BLAST results, return only best match per non-subject species", 
+		default=False)
 
 	args, unknowns = parser.parse_known_args()
 
 	parsed_taxids = []
 	if args.TAX_FILE != None:
 		parsed_taxids = [x for x in open(args.TAX_FILE, "r").readlines().strip()]
-	elif args.TAXIDS != "":
-		parsed_taxids = args.TAXIDS.split(",")
 
 	main(args.FASTA_IN, args.EMAIL, args.WORKINGDIR, args.NAME, args.OUTPUT,
 		 args.MAX_HITS, args.EVALUE, args.DB, args.LENGTH, args.FULLSEQS,
-		 args.TAXIDS, args.CLIENTS_FOLDER)	
+		 args.TAXID, args.CLIENTS_FOLDER, args.EXCLUDE_PARALOGS)	
 

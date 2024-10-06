@@ -23,7 +23,7 @@ def main(fasta_in, site_res, fout):
 		description = l[0] 
 		regex = l[1]
 		for match in re.finditer(regex, str(seq)):
-			site_ranges = [description, match.start(), match.end()]
+			site_ranges = ["modification", match.start()+1, match.end()+1, description]
 			print("\t".join(str(x) for x in site_ranges), file=fout)
 
 if __name__ == "__main__":

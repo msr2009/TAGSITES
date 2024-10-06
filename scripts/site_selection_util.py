@@ -273,20 +273,19 @@ def uniprot_accession_regex(_str):
 	from re import match
 	return match("[OPQ][0-9][A-Z0-9]{3}[0-9]|[A-NR-Z][0-9]([A-Z][A-Z0-9]{2}[0-9]){1,2}", _str)
 
-def ncbiblast_call(script_dir, email, seq, db, scores, evalue, taxids, outfile):
+def ncbiblast_call(script_dir, email, seq, db, scores, evalue, taxid, outfile):
 	"""
 	writes ebi ncbiblast call using common parameters
 	"""
-
-	if len(taxids) == 0:
+	
+	if taxid == 1:
 		ncbi_call = "python {}ncbiblast.py --email {} --program blastp --stype protein\
 					--sequence {} --database {} --outformat json --alignments 0\
 					--scores {} --exp {} --outfile {} --pollFreq 5".format(script_dir, email, seq, db, scores, evalue, outfile)
 	else:
 		ncbi_call = "python {}ncbiblast.py --email {} --program blastp --stype protein\
 					--sequence {} --database {} --outformat json --alignments 0\
-					--scores {} --exp {} --outfile {} --pollFreq 5 --taxids {}".format(script_dir, email, seq, db, scores, evalue, outfile, " ".join(taxids))
-
+					--scores {} --exp {} --outfile {} --pollFreq 5 --taxid {}".format(script_dir, email, seq, db, scores, evalue, outfile, taxid)
 	return ncbi_call
 
 

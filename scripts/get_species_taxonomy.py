@@ -69,7 +69,7 @@ if __name__ == "__main__":
 		help = "email address, required by EBI job submission.", required=True)
 	parser.add_argument('--clients-folder', action='store', type=str, dest='CLIENTS_FOLDER', 
 		help = "path to EBI webservice clients (default=./ebi_api_clients/)",
-		default = "./ebi_api_clients/")
+		default = "./scripts/")
 
 	args, unknowns = parser.parse_known_args()
 	

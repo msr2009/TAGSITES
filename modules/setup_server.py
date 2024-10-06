@@ -12,9 +12,7 @@ from pathlib import Path
 
 def setup_server(input: Inputs, output: Outputs, session: Session, shared_json):
 	
-
-		# Dynamically populate the selectize input with species name
-#	@reactive.event(input.species_search, ignore_none=False)
+	# Dynamically populate the selectize input with species name
 	def populate_species_selectize():
 		# Send the list of species as choices to the selectize box
 		species_list = list(taxonomic_mapping.keys())
@@ -31,7 +29,7 @@ def setup_server(input: Inputs, output: Outputs, session: Session, shared_json):
 		selected_species = input.species_search()
 		if selected_species != "":
 			INPUT_JSON["global"]["species"] = selected_species
-			INPUT_JSON["global"]["taxid"] = taxonomic_mapping[selected_species]
+			INPUT_JSON["global"]["species_taxid"] = taxonomic_mapping[selected_species]
 			print(taxonomic_mapping[selected_species])
 
 	#for updating working directory once run_name is set
@@ -47,7 +45,7 @@ def setup_server(input: Inputs, output: Outputs, session: Session, shared_json):
 
 		if input.run_name():
 			ui.update_text("working_dir", value=f"{out_dir}/{input.run_name()}/")
-			INPUT_JSON["global"]["working_dir"] = input.working_dir()
+#			INPUT_JSON["global"]["working_dir"] = input.working_dir() #move this to save_analysis?
 
 	# checks that a name was added for a task before allowing button push
 	@reactive.effect
@@ -82,7 +80,7 @@ def setup_server(input: Inputs, output: Outputs, session: Session, shared_json):
 				#use the currect value if it exists, otherwise use default
 				selected_value = current_value if current_value is not None else task["params"][p][0]
 
-				print("{}:{} current: {}, selected: {}".format(task['id'], p, current_value, selected_value))
+#				print("{}:{} current: {}, selected: {}".format(task['id'], p, current_value, selected_value))
 
 				param_list.append(ui.input_select(f"{task['id']}_{p}", 
 						label=p,
@@ -128,7 +126,7 @@ def setup_server(input: Inputs, output: Outputs, session: Session, shared_json):
 
 			# Append the task with default parameters
 			selected_tasks.set(selected_tasks() + [{"id": task_id, "name": task_name, "params": task_params, "tooltips": task_tooltips}])
-			print(selected_tasks())
+#			print(selected_tasks())
 			ui.update_text("task_desc_name", value="")
 
 	@reactive.effect
@@ -172,15 +170,17 @@ def setup_server(input: Inputs, output: Outputs, session: Session, shared_json):
 		for p in TASK_PARAMETERS[task["name"]]["args"]:
 			input_id = f"{task['id']}_{p}"
 			input_set = input[input_id].is_set()
+#			print(input_id, input_set)
 			param_value = ""
 			if not input_set:
 				param_value = TASK_PARAMETERS[task["name"]]["args"][p]
 			else:
 				param_value = input[input_id]()  # Add parentheses to call the reactive value
 
-			print(p,param_value)
+#			print(p,param_value)
 			
 			task_json[task['id']]['args'][p] = param_value
+#			print(task_json)
 		#and add all the globals -- we can sort out the requirements later
 		task_json[task['id']]['args'] = {**task_json[task['id']]['args'], **global_params}
 		#and update output name
@@ -191,6 +191,8 @@ def setup_server(input: Inputs, output: Outputs, session: Session, shared_json):
 	@reactive.effect
 	@reactive.event(input.save_analysis)
 	def save_analysis():
+	
+#		print("SAVING")
 
 		#first, make working directory if it doesn't exist
 		try:
@@ -201,14 +203,23 @@ def setup_server(input: Inputs, output: Outputs, session: Session, shared_json):
 		#update global parameters in INPUT_JSON
 		INPUT_JSON["global"]["email"] = input.email()
 		INPUT_JSON["global"]["run_name"] = input.run_name()
+		INPUT_JSON["global"]["working_dir"] = input.working_dir()
 		
+#		print("BEFORE INPUTS", INPUT_JSON)
+
 		#save uploaded input file with better name
 		tmp_input = Path(input.input_file()[0]["datapath"])
 		new_input_filename = input.working_dir() + input.run_name() + tmp_input.suffix
 		INPUT_JSON["global"]["input_file"] = new_input_filename
-
-		#now, copy the temp input file into the working directory
+		#copy into working directory
 		shutil.copy(tmp_input, new_input_filename)
+
+		#save uploaded genomic fasta with better name
+		tmp_genomic = Path(input.input_genomic()[0]["datapath"])
+		new_genomic_filename = input.working_dir() + input.run_name() + ".genomic" + tmp_genomic.suffix
+		INPUT_JSON["global"]["genomic_file"] = new_genomic_filename
+		#copy into working directory
+		shutil.copy(tmp_genomic, new_genomic_filename)
 
 		#if input is pdb, then we need to extract the fasta
 		if tmp_input.suffix == ".pdb":
@@ -220,7 +231,7 @@ def setup_server(input: Inputs, output: Outputs, session: Session, shared_json):
 					   new_fasta_name)
 			#and update input_file in json
 			INPUT_JSON["global"]["input_file"] = new_fasta_name
-	
+
 		#open a file to dump json into
 		out_json_name = input.working_dir() + "/" + input.run_name() + ".json"
 		out_json_file = open(out_json_name, "w")
@@ -234,10 +245,18 @@ def setup_server(input: Inputs, output: Outputs, session: Session, shared_json):
 		for task in selected_tasks():
 			#we need to check plddt and input type
 			if task["name"] == "plddt":
+				print("PARAMS", task["params"])
+				print("INPUT_GLOBAL", INPUT_JSON["global"])
 				#if there isn't a pdb file in the input
-				if INPUT_JSON["global"]["pdb"] == "" or task["params"]["pdb"] == "":
+				if INPUT_JSON["global"]["pdb"] != "":
+					task["params"]["existing_AF2"] = 0
+				else:
 					task["params"]["existing_AF2"] = 1
+				print("EXISTINGAF2", task["params"])
 	
+			#if we have a genomic sequence, then also add a genewise task
+
+
 #			print(f"Task ID: {task['id']}, Task Name: {task['name']}")  # Debug: Print task details
 			out_json = {**out_json, **write_task_json(task, INPUT_JSON["global"])}
 
@@ -246,6 +265,7 @@ def setup_server(input: Inputs, output: Outputs, session: Session, shared_json):
 #			task_list.append({"id": task['id'], "name": task['name'], "params": task_params})
 
 		#write task jsons to new json file in working directory
-		print(json.dumps(out_json, indent=4), file=out_json_file)
+		json.dump(out_json, out_json_file, indent=4)
 		out_json_file.close()
 		shared_json.set(out_json_name)
+		

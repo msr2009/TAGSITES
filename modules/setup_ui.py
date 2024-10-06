@@ -18,13 +18,11 @@ def setup_ui():
 		ui.h3("Sequence Input"),
 		ui.row(
 			ui.column(2, ui.input_file("input_file", "Choose Input File (.fa, .fasta, or .pdb)", accept=[".fa", ".fasta",".pdb"])),
-			ui.column(3, ui.input_selectize("species_search", "Species",
-#						choices=list(load_taxonomic_mapping(UNIPROT_SPECIES).keys()), 
-						choices=[],
-						multiple=False, selected=None,
-						options={'create': False}, width='100%'),
-			),
+			ui.column(2, ui.input_file("input_genomic", "FASTA file of genomic region", accept=[".fasta", ".fa"])),
 		),
+		ui.input_selectize("species_search", "Species", choices=[], multiple=False, selected=None,
+						options={'create': False}, width="700px"),
+		
 		ui.hr(),
 
 		# Task selector and task management
@@ -46,6 +44,6 @@ def setup_ui():
 		ui.output_ui("task_params_container"),	
 
 		ui.hr(),
-		ui.input_action_button("save_analysis", "Save Analysis", disabled=True)
-	)
 
+		ui.input_action_button("save_analysis", "Save Analysis", disabled=True),
+	)
