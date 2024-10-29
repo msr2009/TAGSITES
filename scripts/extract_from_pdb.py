@@ -1,19 +1,25 @@
-from site_selection_util import save_fasta, check_input_type
-from site_selection_util import extract_bfactors_from_pdb, extract_seq_from_pdb
+from site_selection_util import save_fasta, check_input_type, three_to_one
+from site_selection_util import extract_bfactors_from_pdb, calc_sasa_shrakerupley
 
 def main(input_file, output_file):
 	
-	bf_out = open(output_file, "w")
-	bf = []
+	#output name = "xxx.x_plddt.txt"
 
 	#we extract the pLDDT values from bfactors
+	bf_out = open(output_file, "w")
+#	bf = []
 	bf = extract_bfactors_from_pdb(input_file)
-	
 	for aa in range(len(bf)):
 		print("\t".join([str(aa+1), str(bf[aa])]), file=bf_out)
-	
-	return 0
-		
+	bf_out.close()
+
+	#now we extract SASA values
+	sasa_out = open(output_file.replace("plddt.txt", "sasa.txt"), "w")
+	sasa = calc_sasa_shrakerupley(input_file)
+	for s in sasa:
+		print("\t".join([s[0], s[1], three_to_one(s[2])]), file=sasa_out)
+	sasa_out.close()
+
 if __name__ == "__main__":
 	
 	from argparse import ArgumentParser

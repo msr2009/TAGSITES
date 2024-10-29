@@ -3,6 +3,10 @@ from scipy.signal import find_peaks
 import re, string, sys
 from Bio import SeqIO, PDB 
 
+from Bio.PDB.PDBParser import PDBParser
+from Bio.PDB.SASA import ShrakeRupley
+
+
 def insert_tag(target_seq, tag_seq, site):
     """
     Function for inserting tag sequences at specific sites
@@ -307,3 +311,32 @@ def extract_bfactors_from_pdb(pdb_file):
 	bf = [float(r["CA"].get_bfactor()) for r in PDB.Selection.unfold_entities(structure, "R")]
 	return bf
 
+
+def calc_sasa_shrakerupley(pdb_file, max_sasa_dict=None):
+
+	#these are from Tien 2013
+	if not max_sasa_dict:
+		max_sasa = {
+			'ALA': 121.0, 'ARG': 265.0, 'ASN': 187.0, 'ASP': 187.0, 'CYS': 148.0,
+			'GLN': 214.0, 'GLU': 214.0, 'GLY': 97.0, 'HIS': 216.0, 'ILE': 195.0,
+			'LEU': 191.0, 'LYS': 230.0, 'MET': 203.0, 'PHE': 228.0, 'PRO': 154.0,
+			'SER': 143.0, 'THR': 163.0, 'TRP': 264.0, 'TYR': 255.0, 'VAL': 165.0
+		}
+
+	parser = PDBParser()
+	struct = parser.get_structure("foo", pdb_file)
+	sr = ShrakeRupley()
+	sr.compute(struct, level="R")
+
+	sasa_list = []
+
+	for chain in struct.get_chains():
+		for residue in chain:
+			res_id = residue.get_id()
+			res_name = residue.get_resname()
+			chain_id = chain.get_id()
+
+			# Get SASA for the residue
+			sasa_list.append([str(res_id[1]), str(residue.sasa/max_sasa[res_name]), res_name])
+
+	return sasa_list
