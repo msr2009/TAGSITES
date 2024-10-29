@@ -233,7 +233,9 @@ def plot_alignment_matrix(fasta_file, title="alignment title", colormap=None):
 			texttemplate='%{text}',
 			colorscale=scale_tuples,
 			autocolorscale=False,
-			showlegend=False)    	
+			showlegend=False,
+			hoverinfo='none',
+			x0=1, dx=1)    	
 
 	return aln_hm
 
@@ -252,20 +254,22 @@ def make_alignment_subplots(fasta_file_list, title=""):
 
 	fig = make_subplots(rows=len(fasta_file_list), 
 						cols=1, 
-						row_heights=fa_lengths)
+						row_heights=[5*x for x in fa_lengths])
 	
 	for hm in range(len(aln_heatmaps)):
 		fig.add_trace(aln_heatmaps[hm], row=hm+1, col=1)
 
 	fig.update_traces(showscale=False)
-	fig.update_yaxes({"tickfont_size":8})
+	fig.update_xaxes({"fixedrange":False})
+	fig.update_yaxes({"tickfont_size":8, "fixedrange":True})
 	fig.update_layout(
 		title=title,
 		showlegend=False,
-		xaxis=dict(fixedrange=False),
-		yaxis=dict(fixedrange=True),
+#		xaxis=dict(fixedrange=False),
+#		yaxis=dict(fixedrange=True)
 		#width=1000, height=500
 	)
+	#update xaxis dicts for all subplots
 
 	return fig
 

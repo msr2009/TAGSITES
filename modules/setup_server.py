@@ -245,14 +245,14 @@ def setup_server(input: Inputs, output: Outputs, session: Session, shared_json):
 		for task in selected_tasks():
 			#we need to check plddt and input type
 			if task["name"] == "plddt":
-				print("PARAMS", task["params"])
-				print("INPUT_GLOBAL", INPUT_JSON["global"])
+#				print("PARAMS", task["params"])
+#				print("INPUT_GLOBAL", INPUT_JSON["global"])
 				#if there isn't a pdb file in the input
 				if INPUT_JSON["global"]["pdb"] != "":
 					task["params"]["existing_AF2"] = 0
 				else:
 					task["params"]["existing_AF2"] = 1
-				print("EXISTINGAF2", task["params"])
+#				print("EXISTINGAF2", task["params"])
 	
 			#if we have a genomic sequence, then also add a genewise task
 
