@@ -26,16 +26,22 @@ def setup_ui():
 		ui.hr(),
 
 		# Task selector and task management
-		ui.h3("Analysis Steps"),
+		ui.h3("Setup Analyses"),
 		ui.row(
 			ui.column(1, ui.input_text("run_name", "Analysis Name")),
 			ui.column(3, ui.input_text("working_dir", "Output Directory", width="100%")),
 		),
+		
+		ui.row(
+		ui.column(2, ui.input_selectize("load_default_tasks", "Load Default Tasks?", choices=[], multiple=False, selected=None,
+				options={'create': False}, width="400px")),
+		ui.column(1, ui.input_action_button("load_defaults_button", "Load", disabled=True)),
+		),
 		ui.hr(),
 
 		ui.row(
-			ui.column(1, ui.input_select("task_selector", "Select Analysis", AVAILABLE_TASKS)),
-			ui.column(1, ui.input_text("task_desc_name", "Name (required)")),
+			ui.column(1, ui.input_select("task_selector", "Select analysis task", AVAILABLE_TASKS)),
+			ui.column(1, ui.input_text("task_desc_name", "Task name (required)")),
 		),
 		ui.input_action_button("add_task", "Add Task", disabled=True),
 		ui.hr(),
@@ -44,6 +50,17 @@ def setup_ui():
 		ui.output_ui("task_params_container"),	
 
 		ui.hr(),
+		
+		ui.row(
+			ui.column(1, ui.input_action_button("save_analysis", "Save Analysis", disabled=True)),
+			ui.column(4, ui.output_text_verbatim("tip_save_analysis")),
+		),
 
-		ui.input_action_button("save_analysis", "Save Analysis", disabled=True),
+		ui.hr(),
+		
+		ui.row(
+			ui.column(1, ui.input_action_button("save_default_tasks_button", "Save as Default?", disabled=True)),
+			ui.column(2, ui.input_text("new_default_name", "", ""),
+		)
 	)
+)

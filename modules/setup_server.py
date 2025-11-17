@@ -1,17 +1,26 @@
 from shiny import ui, reactive, render, Inputs, Outputs, Session
 
-from config import INPUT_JSON, TASK_PARAMETERS, AVAILABLE_TASKS, EXCLUDE_ARGS
+#from config import INPUT_JSON, TASK_PARAMETERS, AVAILABLE_TASKS, EXCLUDE_ARGS
+from config import DEFAULT_JSON, TASK_PARAMETERS, AVAILABLE_TASKS, EXCLUDE_ARGS
+
 from config import UNIPROT_SPECIES
 
 from scripts.site_selection_util import get_sequence, save_fasta 
 from utils.helpers import load_taxonomic_mapping, update_shared_dict
 
-import json, os, shutil, pandas
+import json, os, shutil, pandas, copy
 from pathlib import Path
 
 
-def setup_server(input: Inputs, output: Outputs, session: Session, shared_json):
+#def setup_server(input: Inputs, output: Outputs, session: Session, shared_json):
+def setup_server(input, output, session, shared_json):
 	
+	selected_tasks = reactive.Value([])  # To store added tasks
+	task_values = reactive.Value({})  # to maintain inputted values
+	
+	#doing this to reset INPUT_JSON upon refreshing app
+	INPUT_JSON = json.load(open(DEFAULT_JSON,"r"))
+
 	# Dynamically populate the selectize input with species name
 	def populate_species_selectize():
 		# Send the list of species as choices to the selectize box
@@ -19,10 +28,24 @@ def setup_server(input: Inputs, output: Outputs, session: Session, shared_json):
 		ui.update_selectize("species_search", choices=species_list)
 		ui.update_selectize("species_search", selected="")
 
+	def populate_default_params():
+		# load names of params json files in ./params/
+		params_dir = Path("./params/")
+		params_files = [j.name.removesuffix(".json") for j in list(params_dir.glob("*.json"))]
+		ui.update_selectize("load_default_tasks", choices=params_files) 
+		ui.update_selectize("load_default_tasks", selected="")
+
+	def populate_tables_list():
+		# load names of files in ./tables/
+		tables_dir = Path("./tables/")
+		tables_files = list(tables_dir.glob(""))
+		return tables_files
+
 	#load uniprot species file and update dropdown
 	taxonomic_mapping = load_taxonomic_mapping(UNIPROT_SPECIES)
 	session.on_flush(populate_species_selectize, once=True)
-
+	session.on_flush(populate_default_params, once=True)
+	
 	@reactive.effect
 	@reactive.event(input.species_search)
 	def selected_species():	
@@ -36,16 +59,21 @@ def setup_server(input: Inputs, output: Outputs, session: Session, shared_json):
 	@reactive.effect
 	@reactive.event(input.run_name)
 	def update_working_dir():
-		
-		out_dir = os.getcwd()	
+		out_dir = os.getcwd()
 		if INPUT_JSON["global"]["working_dir"] != "":
 			out_dir = INPUT_JSON["global"]["working_dir"]
-
-#		out_dir = INPUT_JSON["global"]["working_dir"]
-
 		if input.run_name():
 			ui.update_text("working_dir", value=f"{out_dir}/{input.run_name()}/")
-#			INPUT_JSON["global"]["working_dir"] = input.working_dir() #move this to save_analysis?
+
+	#can only put defaults button when you've chosen one set of defaults
+	@reactive.effect
+	def update_load_defaults_button_state():
+		if input.load_default_tasks():
+			ui.update_action_button("load_defaults_button", disabled=False)
+		else:
+			ui.update_action_button("load_defaults_button", disabled=True)
+
+
 
 	# checks that a name was added for a task before allowing button push
 	@reactive.effect
@@ -56,16 +84,28 @@ def setup_server(input: Inputs, output: Outputs, session: Session, shared_json):
 		else:
 			ui.update_action_button("add_task", disabled=True)
 	
+	@reactive.Calc
+	def requirements_filled():
+		return bool(input.email()) and bool(input.input_file) and bool(input.working_dir()) and bool(len(selected_tasks())>0)
+
 	@reactive.effect
+	@reactive.event(requirements_filled)
 	def update_save_analysis_button_state():
-		if input.email() and input.input_file() and input.run_name() and input.working_dir():
+#		if input.email() and input.input_file() and input.run_name() and input.working_dir() and len(selected_tasks()) > 0:
+		if requirements_filled():
 			ui.update_action_button('save_analysis', disabled=False)
 		else:
 			ui.update_action_button('save_analysis', disabled=True)
-		
-
-	selected_tasks = reactive.Value([])  # To store added tasks
-	task_values = reactive.Value({})  # to maintain inputted values
+	
+	@render.text
+	def tip_save_analysis():
+		if not requirements_filled():
+			return "Requires inputs, analysis name, and at least one task."
+		else:
+			if input.save_analysis() == 0:
+				return "Click to save analysis"
+			else:
+				return f"Saved to {input.working_dir()}{input.run_name()}.json"
 
 	# builds the row for parameters for each task
 	def build_task_params_input(task):
@@ -97,23 +137,66 @@ def setup_server(input: Inputs, output: Outputs, session: Session, shared_json):
 #		param_list.append(ui.input_action_button("remove_task", "Remove"))
 		return param_list
 
+
+	#push button and add default tasks to list
+	@reactive.effect
+	@reactive.event(input.load_defaults_button)
+	def add_tasks_from_default():
+		default_params_file = input.load_default_tasks()
+		if default_params_file != "":
+			default_task_json = json.load(open("./params/{}.json".format(input.load_default_tasks()),"r"))
+			for task_id in default_task_json:
+				print(task_id)
+				
+				selected_tasks.set(selected_tasks() + [{"id": task_id, 
+													    "name": default_task_json[task_id]["analysis"], 
+														"params": default_task_json[task_id]["args"]}])
+#			selected_tasks.set(selected_tasks() + [default_task_json])
+			save_task_values()
+		print(selected_tasks())
+
+	#update save_default_tasks_button
+	@reactive.effect
+	def update_save_default_tasks_button():
+		if input.new_default_name() != "" and len(selected_tasks()) > 0:
+			ui.update_action_button("save_default_tasks_button", disabled=False)	
+		else:
+			ui.update_action_button("save_default_tasks_button", disabled=True)	
+
+	#save current tasks as a default to ./params/
+	@reactive.effect
+	@reactive.event(input.save_default_tasks_button)
+	def make_new_default():
+		save_task_values()
+		new_default_filename = f"./params/{input.new_default_name()}.json"
+		new_default_json_file = open(new_default_filename, "w")
+		def_json = {}
+		for task in selected_tasks():
+			def_json = {**def_json, **write_task_json(task)}
+		json.dump(def_json, new_default_json_file, indent=4)
+		new_default_json_file.close()
+
+	def save_task_values():
+		for task in selected_tasks():
+			task_params = {}
+			for param in task['params'].keys():
+				input_id = f"{task['id']}_{param}"
+				if input_id in input:
+					task_params[param] = input[input_id]()				
+			task_values()[task['id']] = task_params
+		print(task_values())
+
 	#build list of tasks (this gets updated dynamically)
 	@reactive.effect
 	@reactive.event(input.add_task)
-	def add_task():
-
+	def add_task(custom_params=None):
 		task_name = input.task_selector()
+
 		if task_name:
-
 			#before making a new task, save the existing data in the old tasks
-			for task in selected_tasks():
-				task_params = {}
-				for param in task['params'].keys():
-					input_id = f"{task['id']}_{param}"
-					if input_id in input:
-						task_params[param] = input[input_id]()
-				task_values()[task['id']] = task_params
+			save_task_values()
 
+			#then, make a new task
 			task_id = f"{input.task_desc_name()}_{task_name}"
 			
 			#grab appropriate arguments for each task
@@ -128,6 +211,7 @@ def setup_server(input: Inputs, output: Outputs, session: Session, shared_json):
 			selected_tasks.set(selected_tasks() + [{"id": task_id, "name": task_name, "params": task_params, "tooltips": task_tooltips}])
 #			print(selected_tasks())
 			ui.update_text("task_desc_name", value="")
+
 
 	@reactive.effect
 	@reactive.event(input.remove_task)
@@ -159,7 +243,7 @@ def setup_server(input: Inputs, output: Outputs, session: Session, shared_json):
 	
 
 	#write json entry (including global args)
-	def write_task_json(task, global_params):
+	def write_task_json(task, global_params=None):
 		task_json = {
 			task['id']: {
 				"analysis": task['name'],
@@ -180,9 +264,10 @@ def setup_server(input: Inputs, output: Outputs, session: Session, shared_json):
 #			print(p,param_value)
 			
 			task_json[task['id']]['args'][p] = param_value
-#			print(task_json)
+#			print(task_json)a
 		#and add all the globals -- we can sort out the requirements later
-		task_json[task['id']]['args'] = {**task_json[task['id']]['args'], **global_params}
+		if global_params != None:
+			task_json[task['id']]['args'] = {**task_json[task['id']]['args'], **global_params}
 		#and update output name
 		task_json[task['id']]['args']['output'] = f"{input.working_dir()}{input.run_name()}.{task['id']}{TASK_PARAMETERS[task['name']]['args']['output']}"
 		return task_json
@@ -209,7 +294,13 @@ def setup_server(input: Inputs, output: Outputs, session: Session, shared_json):
 
 		#save uploaded input file with better name
 		tmp_input = Path(input.input_file()[0]["datapath"])
-		new_input_filename = input.working_dir() + input.run_name() + tmp_input.suffix
+		new_input_filename = input.working_dir() + input.run_name() 
+		if tmp_input.suffix == ".pdb":
+				new_input_filename += ".pdb"
+		else:
+			new_input_filename += ".fa" #change .fasta to .fa
+
+		
 		INPUT_JSON["global"]["input_file"] = new_input_filename
 		#copy into working directory
 		shutil.copy(tmp_input, new_input_filename)
@@ -248,14 +339,15 @@ def setup_server(input: Inputs, output: Outputs, session: Session, shared_json):
 #				print("PARAMS", task["params"])
 #				print("INPUT_GLOBAL", INPUT_JSON["global"])
 				#if there isn't a pdb file in the input
-				if INPUT_JSON["global"]["pdb"] != "":
+				if INPUT_JSON["global"]["pdb"] != "":	#############I DONT THINK THIS WORKS
 					task["params"]["existing_AF2"] = 0
 				else:
 					task["params"]["existing_AF2"] = 1
 #				print("EXISTINGAF2", task["params"])
 	
+			##############
 			#if we have a genomic sequence, then also add a genewise task
-
+			###############
 
 #			print(f"Task ID: {task['id']}, Task Name: {task['name']}")  # Debug: Print task details
 			out_json = {**out_json, **write_task_json(task, INPUT_JSON["global"])}
@@ -268,4 +360,17 @@ def setup_server(input: Inputs, output: Outputs, session: Session, shared_json):
 		json.dump(out_json, out_json_file, indent=4)
 		out_json_file.close()
 		shared_json.set(out_json_name)
-		
+
+	################
+	####TOOLTIPS####
+	################
+	
+	#not really a tooltip, but some text next to the save_analysis button
+	#change to path to json once there's a task and required names/dirs
+
+
+
+
+
+
+

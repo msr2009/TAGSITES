@@ -83,7 +83,7 @@ def sequence_type(sequence):
 	protein_bases = set('ACDEFGHIKLMNPQRSTVWYX')
     
 	# Convert the sequence to uppercase to make it case-insensitive	
-	sequence = sequence.upper()
+	sequence = sequence.upper().strip("*")
 
 	# Check whether the sequence contains only DNA bases
 	if set(sequence).issubset(dna_bases):
@@ -208,6 +208,7 @@ def pLDDT_tag_sites(pdb_file, max_score, window, passes, nsites, min_dist):
 def read_fasta(fasta_in):
 	"""
 	Wrapper function for reading a FASTA file using Biopython.
+	Removes trailing asterisks from sequence.
 	Simple -- fasta file must have only one record.
 
 	Parameters: 
@@ -220,7 +221,7 @@ def read_fasta(fasta_in):
 	from Bio import SeqIO
 
 	for record in SeqIO.parse(fasta_in, "fasta"):
-		return [record.id.strip(","), record.seq]
+		return [record.id.strip(","), record.seq.strip("*")]
 
 def check_input_type(inputfile):
 	"""

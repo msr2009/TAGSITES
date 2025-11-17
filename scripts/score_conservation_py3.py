@@ -62,12 +62,13 @@ def weighted_gap_penalty(col, seq_weights):
 
 def gap_percentage(col):
 	"""Return the percentage of gaps in col."""
-	num_gaps = 0.
-
-	for aa in col:
-		if aa == '-': num_gaps += 1
-
-	return num_gaps / len(col)
+	#num_gaps = 0.
+	
+	#for aa in col:
+	#	if aa == '-': num_gaps += 1
+	
+	#return num_gaps / float(len(col))
+	return col.count("-")/len(col)
 
 ################################################################################
 # Shannon Entropy
@@ -650,7 +651,7 @@ def main(align_file, window_size, win_lam, outfile_name,
 	scores = []
 	for i in range(len(alignment[0])):
 		col = get_column(i, alignment)
-
+		
 		if len(col) == len(alignment):
 			if gap_percentage(col) <= gap_cutoff:
 				scores.append(scoring_function(col, s_matrix, bg_distribution, seq_weights, use_gap_penalty))

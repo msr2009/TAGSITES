@@ -49,9 +49,11 @@ def load_data_from_json(json_in, type_dict):
 			#add to dataframe
 			#print(f"{task}: df") #add to dict
 			read_df = pd.read_csv(j[task]["args"]["output"], sep='\t',
-								  comment="#", na_values=[-1000])
-			tmp_df["pos"] = range(1, read_df.shape[0])
+									 header=None, comment="#", na_values=[-1000])
+			
+			tmp_df["pos"] = [x+1 for x in range(read_df.shape[0]+1)]
 			divisor = 1.0
+			
 			if j[task]["analysis"] == "plddt":
 				divisor=100.0
 			tmp_df[task] = read_df.iloc[:, 1].div(divisor)
@@ -70,7 +72,6 @@ def load_data_from_json(json_in, type_dict):
 		else:
 			raise TypeError(f"Can't determine the analysis type of {task}. Skipping.")
 			continue
-
 	return (df, dat, alns)
 
 

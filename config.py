@@ -2,7 +2,7 @@
 UNIPROT_SPECIES = "./uniprot_species.flat.txt"
 
 #edit the filename below for your defaults
-DEFAULT_JSON = "./default_json.txt"
+DEFAULT_JSON = "./default_json.json"
 
 #don't touch this!
 import json

@@ -64,6 +64,7 @@ def main(json_input_file):
 
 		#if existing_AF_model.py finds new pdb, then it doesn't return 1
 		#it will write new fasta as [run_name].AF.fa
+		print(os.listdir(global_args["working_dir"]))
 		if af_proc != 1:
 			#then we need to rename original fasta and update json
 			os.rename("{}/{}.fa".format(global_args["working_dir"], global_args["run_name"]),
@@ -141,6 +142,8 @@ def main(json_input_file):
 	for p in procs:
 		p.wait()
 
+	
+	print("####DONE WITH ANALYSIS####")
 	sys.exit(0)
 
 if __name__ == "__main__":

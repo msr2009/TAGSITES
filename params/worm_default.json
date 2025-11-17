@@ -1,0 +1,50 @@
+{
+    "BROAD_blast": {
+        "analysis": "blast",
+        "args": {
+            "taxid": "",
+            "taxid_file": "",
+            "evalue": "1e-50",
+            "max_hits": "100",
+            "db": "uniprotkb_swissprot",
+            "length": "",
+            "output": ".BROAD_blast.jsd"
+        }
+    },
+    "WORM_blast": {
+        "analysis": "blast",
+        "args": {
+            "taxid": "6236",
+            "taxid_file": "",
+            "evalue": "1e-100",
+            "max_hits": "100",
+            "db": "uniprotkb",
+            "length": ".7",
+            "output": ".WORM_blast.jsd"
+        }
+    },
+    "AF2_plddt": {
+        "analysis": "plddt",
+        "args": {
+            "pdb": "",
+            "evalue": "",
+            "percent_id": "",
+            "output": ".AF2_plddt.txt",
+            "existing_AF2": "1"
+        }
+    },
+    "MODS_modifications": {
+        "analysis": "modifications",
+        "args": {
+            "fasta": "",
+            "sites_file": "./tables/modification_sites.txt",
+            "output": ".MODS_modifications.txt"
+        }
+    },
+    "DOMAINS_domains": {
+        "analysis": "domains",
+        "args": {
+            "output": ".DOMAINS_domains.txt"
+        }
+    }
+}

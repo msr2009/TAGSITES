@@ -13,7 +13,7 @@ def progress_server(input, output, session, shared_json):
 		ui_elements = []
 
 		# make a persistent file upload button
-		ui_elements.append(ui.input_file("upload_json", "Upload/Reload JSON File"))
+		ui_elements.append(ui.input_file("upload_json", "Upload/Reload JSON File", accept=[".json"]))
 
 		if shared_json.get():
 			# Display the JSON content
@@ -64,6 +64,6 @@ def progress_server(input, output, session, shared_json):
 		with open(shared_json.get()) as f:
 			INPUT_JSON = json.load(f)
 
-		run_command = 'python {}run_tag_sites_from_json.py -i {}'.format(INPUT_JSON["global"]["scripts-folder"], shared_json.get())
+		run_command = 'python {}run_tag_sites_from_json.py -i {}'.format(INPUT_JSON["global"]["scripts_folder"], shared_json.get())
 		proc = subprocess.Popen(run_command, shell=True, start_new_session=True)
 		proc.wait()

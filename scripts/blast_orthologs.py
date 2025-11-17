@@ -32,7 +32,7 @@ def main(fasta_in, email, workingdir, name, output,
 				n, evalue, db, length_percent,
 				align_full_seqs, taxid, clients_folder, exclude_paralogs):
 
-	name, seq = read_fasta(fasta_in)
+	seq_name, seq = read_fasta(fasta_in)
 	seq_len = float(len(seq))
 	
 	out_prefix = Path(output).with_suffix('')
@@ -107,7 +107,8 @@ def main(fasta_in, email, workingdir, name, output,
 	###########################
 
 	#now we have blast hits and can make a fasta file to submit to an aligner. 
-	fasta_str = ""
+	input_match = ""
+	fasta_str_list = []
 	for s in blast_hits:
 		for h in blast_hits[s]:
 			if align_full_seqs: 
@@ -115,33 +116,44 @@ def main(fasta_in, email, workingdir, name, output,
 				dbfetch_call = "python {}/dbfetch.py fetchData UNIPROT:{} fasta raw".format(clients_folder, h["acc"])
 #				print(dbfetch_call)
 				
-				acc_fasta = subprocess.run(dbfetch_call, shell=True,capture_output=True, text=True).stdout
+				#get seq from dbfetch output
+				acc_fasta = subprocess.run(dbfetch_call, shell=True, capture_output=True, text=True).stdout
+				#truncate the name for each seq	
+				acc_fasta_name = acc_fasta.split("\n")[0].split()[0]
 				
 				#here, filter for length of full seq
+				acc_fasta_seq = "".join(acc_fasta.split("\n")[1:])
+				if acc_fasta_seq == seq:
+					print("FOUND MATCH TO INPUT:{}".format(acc_fasta.split("\n")[0]))
+					input_match = acc_fasta_name[1:]
+
+				#filter for total length 
 				hit_len = float(len("".join(acc_fasta.split("\n")[1:])))
 				if hit_len/seq_len < length_percent or hit_len/seq_len > 1/length_percent:
 						continue
 
-				#truncate the name for each seq	
-				acc_fasta_name = acc_fasta.split("\n")[0].split()[0]
-				acc_fasta_seq = "\n".join(acc_fasta.split("\n")[1:])
 				
 				#add to fasta_str
-				fasta_str += acc_fasta_name+"\n"
-				fasta_str += acc_fasta_seq.rstrip('\n')+"\n"
+				fasta_str_list.append(acc_fasta_name+"\n" + acc_fasta_seq.rstrip('\n')+"\n")
 #				print(fasta_str)
 			else:
 				#we can make a fasta str (and save a file) for the alignment
-				fasta_str += ">{}\n{}\n".format(h["acc"], h["hitseq"])
-
+				fasta_str_list.append(">{}\n{}\n".format(h["acc"].split()[0], h["hitseq"]))
 	
+	#if there wasn't a perfect match to the input, then we need to add it back
+	#in. take the first fasta hit and replace it with our input
+	if input_match == "":
+		print("NO MATCH TO INPUT: making best hit input seq")
+		fasta_str_list = [">{}\n{}\n".format(seq_name, seq)] + fasta_str_list[1:]
+		input_match = seq_name
+
 	###########################
 	# ALIGN WITH CLUSTALO
 	###########################
 
 	#output fasta of seqs to align
 	fasta_out = open("{}.fasta".format(out_prefix), "w")
-	print(fasta_str, file=fasta_out)
+	print("".join(fasta_str_list), file=fasta_out)
 	fasta_out.close()
 
 	#call clustalomega to realign ortholog seqs
@@ -151,10 +163,17 @@ def main(fasta_in, email, workingdir, name, output,
 #	subprocess.run(ebi_clustal_call, shell=True)
 
 	local_clustal_call = "clustalo -i {}.fasta --outfmt fa -o {}.aln --force".format(out_prefix, out_prefix)
-#	local_clustal_call = "clustalo -i {}/{}.blast_close.fasta".format(workingdir, name)
 	print(local_clustal_call)
-	subprocess.run(local_clustal_call, shell=True)
+	clustal_results = subprocess.run(local_clustal_call, shell=True)
 	
+	###if only one filtered blast hit found, then clustal fails
+	###this kludge just copies the clustal input as its output
+	if clustal_results.returncode != 0:
+		print("CLUSTAL FAILED: probably only one BLAST hit. Copying to make .aln. BEWARE!")
+		fake_aln_out = open("{}.aln".format(out_prefix), "w")
+		print("".join(fasta_str_list), file=fake_aln_out)
+		fake_aln_out.close()
+
 	###########################
 	# CALCULATE JSD
 	###########################
@@ -162,9 +181,12 @@ def main(fasta_in, email, workingdir, name, output,
 	#calculate jensen-shannon divergence (from Capra and Singh)
 	#we need the name of the best hit, which will be our input seq, 
 	#this is the first seq in the fasta file
-	best_hit_name = open("{}.aln".format(out_prefix), "r").readline()[1:]
 
-	js_call = 'python {}score_conservation_py3.py -i {}.aln -a "{}" -o {}.jsd -m {}matrix/blosum62.bla'.format(clients_folder, out_prefix,
+	#best_hit_name = open("{}.aln".format(out_prefix), "r").readline()[1:]
+	best_hit_name = input_match
+	
+
+	js_call = 'python {}score_conservation_py3.py -i {}.aln -a "{}" -o {}.jsd -m {}matrix/blosum62.bla -g .75'.format(clients_folder, out_prefix,
 																					  best_hit_name.rstrip(),
 																					  out_prefix, clients_folder)
 
@@ -201,7 +223,7 @@ if __name__ == "__main__":
 	parser.add_argument('--db', action='store', type=str, dest='DB', 
 		help = "Uniprot database to search (uniprotkb)", default="uniprotkb")
 	parser.add_argument('-l', '--length', action='store', type=float, dest='LENGTH', 
-		help = "minimum length of matches, as percent of input (.7)", default=0.7)
+		help = "minimum length of matches, as percent of input (0)", default=0)
 	parser.add_argument('--align-blast-sequence', action='store_false', dest='FULLSEQS', 
 		help = "only align BLAST hit sequences", default=True)
 	parser.add_argument('--clients-folder', action='store', type=str, dest='CLIENTS_FOLDER', 
