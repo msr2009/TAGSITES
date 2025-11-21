@@ -14,5 +14,6 @@ def results_ui():
 		#output plotly plot
 		output_widget("results_plot"),
 		ui.hr(),
-		output_widget("alignment_plot")
+#		output_widget("alignment_plot")
+		ui.output_ui("alignments_container")
 	)

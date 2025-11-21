@@ -1,6 +1,6 @@
 from shiny import reactive, ui, render
 
-import json
+import json, re
 import pandas as pd
 import plotly.graph_objs as go
 from shinywidgets import render_widget, render_plotly
@@ -8,6 +8,7 @@ from shinywidgets import render_widget, render_plotly
 
 from utils.results import load_data_from_json, plot_results
 from utils.results import plot_alignment_matrix, make_alignment_subplots
+from utils.results import make_image_dict
 from config import RESULTS_TYPE_DICT
 
 def results_server(input, output, session, shared_json):
@@ -45,19 +46,65 @@ def results_server(input, output, session, shared_json):
 	@render_plotly
 	def results_plot():
 		# Check if data is available to plot
-		if aa_data.get() is not None:
+		if run_name.get() != None:
 			# Assuming `data.get()` returns a DataFrame, use `plot_results` to generate the plot
 			return plot_results(aa_data.get(), subj_fasta.get(), range_data.get(), title=run_name.get())
 		else:
 			return ui.p("No data to display yet.")
 
+#	@output
+#	@render_plotly
+#	def alignment_plot():
+#		#if aln_files() returns a file, then use "plot_alignment_matrix"
+#		if len(aln_files.get()) != 0:
+#			# make an alignment plot 
+#			return make_alignment_subplots(aln_files.get())
+#		else:
+#			return ui.p("No alignment data yet.")
+
+#	@output
+#	@render_image
+#	def alignment_figure():
+#		#if aln_files() returns a file, 
+#		#then make a div to contain alignment images
+#		if aln_files.get() is not None:
+#			# make an alignment plot 
+#			return alignment_container(aln_files.get())
+#		else:
+#			return ui.p("No alignment data yet.")
+	
 	@output
-	@render_plotly
-	def alignment_plot():
-		#if aln_files() returns a file, then use "plot_alignment_matrix"
-		if aln_files.get() is not None:
-			# make an alignment plot 
-			return make_alignment_subplots(aln_files.get())
-		else:
-			return ui.p("No alignment data yet.")
+	@render.ui
+	def alignments_container():
+		aln_image_list = []
+		import os
+
+		if len(aln_files.get()) != 0:
+			for a in aln_files.get():
+				print(a, os.path.exists(a))
+				fname = a.removesuffix("aln") + "svg"
+				aln_image_ui = make_image_dict(fname)
+				#make a faked name for the image id
+				fname_id = re.sub(r"\W", '_', a.split('/')[-1])
+
+				aln_image_list.append(ui.output_image(f"img_{fname_id}", aln_image_ui))
+		return ui.div(*aln_image_list)
+		
+	@reactive.Effect
+	def render_alignment_images():
+		if len(aln_files.get()) != 0:
+			for a in aln_files.get():
+				fname = a.removesuffix("aln") + "svg"
+				fname_id = "img_" + re.sub(r"\W", '_', a.split('/')[-1])
+#				print(fname, fname_id)
+
+				@output(id=fname_id)
+				@render.image
+				def _make_render(fname=fname):
+					img = {
+						"src": fname,
+						"height": "50%"
+					}
+					return img
+
 
