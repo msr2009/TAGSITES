@@ -10,6 +10,8 @@ def progress_ui():
 #				accept=['.txt']),
 
 		ui.output_ui("show_or_upload_json"),
+	
+
 		ui.hr(),
 
 		#maybe something here to show the steps of the analysis?

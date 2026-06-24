@@ -72,10 +72,11 @@ def main(fasta_in, email, workingdir, name, output,
 		d_hit = hit_to_dict(h)
 		
 		#skip hits that don't meet evalue and match length criteria
-		if d_hit["evalue"] > evalue:
-			continue
-		if d_hit["length"]/float(len(seq)) < length_percent or d_hit["length"]/float(len(seq)) > 1/length_percent:
-			continue
+		if length_percent != 0:
+			if d_hit["evalue"] > evalue:
+				continue
+			if d_hit["length"]/float(len(seq)) < length_percent or d_hit["length"]/float(len(seq)) > 1/length_percent:
+				continue
 		
 		if exclude_paralogs:	#do shenanigans to filter for best hits
 			#store all isoforms/paralogs from target species
@@ -129,7 +130,8 @@ def main(fasta_in, email, workingdir, name, output,
 
 				#filter for total length 
 				hit_len = float(len("".join(acc_fasta.split("\n")[1:])))
-				if hit_len/seq_len < length_percent or hit_len/seq_len > 1/length_percent:
+				if length_percent != 0:
+					if hit_len/seq_len < length_percent or hit_len/seq_len > 1/length_percent:
 						continue
 
 				
@@ -173,6 +175,11 @@ def main(fasta_in, email, workingdir, name, output,
 		fake_aln_out = open("{}.aln".format(out_prefix), "w")
 		print("".join(fasta_str_list), file=fake_aln_out)
 		fake_aln_out.close()
+
+	###plot alignments (app will know names based on working dir and run_name)
+	plot_aln_call = 'python {}build_heatmap_images.py -a {}.aln'.format(clients_folder, out_prefix)
+	print(plot_aln_call)
+	subprocess.run(plot_aln_call, shell=True)
 
 	###########################
 	# CALCULATE JSD

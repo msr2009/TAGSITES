@@ -1,5 +1,5 @@
 myristoylation	^MG...S
 N-terminal palmitoylation	^MGC..S
-CAAX prenylation	C[IVLAPM]{2}.$
+CAAX prenylation	C...$
 RAB prenylation	C{1,2}$
 Canonical PDZ binding site	[ST]{1}.[VL]{1}$

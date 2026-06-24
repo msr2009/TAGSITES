@@ -11,6 +11,25 @@ Matt Rich, 09/24
 
 import subprocess, os, json, sys
 
+#function to determine whether we need to run Genewise (both orientations)
+def genewise_required(j, global_args, task_scripts, scripts_folder, interpreter):
+	"""
+	Mirror of searchAFDB_required: detect a 'reagents' task whose 'genewise'
+	arg is empty, run run_genewise.py to produce the .out.txt for both
+	orientations and select the better one, then rewrite the JSON so the
+	normal command loop gets resolved paths for 'genewise' and 'genomic_fasta'.
+
+	TODO: this is the natural home for the both-strand Genewise automation.
+	run_genewise.py runs the EBI client on forward + RC orientations (~10 s each)
+	and picks the winner automatically, so callers never have to worry about
+	gene strand.
+	"""
+	for key in j:
+		if j[key]["analysis"] == "reagents":
+			if j[key]["args"].get("genewise", "") == "":
+				return key  # signals that genewise must be run for this task
+	return None
+
 #function to determine whether we need to search AFDB
 def searchAFDB_required(j):
 	for key in j:
@@ -51,6 +70,43 @@ def main(json_input_file):
 	scripts_folder = "scripts/"
 	interpreter = "python"
 	
+	#check if genewise run required (reagents task with empty genewise arg)
+	reagents_task_key = genewise_required(json_in, global_args, task_scripts, scripts_folder, interpreter)
+	if reagents_task_key is not None:
+		task_args = json_in[reagents_task_key]["args"]
+		genomic_fa = task_args.get("genomic_fasta", "")
+		if not genomic_fa:
+			print("ERROR: reagents task has empty 'genewise' arg but also empty "
+				  "'genomic_fasta' — cannot run Genewise. "
+				  "Supply a genomic FASTA in the task args.", file=sys.stderr)
+		else:
+			# Protein FASTA: use the run's main input file
+			protein_fa = global_args.get("input_file", "")
+			email      = global_args.get("email", "")
+			run_name   = global_args.get("run_name", "run")
+			working_dir = global_args.get("working_dir", ".")
+			outprefix  = os.path.join(working_dir, run_name + "_genewise")
+
+			gw_call = "{} {}run_genewise.py --protein_fasta {} --genomic_fasta {} --email {} --outprefix {}".format(
+				interpreter, scripts_folder,
+				protein_fa, genomic_fa, email, outprefix
+			)
+			print("RUNNING GENEWISE (both orientations)\n\n" + gw_call)
+			ret = subprocess.call(gw_call, shell=True)
+			if ret == 0:
+				# Rewrite the reagents task args with resolved paths
+				json_in[reagents_task_key]["args"]["genewise"]      = outprefix + ".genewise.out.txt"
+				json_in[reagents_task_key]["args"]["genomic_fasta"] = outprefix + ".genewise_genomic.fa"
+
+				# Persist updated JSON so the command loop reads resolved paths
+				new_json_out = {**json_in, **{"global": global_args}, **{"scripts": task_scripts}}
+				with open(json_input_file, "w") as f:
+					print(json.dumps(new_json_out, indent=4), file=f)
+			else:
+				print("WARNING: run_genewise.py exited with status {}. "
+					  "Reagents task will run with empty genewise arg and likely fail.".format(ret),
+					  file=sys.stderr)
+
 	#check if afdb search required
 	search_afdb = searchAFDB_required(json_in)
 #	print(search_afdb)

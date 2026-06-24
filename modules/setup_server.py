@@ -3,30 +3,49 @@ from shiny import ui, reactive, render, Inputs, Outputs, Session
 #from config import INPUT_JSON, TASK_PARAMETERS, AVAILABLE_TASKS, EXCLUDE_ARGS
 from config import DEFAULT_JSON, TASK_PARAMETERS, AVAILABLE_TASKS, EXCLUDE_ARGS
 
-from config import UNIPROT_SPECIES
+from config import UNIPROT_SPECIES, DEFAULT_SPECIES
 
 from scripts.site_selection_util import get_sequence, save_fasta 
 from utils.helpers import load_taxonomic_mapping, update_shared_dict
 
-import json, os, shutil, pandas, copy
+import json, os, shutil, pandas, copy, pickle, time
 from pathlib import Path
-
 
 #def setup_server(input: Inputs, output: Outputs, session: Session, shared_json):
 def setup_server(input, output, session, shared_json):
 	
 	selected_tasks = reactive.Value([])  # To store added tasks
 	task_values = reactive.Value({})  # to maintain inputted values
-	
+#	taxonomic_mapping = reactive.Value(None) # to hold taxonomy
+#	use_search = reactive.Value(False) # if species search is required
+#	search_mode = reactive.Value(False) # user is using the search bar 
+
+
 	#doing this to reset INPUT_JSON upon refreshing app
 	INPUT_JSON = json.load(open(DEFAULT_JSON,"r"))
 
+#	def load_taxonomy():
+#		taxonomic_mapping.set(load_taxonomic_mapping(UNIPROT_SPECIES))
+#		taxonomic_mapping.set(pickle.load(open("uniprot_species.pkl", "rb")))
+#		populate_species_selectize()
+
 	# Dynamically populate the selectize input with species name
-	def populate_species_selectize():
-		# Send the list of species as choices to the selectize box
-		species_list = list(taxonomic_mapping.keys())
-		ui.update_selectize("species_search", choices=species_list)
-		ui.update_selectize("species_search", selected="")
+#	@reactive.effect
+#	def populate_species_selectize():
+#		# Send the list of species as choices to the selectize box
+#		mapping = taxonomic_mapping()
+#		if mapping is None:
+#			return
+#		
+#		species_list = list(taxonomic_mapping().keys())
+#		ui.update_selectize("species_search", choices=species_list)
+#		ui.update_selectize("species_search", selected="")
+
+#	session.on_flush(load_taxonomy, once=True)
+
+#	with open("uniprot_species.pkl", "rb") as f:
+#		full_taxonomic_mapping = pickle.load(f)
+#	taxonomic_mapping = reactive.Value(full_taxonomic_mapping)
 
 	def populate_default_params():
 		# load names of params json files in ./params/
@@ -42,18 +61,82 @@ def setup_server(input, output, session, shared_json):
 		return tables_files
 
 	#load uniprot species file and update dropdown
-	taxonomic_mapping = load_taxonomic_mapping(UNIPROT_SPECIES)
-	session.on_flush(populate_species_selectize, once=True)
+#	taxonomic_mapping = load_taxonomic_mapping(UNIPROT_SPECIES)
+#	session.on_flush(populate_species_selectize, once=True)
 	session.on_flush(populate_default_params, once=True)
-	
-	@reactive.effect
-	@reactive.event(input.species_search)
-	def selected_species():	
-		selected_species = input.species_search()
-		if selected_species != "":
-			INPUT_JSON["global"]["species"] = selected_species
-			INPUT_JSON["global"]["species_taxid"] = taxonomic_mapping[selected_species]
-			print(taxonomic_mapping[selected_species])
+
+### this is all maybe getting cut
+
+#	@reactive.effect
+#	@reactive.event(input.species_search)
+#	def handle_primary_species():
+#		selected_species = input.species_search()
+
+#		if selected_species == "Other (search...)":
+#			#show search box
+#			use_search.set(True)
+#			INPUT_JSON["global"]["species"] = None
+#			INPUT_JSON["global"]["species_taxid"] = None
+		
+#		elif use_search():
+#			use_search.set(False)
+#			INPUT_JSON["global"]["species"] = selected_species
+#			INPUT_JSON["global"]["species_taxid"] = DEFAULT_SPECIES.get(selected_species, None)
+		
+#		else:
+#			#one of the defaults was selected
+#			INPUT_JSON["global"]["species"] = selected_species
+#			INPUT_JSON["global"]["species_taxid"] = DEFAULT_SPECIES.get(selected_species, None)
+#		print("selected species taxid: ", INPUT_JSON["global"]["species_taxid"])
+
+#	@output
+#	@render.ui
+#	def species_search_ui():
+#		print("use_search: ", use_search())
+#		if not use_search(): #we aren't searching
+#			return None
+#		else:
+#			#otherwise we need the search textbox
+#			return ui.input_text( 
+#				"species_query",
+#				"Search species",
+#				placeholder = "Start typing..."
+#				)
+
+#	@reactive.effect
+#	@reactive.event(input.species_search)
+#	def handle_search_selection():
+#		#only update if dynamic search is active
+#		if use_search() and input.species_search() and input.species_search() != "Other (search...)":
+#			selected_species = input.species_search()
+##			INPUT_JSON["global"]["species"] = selected_species
+#			INPUT_JSON["global"]["species_taxid"] = taxonomic_mapping()[selected_species]
+
+
+#	@reactive.effect
+#	@reactive.event(input.species_query)
+#	def filter_species():	
+#		query = input.species_query()
+#		if not query or len(query) < 3:
+#			return
+
+#		mapping = taxonomic_mapping()
+#		matches = [name for name in mapping.keys() if query.lower() in name.lower()][:50]
+
+#		ui.update_selectize(
+#			"species_search",
+#			choices=matches,
+#			selected=None
+#		)
+
+#	@reactive.effect
+#	@reactive.event(input.species_search)
+#	def selected_species():	
+#		selected_species = input.species_search()
+#		if selected_species != "":
+#			INPUT_JSON["global"]["species"] = selected_species
+#			INPUT_JSON["global"]["species_taxid"] = taxonomic_mapping[selected_species]
+#			print(taxonomic_mapping[selected_species])
 
 	#for updating working directory once run_name is set
 	@reactive.effect
@@ -73,8 +156,6 @@ def setup_server(input, output, session, shared_json):
 		else:
 			ui.update_action_button("load_defaults_button", disabled=True)
 
-
-
 	# checks that a name was added for a task before allowing button push
 	@reactive.effect
 	@reactive.event(input.task_desc_name)
@@ -86,6 +167,7 @@ def setup_server(input, output, session, shared_json):
 	
 	@reactive.Calc
 	def requirements_filled():
+		print("checking requirements")
 		return bool(input.email()) and bool(input.input_file) and bool(input.working_dir()) and bool(len(selected_tasks())>0)
 
 	@reactive.effect

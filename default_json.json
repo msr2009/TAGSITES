@@ -10,11 +10,12 @@
 
 	"scripts": {
 		"blast": "blast_orthologs.py",
-		"plddt": "extract_from_pdb.py", 
-		"modifications": "regex_sites.py", 
+		"plddt": "extract_from_pdb.py",
+		"modifications": "regex_sites.py",
 		"domains": "call_interpro.py",
-		"scores": "calculate_protein_scores.py"
-	},	
+		"scores": "calculate_protein_scores.py",
+		"reagents": "design_tag_reagents.py"
+	},
 
 	"analyses": {
 		"blast": {
@@ -88,6 +89,29 @@
 				"fasta": "path to fasta of sequence",
 				"scores_file": "file containing amino acid scores (e.g., hydrophobicity)",
 				"output": "output filename"
+			}
+		},
+		"reagents": {
+			"name": "",
+			"type": "reagents",
+			"args": {
+				"genomic_fasta": "",
+				"genewise": "",
+				"n_guides": 5,
+				"arm_length": 500,
+				"PAM": "NGG",
+				"guide_length": 20,
+				"cut_offset": 3,
+				"output": ".tsv"
+			},
+			"tooltips": {
+				"genomic_fasta": "FASTA of the genomic region to search (orientation need not be known; run_genewise.py tests both strands automatically)",
+				"genewise": "path to a pre-computed Genewise .out.txt file (leave empty to run Genewise automatically via the EBI REST API)",
+				"n_guides": "maximum guide RNAs to report per insertion site",
+				"arm_length": "homology arm length in bp on each side of insertion",
+				"PAM": "IUPAC PAM sequence (e.g. NGG for SpCas9)",
+				"guide_length": "guide spacer length in nucleotides",
+				"cut_offset": "bases upstream of PAM where the DSB occurs (SpCas9=3)"
 			}
 		}
 	}

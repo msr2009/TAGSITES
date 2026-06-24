@@ -8,8 +8,9 @@ requires bedtools. optionally: local blast installation
 Matt Rich, 2023
 """
 
-import subprocess, re, sys
-from Bio import SeqIO
+import subprocess, re, sys, os as _os
+sys.path.insert(0, _os.path.dirname(__file__))
+from crispr_util import iupac_to_regex, reverse_complement
 
 def get_regions_by_gene(gene, extra):
 	#call grep to get regions
@@ -50,17 +51,16 @@ def convert_region_to_BED(region):
 
 #rewrite to maintain region info for sorting
 def find_targets(seq, seqstart, seqend, rc=False):
-	
+	rc_sign = 1
 	if rc:
 		seq = reverse_complement(seq)
-		return [ [seq[s.start()-args.GUIDE_LENGTH:s.start()],
-				  seqend-s.start()+args.GUIDE_LENGTH, 
-				  seqend-s.start()+1] for s in re.finditer(r'(?=({}))'.format(iupac_to_regex(args.PAM)), seq) ]	
-	else:
-		return [ [seq[s.start()-args.GUIDE_LENGTH:s.start()],
-				  seqstart+s.start()-args.GUIDE_LENGTH,
-				  seqstart+s.start()-1] for s in re.finditer(r'(?=({}))'.format(iupac_to_regex(args.PAM)), seq) ]	
-
+		tmp = seqend
+		seqend = seqstart
+		seqstart = tmp
+		rc_sign = -1
+	#return [seq[s.start()-guide_length:s.start()] for s in re.finditer(iupac_to_regex(pam), seq[guide_length:-1*guide_length])]
+	return [[seq[s.start()-args.GUIDE_LENGTH:s.start()], seqstart+rc_sign*s.start(), seqstart+rc_sign*s.start()+rc_sign*args.GUIDE_LENGTH] for s in re.finditer('(?=({}))'.format(iupac_to_regex(args.PAM)), seq)]
+	
 def filter_target(target):
 	filters = []
 	notes = []
@@ -122,44 +122,16 @@ def check_pam(chrom, start, end, strand):
 		return False
 
 def determine_input_type(s):
-	if s.endswith(".fa") or s.endswith(".fasta"):
-		return "fasta"
-	elif re.match(r".+:\d+-\d+", s): 
+	if re.match(".+:\d+-\d+", s): 
 		return "region"
-	elif re.match(r"^[actgACTG]+$", s):
+	elif re.match("^[actgACTG]+$", s):
 		return "seq"
-	elif re.match(r"^[A-Za-z\d\-.]+$", s):
+	elif re.match("^[A-Za-z\d\-.]+$", s):
 		return "gene"
 	else:
 		raise ValueError("Unknown input type. Please define with --input-type")
 
-def iupac_to_regex(iupac_nucleotides):
-	iupac_dict = {
-		'A': 'A',
-		'C': 'C',
-		'G': 'G',
-		'T': 'T',
-		'U': 'U',  # RNA Thymine
-		'R': '[AG]',  # Purine (A or G)
-		'Y': '[CT]',  # Pyrimidine (C or T)
-		'S': '[GC]',  # Strong (G or C)
-		'W': '[AT]',  # Weak (A or T)
-		'K': '[GT]',  # Keto (G or T)
-		'M': '[AC]',  # Amino (A or C)
-		'B': '[CGT]',  # Not A (C or G or T)
-		'D': '[AGT]',  # Not C (A or G or T)
-		'H': '[ACT]',  # Not G (A or C or T)
-		'V': '[ACG]',  # Not T (A or C or G)
-		'N': '[ACGT]'  # Any nucleotide
-	}
-	regex_patterns = [iupac_dict.get(nucleotide, '') for nucleotide in iupac_nucleotides]
-	return ''.join(regex_patterns)
-
-def reverse_complement(seq):
-	dna_dict = {
-		"A":"T", "C":"G", "G":"C", "T":"A", "N":"N"
-	}
-	return "".join([dna_dict[x.upper()] for x in seq[::-1]])
+# iupac_to_regex and reverse_complement imported from crispr_util above
 
 #a little error for BLASTdbs not being real
 class BLASTdbError(Exception):
@@ -176,12 +148,11 @@ if __name__ == "__main__":
 		help = "input. Can be sequence, gene name, or region (e.g., I:123-456)",
 		required=True)
 	parser.add_argument("--input-type", action = 'store', type = str, dest = "INPUTTYPE", 
-		help = "input type. must be 'seq', 'region', 'gene', or 'fasta'", 
-		choices=["seq", "region", "gene", "fasta"])
+		help = "input type. must be 'seq', 'region', or 'gene")
 	parser.add_argument('--gff', action = 'store', type = str, dest = 'GFF',
 		help = "GFF3 file containing exons and gene names as locus field")
 	parser.add_argument('-f', '--fasta', action = 'store', type = str, dest = "FASTA", 
-		help = "fasta file")
+		help = "fasta file", required=True)
 	
 	#blast args
 	parser.add_argument('--blast', action = 'store_true', dest = "USE_BLAST", 
@@ -200,14 +171,15 @@ if __name__ == "__main__":
 		help = "PAM sequence (default = NGG)", default = "NGG")
 	parser.add_argument('--guide_length', action = 'store', type = int, dest = "GUIDE_LENGTH", 
 		help = "length of guide target, default = 20", default=20)
-	parser.add_argument('--match_regex', action = 'store', type = str, dest = "MATCH_REGEX",
-		help = "check if guide matches regular expression, e.g., for base-editing.", default=None)
 
 	#sequence args
 	parser.add_argument('-b', '--prefix', action = 'store', type = str, dest = "PREFIX", 
 		help = "prefix sequence to add to guide (e.g., for cloning)", default="")
 	parser.add_argument('-a', '--suffix', action = 'store', type = str, dest = "SUFFIX", 
 		help = "suffix sequence to add to guide (e.g., for cloning)", default="")
+	parser.add_argument('--saptrap', action = 'store_true', dest = "SAPTRAP", 
+		help = "will output pair of saptrap oligos for cloning sgRNA (ttg-aac overhangs)", 
+		default=False)
 
 	args = parser.parse_args()
 	
@@ -220,11 +192,7 @@ if __name__ == "__main__":
 		input_type = determine_input_type(args.INPUT)
 
 	print("input type detected as {}".format(input_type), file=sys.stderr)
-
-	if input_type not in ["seq", "fasta"]:
-		if args.FASTA == None:
-			raise IOError("genomic FASTA file required for 'gene' or 'region' input!")
-
+	
 	if args.USE_BLAST:
 		#check if BLAST db exists, because otherwise this'll just run and not
 		#check anything....
@@ -245,15 +213,12 @@ if __name__ == "__main__":
 		reg = [args.INPUT]
 	
 	region_seqs = []
-	if input_type == "seq":
-		region_seqs = [["SEQ:1-{}()".format(args.GUIDE_LENGTH), args.INPUT]]
-	elif input_type == "fasta":
-		#import fasta sequence using biopython
-		record = [r for r in SeqIO.parse(open(args.INPUT,"r"), "fasta")][0]
-		region_seqs = [["{}:1-{}()".format(record.id, len(record.seq)), str(record.seq)]]
-	else:
+	if input_type != "seq":
 		region_seqs = [call_bedtools_getfasta(r, args.FASTA) for r in reg] 
-
+	else:
+		region_seqs = [["SEQ:1-{}()".format(args.GUIDE_LENGTH), args.INPUT]]
+	
+	
 	#print header
 	print("\t".join(["chrom", "start", "stop", "spacer", "fullseq", "filter", "notes"]))
 
@@ -274,15 +239,15 @@ if __name__ == "__main__":
 					continue
 
 			filter_str, filter_notes = filter_target(pt[0])
-
-			#check for match to regular expression
-			if args.MATCH_REGEX != None:
-#				print(args.MATCH_REGEX, re.search(pt[0], args.MATCH_REGEX))
-				if re.search(args.MATCH_REGEX, pt[0]) != None:
-					filter_notes += "RE_MATCH:{}".format(args.MATCH_REGEX)
 			
+			if args.SAPTRAP:
+				print("\t".join([chrom, str(pt[1]), str(pt[2]), pt[0],
+						"aac{};ttg{}".format(pt[0], reverse_complement(pt[0])), 
+						filter_str, ";".join([filter_notes])]))
+				
 			#print output for each guide
-			print("\t".join([chrom, str(pt[1]), str(pt[2]), pt[0],
-					args.PREFIX+pt[0]+args.SUFFIX, filter_str,
-					";".join([filter_notes])]), file=sys.stdout)
+			else:
+				print("\t".join([chrom, str(pt[1]), str(pt[2]), pt[0],
+						args.PREFIX+pt[0]+args.SUFFIX, 
+						filter_str, ";".join([filter_notes])]))
 

@@ -153,7 +153,7 @@ def plot_results(aa_df: pd.DataFrame, fasta: str, range_df: pd.DataFrame, title:
 	
 #	return fig
 	fig_widget = go.FigureWidget(fig)
-	print(fig_widget)
+#	print(fig_widget)
 	return fig_widget
 
 ####FOR PLOTTING ALIGNMENTS
@@ -235,9 +235,9 @@ def plot_alignment_matrix(fasta_file, title="alignment title", colormap=None):
 			colorscale=scale_tuples,
 			autocolorscale=False,
 			showlegend=False,
-			hoverinfo='none',
+			hoverinfo='skip',
 			x0=1, dx=1)    	
-
+	
 	return aln_hm
 
 def make_alignment_subplots(fasta_file_list, title=""):
@@ -273,4 +273,11 @@ def make_alignment_subplots(fasta_file_list, title=""):
 	#update xaxis dicts for all subplots
 
 	return fig
+
+def make_image_dict(fname):
+	imgdict = {
+		"src": fname,
+		"height": "100%"
+	}
+	return imgdict
 

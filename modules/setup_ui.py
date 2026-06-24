@@ -1,6 +1,6 @@
 from shiny import ui
 
-from config import INPUT_JSON, TASK_PARAMETERS, AVAILABLE_TASKS, UNIPROT_SPECIES
+from config import INPUT_JSON, TASK_PARAMETERS, AVAILABLE_TASKS, UNIPROT_SPECIES, DEFAULT_SPECIES
 
 from utils.helpers import load_taxonomic_mapping
 
@@ -20,9 +20,14 @@ def setup_ui():
 			ui.column(2, ui.input_file("input_file", "Choose Input File (.fa, .fasta, or .pdb)", accept=[".fa", ".fasta",".pdb"])),
 			ui.column(2, ui.input_file("input_genomic", "FASTA file of genomic region", accept=[".fasta", ".fa"])),
 		),
-		ui.input_selectize("species_search", "Species", choices=[], multiple=False, selected=None,
-						options={'create': False}, width="700px"),
-		
+#		ui.input_selectize("species_search", "Species", choices=[], multiple=False, selected=None,
+#						options={'create': False}, width="700px"),
+
+#		ui.input_selectize("species_search", "Species",
+#				choices=list(DEFAULT_SPECIES.keys()), multiple=False,
+#				selected=None, options={'create': False}, width="700px"),
+#		ui.output_ui("species_search_ui"),
+
 		ui.hr(),
 
 		# Task selector and task management
