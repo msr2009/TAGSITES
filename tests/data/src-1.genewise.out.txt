@@ -1,0 +1,235 @@
+genewise $Name: wise2-4-1 $ (unreleased release)
+This program is freely distributed under a GPL. See source directory
+Copyright (c) GRL limited: portions of the code are from separate copyright
+
+Query protein:       src-1
+Comp Matrix:         BLOSUM62.bla
+Gap open:            12
+Gap extension:       2
+Start/End            local
+Target Sequence      Y92H12A.1a.1-gene_updownstream
+Strand:              forward
+Start/End (protein)  local
+Gene Parameter file: gene.stat
+Splice site model:   GT/AG only
+GT/AG bits penalty   -9.96
+Codon Table:         codon.table
+Subs error:          1e-06
+Indel error:         1e-06
+Null model           syn
+Algorithm            623
+
+genewise output
+Score 1138.03 bits over entire alignment
+Scores as bits over a synchronous coding model
+
+Warning: The bits scores is not probablistically correct for single seqs
+See WWW help for more info
+
+src-1              1 MGCLFSKERRSGGSDMGVSERIDVS                         
+                     MGCLFSKERRSGGSDMGVSERIDVS                         
+                     MGCLFSKERRSGGSDMGVSERIDVS                         
+Y92H12A.1a.1-ge  508 agtcttagcctggagaggtgcaggt                         
+                     tggttcaaggcgggatgtcagtatc                         
+                     gtcgtaaggagacttgttcagatcc                         
+
+
+src-1             26                               FQTPQQQTVFHVNNGGNEG 
+                                                   FQTPQQQTVFHVNNGGNEG 
+                                R:R[aga]           FQTPQQQTVFHVNNGGNEG 
+Y92H12A.1a.1-ge  583 AGGTAACTA  Intron 1       CAGAtcaccccagtcgaaggagg 
+                       <2-----[585    :   3247]-2> taccaaacttataaggaag 
+                                                   cagcaagaaccgtctacga 
+
+
+src-1             46 TISQLNGTSDGMMGNGRGGGGGGGAQERETLVALYPYDSRADGDLSFQK 
+                     TISQLNGTSDGMMGNGRGGGGGGGAQERETLVALYPYDSRADGDLSFQK 
+                     TISQLNGTSDGMMGNGRGGGGGGGAQERETLVALYPYDSRADGDLSFQK 
+Y92H12A.1a.1-ge 3306 aatccagatggaagagcggggggggcgcgacggctctgtcggggcatca 
+                     ctcatagccagttgagggggggggcaagacttctacaacgcagatgtaa 
+                     cctaacaaacaggatatttttaaaagatgtgccctactatccgttctaa 
+
+
+src-1             95 GDAMYLLDHSNCDWWYVRHQRTGQTGYVPRNFVAKQQTIESE        
+                     GDAMYLLDHSNCDWWYVRHQRTGQTGYVPRNFVAKQQTIESE        
+                     GDAMYLLDHSNCDWWYVRHQRTGQTGYVPRNFVAKQQTIESE        
+Y92H12A.1a.1-ge 3453 gggatctgctatgtttgccccagcagtgcaatggaccaagag        
+                     gactattaacagaggatgaagcgacgatcgattcaaactaga        
+                     cttgcagttgtttggttacaacagtttgggtttcgagttgta        
+
+
+src-1            137                               WYAGKIPRNRAERLVLSSH 
+                                                   WYAGKIPRNRAERLVLSSH 
+                                E:E[gaa]           WYAGKIPRNRAERLVLSSH 
+Y92H12A.1a.1-ge 3579 GAGTGAGTT  Intron 2       CAGAttggaacaacggccgtttc 
+                       <2-----[3581   :   4831]-2> gacgatcgagcagtttcca 
+                                                   gcaagaaattcaactaaat 
+
+
+src-1            157 LPKGTFLIREREADTREFALTIRDTDDQRNG                   
+                     LPKGTFLIREREADTREFALTIRDTDDQRNG                   
+                     LPKGTFLIREREADTREFALTIRDTDDQRNG                   
+Y92H12A.1a.1-ge 4890 ccagattaagcgggaagtgtaacgaggcaag                   
+                     tcagctttgagacacgatctctgacaaagag                   
+                     aaaaacgaaaaaccaaacagatatcttgatt                   
+
+
+src-1            188                               TVKHYKIKRLDHDQGYFIT 
+                                                   TVKHYKIKRLDHDQGYFIT 
+                               G:G[gga]            TVKHYKIKRLDHDQGYFIT 
+Y92H12A.1a.1-ge 4983 GGTGAGTT  Intron 3       CAGGAagactaaaccgcgcgttaa 
+                      <1-----[4984   :   7041]-1>  ctaaaatagtaaaagattc 
+                                                   aaaccacaagtctaatcta 
+
+
+src-1            208 TRRTFRSLQELVRYYSDVPDGLCCQLTFPAPRLAPTRPDLSHDTQQNWE 
+                     TRRTFRSLQELVRYYSDVPDGLCCQLTFPAPRLAPTRPDLSHDTQQNWE 
+                     TRRTFRSLQELVRYYSDVPDGLCCQLTFPAPRLAPTRPDLSHDTQQNWE 
+Y92H12A.1a.1-ge 7101 accatctccgcgatttggcggcttccatcgcccgcaccgttcgaccatg 
+                     cggctgctaattgaacatcagtggatctcccgtcccgcatcaacaaaga 
+                     aaaactttaatcattcctaccactatacaatcagatactaattaagtga 
+
+
+src-1            257 IPRNQLHLKRKLGDGNFGEVWYGKWRGIVEVAIKTMKPGTMSPEAFL   
+                     IPRNQLHLKRKLGDGNFGEVWYGKWRGIVEVAIKTMKPGTMSPEAFL   
+                     IPRNQLHLKRKLGDGNFGEVWYGKWRGIVEVAIKTMKPGTMSPEAFL   
+Y92H12A.1a.1-ge 7248 accactccacacgggatgggttgatcgaggggaaaaacgaatcggtt   
+                     tcgaatatagatgagatgatgagagggttatctactacgctccactt   
+                     tactggcgaggtttttcaatgtaagcattgggtggggtttgatatcg   
+
+
+src-1            304                               EAQIMKQCDHPNLVKLYAV 
+                                                   EAQIMKQCDHPNLVKLYAV 
+                                Q:Q[caa]           EAQIMKQCDHPNLVKLYAV 
+Y92H12A.1a.1-ge 7389 CAGTGAGTT  Intron 4       CAGAggcaaactgccacgactgg 
+                       <2-----[7391   :  10285]-2> acattaagaacattatact 
+                                                   acaaggatttgttaagtag 
+
+
+src-1            324 CTREEPFYIITEYMINGSLLQYLRTDGSTLGIQALVDMAAQIANGMMYL 
+                     CTREEPFYIITEYMINGSLLQYLRTDGSTLGIQALVDMAAQIANGMMYL 
+                     CTREEPFYIITEYMINGSLLQYLRTDGSTLGIQALVDMAAQIANGMMYL 
+Y92H12A.1a.1-ge10344 tacggcttaaagtaaagtccctccaggaacgacgcggaggcagagaatt 
+                     gcgaactattcaattagcttaatgcaggctgtacttatccatcagttat 
+                     tataaacctacacgatcattattaccacccatggcctgcaatgcaggtg 
+
+
+src-1            373 EERKLVHRDLAARNVLVGDKISGVPVVKVADFGLARKLMEEDIYEARTG 
+                     EERKLVHRDLAARNVLVGDKISGVPVVKVADFGLARKLMEEDIYEARTG 
+                     EERKLVHRDLAARNVLVGDKISGVPVVKVADFGLARKLMEEDIYEARTG 
+Y92H12A.1a.1-ge10491 ggaacgcagtggcagcgggaatggcggagggtgtgcatagggatggcag 
+                     aagattagatccgatttgaatcgtcttatcatgtcgattaaataacgcg 
+                     ggggtgcatgcttcttcatgtcatattatccttggaaggagctcgaacc 
+
+
+src-1            422 AKFPIKWTAPEAATCGNFTVKSDVWSYGILLYEIMTKGQVPYP       
+                     AKFPIKWTAPEAATCGNFTVKSDVWSYGILLYEIMTKGQVPYP       
+                     AKFPIKWTAPEAATCGNFTVKSDVWSYGILLYEIMTKGQVPYP       
+Y92H12A.1a.1-ge10638 gatcaatagcgggatgatagaaggtttgatttgaaaagcgctc       
+                     catctagcccacccggatctagatgcagtttaattcagatcac       
+                     gacgtaggacgggttattggattaggttcgatgtgagagtgtg       
+
+
+src-1            465                               MHNREVVEQVELGYRMPMP 
+                                                   MHNREVVEQVELGYRMPMP 
+                               G:G[gga]            MHNREVVEQVELGYRMPMP 
+Y92H12A.1a.1-ge10767 GGTGAGTT  Intron 5       CAGGAacacggggcggcgtcacac 
+                      <1-----[10768  :  11970]-1>  taagattaatatgagtctc 
+                                                   gcttaccaacggcctgaga 
+
+
+src-1            485 RGCPEQIYEEVLLKCWDKTPDRRPTFDTLYHFFDDYFVSTQPNYAPPSA 
+                     RGCPEQIYEEVLLKCWDKTPDRRPTFDTLYHFFDDYFVSTQPNYAPPSA 
+                     RGCPEQIYEEVLLKCWDKTPDRRPTFDTLYHFFDDYFVSTQPNYAPPSA 
+Y92H12A.1a.1-ge12030 cgtcgcatgggccattgaacgcccatgattcttggttgtaccatgccag 
+                     gggcaataaatttaggaaccaggcctactaattaaattccacaacccgc 
+                     tccggaccaaagcatgtggctgggtcctatctccttcgggggtcgaatc 
+
+
+//
+Gene 1
+Gene 508 12176 
+  Exon 508 584 phase 0
+  Exon 3248 3580 phase 2
+  Exon 4832 4983 phase 2
+  Exon 7042 7390 phase 1
+  Exon 10286 10767 phase 2
+  Exon 11971 12176 phase 1
+//
+FT          CDS    join(508..584,3248..3580,4832..4983,7042..7390,
+FT                   10286..10767,11971..12176)
+FT                   /note="Match to src-1"
+//
+FT   misc_feature    join(508..584,3248..3580,4832..4983,7042..7390,
+FT                   10286..10767,11971..12176)
+FT                   /note="Match to src-1 Score 1177.09"
+//
+>Y92H12A.1a.1-gene_updownstream.[508:12176].sp.tr
+MGCLFSKERRSGGSDMGVSERIDVSRFQTPQQQTVFHVNNGGNEGTISQLNGTSDGMMGN
+GRGGGGGGGAQERETLVALYPYDSRADGDLSFQKGDAMYLLDHSNCDWWYVRHQRTGQTG
+YVPRNFVAKQQTIESEEWYAGKIPRNRAERLVLSSHLPKGTFLIREREADTREFALTIRD
+TDDQRNGGTVKHYKIKRLDHDQGYFITTRRTFRSLQELVRYYSDVPDGLCCQLTFPAPRL
+APTRPDLSHDTQQNWEIPRNQLHLKRKLGDGNFGEVWYGKWRGIVEVAIKTMKPGTMSPE
+AFLQEAQIMKQCDHPNLVKLYAVCTREEPFYIITEYMINGSLLQYLRTDGSTLGIQALVD
+MAAQIANGMMYLEERKLVHRDLAARNVLVGDKISGVPVVKVADFGLARKLMEEDIYEART
+GAKFPIKWTAPEAATCGNFTVKSDVWSYGILLYEIMTKGQVPYPGMHNREVVEQVELGYR
+MPMPRGCPEQIYEEVLLKCWDKTPDRRPTFDTLYHFFDDYFVSTQPNYAPPSA
+//
+>Y92H12A.1a.1-gene_updownstream.[508:12176].sp
+ATGGGTTGCCTGTTTTCAAAAGAGCGGCGATCGGGAGGCAGTGATATGGGTGTTTCCGAA
+CGGATAGATGTCTCCAGATTCCAAACGCCCCAACAACAGACAGTATTCCACGTGAATAAC
+GGTGGAAACGAGGGAACCATCTCTCAACTAAACGGAACATCAGACGGAATGATGGGAAAT
+GGACGTGGTGGTGGTGGTGGAGGAGGAGCACAGGAACGTGAGACTCTGGTCGCCCTCTAT
+CCATACGATTCACGTGCCGACGGGGATCTTAGCTTTCAAAAAGGCGATGCTATGTACCTA
+TTGGATCATTCGAATTGTGATTGGTGGTATGTTCGACACCAACGAACCGGACAGACTGGT
+TATGTGCCGAGGAATTTTGTTGCCAAGCAACAGACTATTGAGAGTGAAGAATGGTACGCA
+GGAAAGATACCAAGAAATCGTGCCGAACGACTCGTTTTATCATCACATCTACCAAAAGGA
+ACATTCTTGATAAGAGAACGAGAAGCCGACACAAGAGAATTCGCATTGACAATTCGAGAT
+ACCGATGATCAGAGAAATGGTGGAACAGTAAAACACTACAAAATCAAACGACTGGATCAC
+GATCAAGGATATTTCATTACAACACGACGAACATTCCGTTCTCTTCAAGAACTTGTCAGA
+TATTATTCCGACGTTCCAGACGGCCTATGCTGTCAACTTACATTCCCAGCACCTCGCCTA
+GCGCCAACTCGACCCGATTTATCACATGATACACAACAGAATTGGGAAATTCCACGCAAT
+CAGTTGCACCTGAAACGGAAGCTTGGTGATGGTAATTTCGGAGAAGTTTGGTATGGAAAA
+TGGCGCGGAATTGTTGAGGTGGCGATTAAGACGATGAAGCCTGGTACTATGTCACCTGAA
+GCTTTCTTGCAAGAAGCCCAAATAATGAAGCAATGTGATCATCCGAATCTTGTAAAACTG
+TATGCAGTGTGTACACGTGAAGAACCATTCTACATTATAACCGAATACATGATAAATGGC
+TCACTTCTTCAATATCTTCGAACCGACGGAAGCACCCTCGGAATTCAGGCGCTCGTCGAT
+ATGGCCGCACAAATTGCGAACGGAATGATGTATTTGGAGGAGAGGAAGCTTGTGCACAGA
+GATTTGGCCGCTCGTAACGTTCTTGTCGGAGATAAGATTTCCGGAGTTCCAGTTGTTAAA
+GTTGCCGACTTTGGTTTGGCGCGAAAATTGATGGAAGAGGACATTTACGAGGCACGAACC
+GGCGCGAAATTCCCGATTAAATGGACGGCACCCGAGGCGGCGACTTGTGGAAATTTTACG
+GTGAAAAGTGATGTATGGTCGTATGGTATCTTGTTATATGAGATTATGACAAAGGGACAG
+GTTCCGTATCCGGGAATGCACAATCGTGAAGTCGTCGAACAAGTCGAGCTGGGCTACCGT
+ATGCCAATGCCACGTGGCTGCCCGGAGCAAATCTACGAAGAAGTACTGCTCAAATGTTGG
+GATAAGACGCCCGATCGGCGGCCGACTTTCGACACTTTATATCACTTTTTCGACGATTAT
+TTCGTGTCGACGCAGCCGAATTACGCGCCACCAAGTGCC
+//
+Sequence Y92H12A.1a.1-gene_updownstream
+subsequence Y92H12A.1a.1-gene_updownstream.1 508 12176
+
+Sequence Y92H12A.1a.1-gene_updownstream.1
+CDS
+Start_not_found
+End_not_found
+CDS_predicted_by genewise 1177.09
+source_Exons 1 77
+source_Exons 2741 3073
+source_Exons 4325 4476
+source_Exons 6535 6883
+source_Exons 9779 10260
+source_Exons 11464 11669
+
+//
+Y92H12A.1a.1-gene_updownstream	GeneWise	match	508	12176	1177.09	+	.	Y92H12A.1a.1-gene_updownstream-genewise-prediction-1
+Y92H12A.1a.1-gene_updownstream	GeneWise	cds	508	584	0.00	+	0	Y92H12A.1a.1-gene_updownstream-genewise-prediction-1
+Y92H12A.1a.1-gene_updownstream	GeneWise	intron	585	3247	0.00	+	.	Y92H12A.1a.1-gene_updownstream-genewise-prediction-1
+Y92H12A.1a.1-gene_updownstream	GeneWise	cds	3248	3580	0.00	+	1	Y92H12A.1a.1-gene_updownstream-genewise-prediction-1
+Y92H12A.1a.1-gene_updownstream	GeneWise	intron	3581	4831	0.00	+	.	Y92H12A.1a.1-gene_updownstream-genewise-prediction-1
+Y92H12A.1a.1-gene_updownstream	GeneWise	cds	4832	4983	0.00	+	1	Y92H12A.1a.1-gene_updownstream-genewise-prediction-1
+Y92H12A.1a.1-gene_updownstream	GeneWise	intron	4984	7041	0.00	+	.	Y92H12A.1a.1-gene_updownstream-genewise-prediction-1
+Y92H12A.1a.1-gene_updownstream	GeneWise	cds	7042	7390	0.00	+	2	Y92H12A.1a.1-gene_updownstream-genewise-prediction-1
+Y92H12A.1a.1-gene_updownstream	GeneWise	intron	7391	10285	0.00	+	.	Y92H12A.1a.1-gene_updownstream-genewise-prediction-1
+Y92H12A.1a.1-gene_updownstream	GeneWise	cds	10286	10767	0.00	+	1	Y92H12A.1a.1-gene_updownstream-genewise-prediction-1
+Y92H12A.1a.1-gene_updownstream	GeneWise	intron	10768	11970	0.00	+	.	Y92H12A.1a.1-gene_updownstream-genewise-prediction-1
+Y92H12A.1a.1-gene_updownstream	GeneWise	cds	11971	12176	0.00	+	2	Y92H12A.1a.1-gene_updownstream-genewise-prediction-1
+//

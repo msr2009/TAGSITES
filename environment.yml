@@ -1,0 +1,22 @@
+name: tagsites
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - python=3.12
+  - biopython
+  - pandas
+  - numpy
+  - scipy
+  - scikit-learn
+  - matplotlib
+  - plotly
+  - requests
+  - shiny
+  - shinywidgets
+  - clustalo        # aligner binary (from bioconda)
+  - xmltramp2       # required by EBI REST clients
+  - pytest
+  - pip:
+    - ridgeplot

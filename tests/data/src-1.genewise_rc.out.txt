@@ -1,0 +1,170 @@
+genewise $Name: wise2-4-1 $ (unreleased release)
+This program is freely distributed under a GPL. See source directory
+Copyright (c) GRL limited: portions of the code are from separate copyright
+
+Query protein:       EMBOSS_001
+Comp Matrix:         BLOSUM62.bla
+Gap open:            12
+Gap extension:       2
+Start/End            local
+Target Sequence      EMBOSS_001
+Strand:              forward
+Start/End (protein)  local
+Gene Parameter file: gene.stat
+Splice site model:   GT/AG only
+GT/AG bits penalty   -9.96
+Codon Table:         codon.table
+Subs error:          1e-06
+Indel error:         1e-06
+Null model           syn
+Algorithm            623
+
+genewise output
+Score 1.39 bits over entire alignment
+Scores as bits over a synchronous coding model
+
+Warning: The bits scores is not probablistically correct for single seqs
+See WWW help for more info
+
+EMBOSS_001         2 GCLFSKERRSGGSDMGVSERIDVSRFQTPQQQTVFHVNNGGNEGTISQL 
+                                                                       
+                     ------------------------------------------------- 
+EMBOSS_001         2                                                   
+                                                                       
+                                                                       
+
+
+EMBOSS_001        51 NGTSDGMMGNGRGGGGGGGAQERETLVALYPYDSRADGDLSFQKGDAMY 
+                                                                       
+                     ------------------------------------------------- 
+EMBOSS_001         2                                                   
+                                                                       
+                                                                       
+
+
+EMBOSS_001       100 LLDHSNCDWWYVRHQRTGQTGYVPRNFVAKQQTIESEEWYAGKIPRNRA 
+                                                                       
+                     ------------------------------------------------- 
+EMBOSS_001         2                                                   
+                                                                       
+                                                                       
+
+
+EMBOSS_001       149 ERLVLSSHLPKGTFLIREREADTREFALTIRDTDDQRNGGTVKHYKIKR 
+                                                                       
+                     ------------------------------------------------- 
+EMBOSS_001         2                                                   
+                                                                       
+                                                                       
+
+
+EMBOSS_001       198 LDHDQGYFITTRRTFRSLQELVRYYSDVPDGLCCQLTFPAPRLAPTRPD 
+                                                                       
+                     ------------------------------------------------- 
+EMBOSS_001         2                                                   
+                                                                       
+                                                                       
+
+
+EMBOSS_001       247 LSHDTQQNWEIPRNQLHLKRKLGDGNFGEVWYGKWRGIVEVAIKTMKPG 
+                                                                       
+                     ------------------------------------------------- 
+EMBOSS_001         2                                                   
+                                                                       
+                                                                       
+
+
+EMBOSS_001       296 TMSPEAFLQEAQIMKQCDHPNLVKLYAVCTREEPFYIITEYMINGSLLQ 
+                                                                       
+                     ------------------------------------------------- 
+EMBOSS_001         2                                                   
+                                                                       
+                                                                       
+
+
+EMBOSS_001       345 YLRTDGSTLGIQALVDMAAQIANGMMYLEERKLVHRDLAARNVLVGDKI 
+                                                                       
+                     ------------------------------------------------- 
+EMBOSS_001         2                                                   
+                                                                       
+                                                                       
+
+
+EMBOSS_001       394 SGVPVVKVADFGLARKLMEEDIYEARTGAKFPIKWTAPEAATCGNFTVK 
+                                                                       
+                     ------------------------------------------------- 
+EMBOSS_001         2                                                   
+                                                                       
+                                                                       
+
+
+EMBOSS_001       443 SDVWSYGILLYEIMTKGQVPYPGMHNREVVEQVELGYRMPMPRGCPEQI 
+                                                                       
+                     ------------------------------------------------- 
+EMBOSS_001         2                                                   
+                                                                       
+                                                                       
+
+
+EMBOSS_001       492 YEEVLLKCWDKTPDRRPTFDTLYHFFDDYFVSTQPNYAPPSA        
+                                          +Y FF           A P          
+                     --------------------KVY!FF-----------ATPDR        
+EMBOSS_001         2                     agt2tt           gacgc        
+                                         ata tt           cccag        
+                                         att tt           ctgtg        
+
+
+//
+Gene 1
+Gene 2 10 
+  Exon 2 10 phase 0
+Gene 2
+Gene 13 33 
+  Exon 13 33 phase 0
+//
+FT          CDS    2..10
+FT                   /note="Match to EMBOSS_001"
+FT          CDS    13..33
+FT                   /note="Match to EMBOSS_001"
+//
+FT   misc_feature    2..10
+FT                   /note="Match to EMBOSS_001 Score -17.62"
+FT   misc_feature    13..33
+FT                   /note="Match to EMBOSS_001 Score 3.66"
+//
+>EMBOSS_001.[2:10].sp.tr
+KVY
+>EMBOSS_001.[13:33].sp.tr
+FFATPDR
+//
+>EMBOSS_001.[2:10].sp
+AAAGTTTAT
+>EMBOSS_001.[13:33].sp
+TTTTTTGCCACTCCGGATCGG
+//
+Sequence EMBOSS_001
+subsequence EMBOSS_001.1 2 10
+
+Sequence EMBOSS_001.1
+CDS
+Start_not_found
+End_not_found
+CDS_predicted_by genewise -17.62
+source_Exons 1 9
+
+Sequence EMBOSS_001
+subsequence EMBOSS_001.2 13 33
+
+Sequence EMBOSS_001.2
+CDS
+Start_not_found
+End_not_found
+CDS_predicted_by genewise 3.66
+source_Exons 1 21
+
+//
+EMBOSS_001	GeneWise	match	2	10	-17.62	+	.	EMBOSS_001-genewise-prediction-1
+EMBOSS_001	GeneWise	cds	2	10	0.00	+	0	EMBOSS_001-genewise-prediction-1
+EMBOSS_001	GeneWise	match	13	33	3.66	+	.	EMBOSS_001-genewise-prediction-2
+EMBOSS_001	GeneWise	cds	13	33	0.00	+	0	EMBOSS_001-genewise-prediction-2
+//

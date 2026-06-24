@@ -1,0 +1,32 @@
+{
+    "scripts": {
+        "blast": "blast_orthologs.py",
+        "plddt": "extract_from_pdb.py",
+        "modifications": "regex_sites.py",
+        "domains": "call_interpro.py",
+        "scores": "calculate_protein_scores.py",
+        "reagents": "design_tag_reagents.py"
+    },
+    "global": {
+        "email": "your@email.com",
+        "working_dir": "tests/data",
+        "run_name": "snb-1",
+        "input_file": "tests/data/snb-1.fa",
+        "pdb": "",
+        "scripts_folder": "./scripts/"
+    },
+    "REAGENTS_reagents": {
+        "analysis": "reagents",
+        "args": {
+            "input_file": "tests/data/snb-1.fa",
+            "genomic_fasta": "tests/data/snb-1_genomic.fa",
+            "genewise": "tests/data/snb-1.genewise.out.txt",
+            "n_guides": 3,
+            "arm_length": 200,
+            "PAM": "NGG",
+            "guide_length": 20,
+            "cut_offset": 3,
+            "output": "tests/data/snb-1.REAGENTS.tsv"
+        }
+    }
+}

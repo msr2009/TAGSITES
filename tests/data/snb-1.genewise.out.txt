@@ -1,0 +1,93 @@
+genewise $Name: wise2-4-1 $ (unreleased release)
+This program is freely distributed under a GPL. See source directory
+Copyright (c) GRL limited: portions of the code are from separate copyright
+
+Query protein:       SNB-1
+Comp Matrix:         BLOSUM62.bla
+Gap open:            12
+Gap extension:       2
+Start/End            local
+Target Sequence      snb-1_genomic_notutr
+Strand:              forward
+Start/End (protein)  local
+Gene Parameter file: gene.stat
+Splice site model:   GT/AG only
+GT/AG bits penalty   -9.96
+Codon Table:         codon.table
+Subs error:          1e-06
+Indel error:         1e-06
+Null model           syn
+Algorithm            623
+
+genewise output
+Score 217.99 bits over entire alignment
+Scores as bits over a synchronous coding model
+
+Warning: The bits scores is not probablistically correct for single seqs
+See WWW help for more info
+
+SNB-1              1 MDAQGDAGAQGGSQGGPRPSNKRLQQTQAQVDEVVGIMK           
+                     MDAQGDAGAQGGSQGGPRPSNKRLQQTQAQVDEVVGIMK           
+                     MDAQGDAGAQGGSQGGPRPSNKRLQQTQAQVDEVVGIMK           
+snb-1_genomic_n    1 aggcgggggcggacggccctaaccccacgcggggggaaa           
+                     tacagacgcagggaggcgccaagtaacacataattgtta           
+                     gctaatccagaatgcaaaaccatcggaatgttaccacgg           
+
+
+SNB-1             40                            VNVEKVLERDQKLSQLDDRADA 
+                                                VNVEKVLERDQKLSQLDDRADA 
+                                                VNVEKVLERDQKLSQLDDRADA 
+snb-1_genomic_n  118 GTAAGAT  Intron 1       CAGgaggagtgcgcattccggcggg 
+                     <0-----[118    :    250]-0>tataattagaaatcataagcac 
+                                                gcgaatggttgggtagccatct 
+
+
+SNB-1             62 LQEGASQFEKSAATLKRKYWWKNIKMMIIMCAIVVILIIIIVLWAGGK  
+                     LQEGASQFEKSAATLKRKYWWKNIKMMIIMCAIVVILIIIIVLWAGGK  
+                     LQEGASQFEKSAATLKRKYWWKNIKMMIIMCAIVVILIIIIVLWAGGK  
+snb-1_genomic_n  317 ccgggtctgatggacacatttaaaaaaaaatgaggacaaaagttggga  
+                     taagccataacccctagaaggaatatttttgctttttttttttgcgga  
+                     cgattaatgatgccggcgtgggccaggccgctccctttccctagtaaa  
+
+
+//
+Gene 1
+Gene 1 460 
+  Exon 1 117 phase 0
+  Exon 251 460 phase 0
+//
+FT          CDS    join(1..117,251..460)
+FT                   /note="Match to SNB-1"
+//
+FT   misc_feature    join(1..117,251..460)
+FT                   /note="Match to SNB-1 Score 217.99"
+//
+>snb-1_genomic_notutr.[1:460].sp.tr
+MDAQGDAGAQGGSQGGPRPSNKRLQQTQAQVDEVVGIMKVNVEKVLERDQKLSQLDDRAD
+ALQEGASQFEKSAATLKRKYWWKNIKMMIIMCAIVVILIIIIVLWAGGK
+//
+>snb-1_genomic_notutr.[1:460].sp
+ATGGACGCTCAAGGAGATGCCGGCGCACAGGGAGGAAGTCAGGGCGGACCACGACCATCC
+AACAAACGTCTCCAGCAGACACAAGCTCAGGTTGATGAAGTCGTCGGAATCATGAAGGTG
+AACGTGGAAAAAGTTTTGGAGCGTGATCAGAAGTTGTCTCAACTGGACGACCGAGCTGAC
+GCTCTCCAGGAAGGTGCTTCACAATTTGAGAAATCTGCGGCCACCCTGAAGCGCAAGTAT
+TGGTGGAAGAACATCAAAATGATGATCATCATGTGCGCTATCGTCGTCATTCTTATTATC
+ATCATCGTTTTATGGGCTGGAGGAAAA
+//
+Sequence snb-1_genomic_notutr
+subsequence snb-1_genomic_notutr.1 1 460
+
+Sequence snb-1_genomic_notutr.1
+CDS
+Start_not_found
+End_not_found
+CDS_predicted_by genewise 217.99
+source_Exons 1 117
+source_Exons 251 460
+
+//
+snb-1_genomic_notutr	GeneWise	match	1	460	217.99	+	.	snb-1_genomic_notutr-genewise-prediction-1
+snb-1_genomic_notutr	GeneWise	cds	1	117	0.00	+	0	snb-1_genomic_notutr-genewise-prediction-1
+snb-1_genomic_notutr	GeneWise	intron	118	250	0.00	+	.	snb-1_genomic_notutr-genewise-prediction-1
+snb-1_genomic_notutr	GeneWise	cds	251	460	0.00	+	0	snb-1_genomic_notutr-genewise-prediction-1
+//
