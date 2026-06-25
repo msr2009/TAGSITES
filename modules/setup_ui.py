@@ -1,71 +1,75 @@
-from shiny import ui
+from shiny import ui, module
 
-from config import INPUT_JSON, TASK_PARAMETERS, AVAILABLE_TASKS, UNIPROT_SPECIES, DEFAULT_SPECIES
+from config import INPUT_JSON, SELECTABLE_TASKS
 
-from utils.helpers import load_taxonomic_mapping
 
+@module.ui
 def setup_ui():
+    return ui.page_fluid(
 
-	return ui.page_fluid(
-		
-		# Global parameters input
-		ui.input_text("email", "Email Address (required)",
-					   value=INPUT_JSON["global"]["email"]),
-		
-		ui.hr(),
+        ui.tags.style("""
+            .task-card { margin-bottom: 1rem; }
+            .task-card .card-header {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                font-weight: 600;
+            }
+            .tip-icon {
+                cursor: help;
+                color: #6c757d;
+                font-size: 0.85em;
+                margin-left: 4px;
+                vertical-align: middle;
+            }
+            .sidebar-section { margin-bottom: 1rem; }
+        """),
 
-		# Input Sequence
-		ui.h3("Sequence Input"),
-		ui.row(
-			ui.column(2, ui.input_file("input_file", "Choose Input File (.fa, .fasta, or .pdb)", accept=[".fa", ".fasta",".pdb"])),
-			ui.column(2, ui.input_file("input_genomic", "FASTA file of genomic region", accept=[".fasta", ".fa"])),
-		),
-#		ui.input_selectize("species_search", "Species", choices=[], multiple=False, selected=None,
-#						options={'create': False}, width="700px"),
+        ui.layout_sidebar(
 
-#		ui.input_selectize("species_search", "Species",
-#				choices=list(DEFAULT_SPECIES.keys()), multiple=False,
-#				selected=None, options={'create': False}, width="700px"),
-#		ui.output_ui("species_search_ui"),
+            # ── Sidebar: global config ───────────────────────────────────────
+            ui.sidebar(
+                ui.h5("Run Configuration"),
+                ui.output_ui("sidebar_global_inputs"),
+                ui.hr(),
+                ui.h5("Defaults"),
+                ui.input_selectize("load_default_tasks", "Load saved defaults",
+                                   choices=[], multiple=False, selected=None,
+                                   options={"create": False}),
+                ui.input_action_button("load_defaults_button", "Load",
+                                       disabled=True, class_="btn-sm btn-outline-secondary w-100"),
+                ui.hr(),
+                ui.input_text("new_default_name", "Save current tasks as…", ""),
+                ui.input_action_button("save_default_tasks_button", "Save as Default",
+                                       disabled=True, class_="btn-sm btn-outline-secondary w-100"),
+                width=320,
+            ),
 
-		ui.hr(),
+            # ── Main panel: task builder + task cards ────────────────────────
+            ui.h4("Add Analysis Tasks"),
 
-		# Task selector and task management
-		ui.h3("Setup Analyses"),
-		ui.row(
-			ui.column(1, ui.input_text("run_name", "Analysis Name")),
-			ui.column(3, ui.input_text("working_dir", "Output Directory", width="100%")),
-		),
-		
-		ui.row(
-		ui.column(2, ui.input_selectize("load_default_tasks", "Load Default Tasks?", choices=[], multiple=False, selected=None,
-				options={'create': False}, width="400px")),
-		ui.column(1, ui.input_action_button("load_defaults_button", "Load", disabled=True)),
-		),
-		ui.hr(),
+            ui.card(
+                ui.card_body(
+                    ui.layout_column_wrap(
+                        ui.input_select("task_selector", "Analysis type", SELECTABLE_TASKS),
+                        ui.input_text("task_desc_name", "Task label (required)"),
+                        width=1/2,
+                    ),
+                    ui.input_action_button("add_task", "＋ Add Task",
+                                           disabled=True, class_="btn-primary"),
+                ),
+                class_="mb-3",
+            ),
 
-		ui.row(
-			ui.column(1, ui.input_select("task_selector", "Select analysis task", AVAILABLE_TASKS)),
-			ui.column(1, ui.input_text("task_desc_name", "Task name (required)")),
-		),
-		ui.input_action_button("add_task", "Add Task", disabled=True),
-		ui.hr(),
+            ui.output_ui("task_params_container"),
 
-		# Container for dynamically added tasks
-		ui.output_ui("task_params_container"),	
+            ui.hr(),
 
-		ui.hr(),
-		
-		ui.row(
-			ui.column(1, ui.input_action_button("save_analysis", "Save Analysis", disabled=True)),
-			ui.column(4, ui.output_text_verbatim("tip_save_analysis")),
-		),
-
-		ui.hr(),
-		
-		ui.row(
-			ui.column(1, ui.input_action_button("save_default_tasks_button", "Save as Default?", disabled=True)),
-			ui.column(2, ui.input_text("new_default_name", "", ""),
-		)
-	)
-)
+            ui.layout_column_wrap(
+                ui.input_action_button("save_analysis", "Save Analysis",
+                                       disabled=True, class_="btn-success"),
+                ui.output_text_verbatim("tip_save_analysis"),
+                width=1/2,
+            ),
+        )
+    )

@@ -1,110 +1,77 @@
-from shiny import reactive, ui, render
+from shiny import reactive, ui, render, module
+import json, os
 
-import json, re
-import pandas as pd
-import plotly.graph_objs as go
-from shinywidgets import render_widget, render_plotly
-
+from shinywidgets import render_plotly
 
 from utils.results import load_data_from_json, plot_results
-from utils.results import plot_alignment_matrix, make_alignment_subplots
-from utils.results import make_image_dict
 from config import RESULTS_TYPE_DICT
 
+
+@module.server
 def results_server(input, output, session, shared_json):
 
-	aa_data = reactive.Value()
-	range_data = reactive.Value()
-	aln_files = reactive.Value([])
-	run_name = reactive.Value()
-	subj_fasta = reactive.Value()
-	
-	@reactive.Effect
-	@reactive.event(input.plot_results_button)
-	def load_results():
-		json_content = {}
+    aa_data = reactive.Value()
+    range_data = reactive.Value()
+    aln_files = reactive.Value([])
+    run_name = reactive.Value()
+    subj_fasta = reactive.Value()
 
-		#first check if shared_json
-		if shared_json.get():
-			json_content = json.load(open(shared_json.get(), "r"))
-		else:
-			#we need to query if there's an uploaded json in the upload box
-			if input.json_file_input():
-				json_content = json.load(open(input.json_file_input()[0]["datapath"], "r"))
-			else:
-				print("upload json in order to plot results")
+    @reactive.effect
+    @reactive.event(input.plot_results_button)
+    def load_results():
+        """Load analysis results from disk when the user clicks Plot Results."""
+        json_content = {}
+        try:
+            if shared_json.get():
+                with open(shared_json.get(), "r") as f:
+                    json_content = json.load(f)
+            elif input.json_file_input():
+                with open(input.json_file_input()[0]["datapath"], "r") as f:
+                    json_content = json.load(f)
+            else:
+                ui.notification_show("No JSON file loaded.", type="warning", duration=4)
+                return
+        except FileNotFoundError:
+            ui.notification_show("JSON file not found. Has the analysis been saved?",
+                                 type="error", duration=6)
+            return
+        except json.JSONDecodeError:
+            ui.notification_show("Could not parse JSON file — file may be malformed.",
+                                 type="error", duration=6)
+            return
 
-		aa_data_df, range_data_df, aln_file_list = load_data_from_json(json_content, RESULTS_TYPE_DICT)
-		aa_data.set(aa_data_df)
-		range_data.set(range_data_df)
-		aln_files.set(aln_file_list)
-		run_name.set(json_content["global"]["run_name"])
-		subj_fasta.set(json_content["global"]["input_file"])
+        aa_data_df, range_data_df, aln_file_list = load_data_from_json(json_content, RESULTS_TYPE_DICT)
+        aa_data.set(aa_data_df)
+        range_data.set(range_data_df)
+        aln_files.set(aln_file_list)
+        run_name.set(json_content["global"]["run_name"])
+        subj_fasta.set(json_content["global"]["input_file"])
 
-    # Output Plotly plot
-	@output
-	@render_plotly
-	def results_plot():
-		# Check if data is available to plot
-		if run_name.get() != None:
-			# Assuming `data.get()` returns a DataFrame, use `plot_results` to generate the plot
-			return plot_results(aa_data.get(), subj_fasta.get(), range_data.get(), title=run_name.get())
-		else:
-			return ui.p("No data to display yet.")
+    @reactive.calc
+    def results_figure():
+        """Build the Plotly figure — cached until data changes, avoiding repeated disk reads."""
+        if run_name.get() is None:
+            return None
+        return plot_results(aa_data.get(), subj_fasta.get(), range_data.get(),
+                            title=run_name.get())
 
-#	@output
-#	@render_plotly
-#	def alignment_plot():
-#		#if aln_files() returns a file, then use "plot_alignment_matrix"
-#		if len(aln_files.get()) != 0:
-#			# make an alignment plot 
-#			return make_alignment_subplots(aln_files.get())
-#		else:
-#			return ui.p("No alignment data yet.")
+    @output
+    @render_plotly
+    def results_plot():
+        """Render the cached results figure."""
+        return results_figure()
 
-#	@output
-#	@render_image
-#	def alignment_figure():
-#		#if aln_files() returns a file, 
-#		#then make a div to contain alignment images
-#		if aln_files.get() is not None:
-#			# make an alignment plot 
-#			return alignment_container(aln_files.get())
-#		else:
-#			return ui.p("No alignment data yet.")
-	
-	@output
-	@render.ui
-	def alignments_container():
-		aln_image_list = []
-		import os
-
-		if len(aln_files.get()) != 0:
-			for a in aln_files.get():
-				print(a, os.path.exists(a))
-				fname = a.removesuffix("aln") + "svg"
-				aln_image_ui = make_image_dict(fname)
-				#make a faked name for the image id
-				fname_id = re.sub(r"\W", '_', a.split('/')[-1])
-
-				aln_image_list.append(ui.output_image(f"img_{fname_id}", aln_image_ui))
-		return ui.div(*aln_image_list)
-		
-	@reactive.Effect
-	def render_alignment_images():
-		if len(aln_files.get()) != 0:
-			for a in aln_files.get():
-				fname = a.removesuffix("aln") + "svg"
-				fname_id = "img_" + re.sub(r"\W", '_', a.split('/')[-1])
-#				print(fname, fname_id)
-
-				@output(id=fname_id)
-				@render.image
-				def _make_render(fname=fname):
-					img = {
-						"src": fname,
-						"height": "50%"
-					}
-					return img
-
-
+    @render.ui
+    def alignments_container():
+        """Render alignment SVGs as inline HTML."""
+        if not aln_files.get():
+            return ui.div()
+        images = []
+        for a in aln_files.get():
+            svg_path = a.removesuffix("aln") + "svg"
+            if os.path.exists(svg_path):
+                with open(svg_path) as f:
+                    images.append(ui.HTML(f.read()))
+            else:
+                images.append(ui.p(f"Alignment image not found: {os.path.basename(svg_path)}"))
+        return ui.div(*images)

@@ -1,125 +1,140 @@
 """
 existing_AF2_model.py
 
-A script to check whether the AlphaFold database has a predicted structure
-for your protein sequence. 
+Check whether the AlphaFold database has a predicted structure for a protein.
 
-Uses EBI's API (ncbiblast and dbfetch). 
-
-1) BLASTs sequence against Uniprot to find accession. Will take best match above thresholds.
-2) Tries to fetch PDB file from AF DB for that accession.
+1) BLASTs the sequence against UniProt to find a matching accession.
+2) Downloads the PDB file from the AFDB for that accession.
 
 Parameters:
-	- fasta_in (str): name of fasta file containing seq
-	- evalue (float): evalue threshold for match
-	- percentid (float): %ID threshold for match
+    - fasta_in (str): path to FASTA file, OR a raw UniProt accession
+    - email (str): EBI-registered email
+    - workingdir (str): directory for output files
+    - name (str): run name (prefix for output files)
+    - taxid (str|int): taxonomy ID to constrain BLAST
+    - evalue (float): E-value threshold for BLAST hit
+    - percentid (float): %ID threshold for BLAST hit
+    - clients_folder (str): (unused; retained for CLI compatibility)
+    - progress_cb: optional callback(job_id, status) for EBI poll status
 
-Returns: 
-	- pdb_out (str): raw string of PDB file (if found) or "pdb not found"
+Returns:
+    - path to the AF2 FASTA (.fa), or 1 if not found
 
-Matt Rich, 4/2024
+Matt Rich, 4/2024 / updated 2026 — EBI REST calls via ebi_rest.py
 """
 
-import subprocess, re
+import sys
+from pathlib import Path
+
 from site_selection_util import get_sequence, uniprot_accession_regex, save_fasta
 
-def search_AFDB(fasta_in, email, workingdir, name, taxid, evalue, percentid, clients_folder):
-	
-	match_accession = ""
-	match_eval = 1e-200
-	match_id = 100.0
-#	move_fasta = False
+sys.path.insert(0, str(Path(__file__).parent))
+import ebi_rest
 
-	outfile_prefix = "{}/{}.AF".format(workingdir, name)
 
-	#if the input is an accession
-	if uniprot_accession_regex(fasta_in) != None:
-		match_accession = fasta_in
-#		move_fasta = True
-	#otherwise, we need to find a match in the AF2 db
-	else:
-		#read sequence from fasta
-		seq = get_sequence(fasta_in)
+def search_AFDB(fasta_in, email, workingdir, name, taxid, evalue, percentid,
+                clients_folder, progress_cb=None):
+    """BLAST → AFDB lookup → write PDB + FASTA files.
 
-		#make ncbiblast command
-		ncbi_call = "python {}ncbiblast.py \
-						--email {} \
-						--program blastp \
-						--stype protein \
-						--sequence {} \
-						--database uniprotkb \
-						--taxid {} \
-						--outformat tsv \
-						--outfile {}.ncbiblast".format(clients_folder, email, seq, taxid, outfile_prefix)
-		#call ncbiblast command
-		print(ncbi_call)
-		subprocess.run(ncbi_call, shell=True)
+    progress_cb(job_id, status) is called on each EBI poll when provided.
+    Returns the path to the downloaded AF2 FASTA, or 1 if not found.
+    """
+    match_accession = ""
+    match_eval = 1e-200
+    match_id = 100.0
 
-		#open ncbiblast output
-		ncbi_out = open("{}.ncbiblast.tsv.tsv".format(outfile_prefix), "r")
-		#we only care about the best match (the second line)
-		l = ncbi_out.readlines()[1].strip().split("\t")
-		match_id = float(l[7])
-		match_eval = float(l[9])
-		match_accession = l[2]
+    outfile_prefix = f"{workingdir}/{name}.AF"
 
-	#download AF2 model if it exists
-	if match_id >= percentid and match_eval <= evalue and match_accession != "":
-		#if we have a close match, then see if there's an AF2 model
-		#this uses dbfetch from EBI
-		dbfetch_call = "python {}dbfetch.py fetchData \
-						afdb:{} pdb raw".format(clients_folder, match_accession)
-	
-		#call dbfetch command
-		pdb_out = subprocess.run(dbfetch_call, shell=True, capture_output=True, text=True).stdout
+    # if fasta_in looks like a UniProt accession, skip BLAST
+    if uniprot_accession_regex(fasta_in) is not None:
+        match_accession = fasta_in
+    else:
+        seq = get_sequence(fasta_in)
 
-		#if this call returns an error, there isn't a predicted structure
-		no_af_error = "ERROR 11 Unable to connect to database [afdb]."
-		if pdb_out != no_af_error:
-			#otherwise, we found a good pdb
-			f_out = open("{}.pdb".format(outfile_prefix), "w")
-			#save it in the working dir
-			print(pdb_out, file=f_out)
-			print("saving {} pdb file to {}.pdb".format(match_accession, outfile_prefix))
-			f_out.close()
-			
-			#also, make a fasta from the pdb
-#			if move_fasta:
-			save_fasta(name, get_sequence("{}.pdb".format(outfile_prefix)), "{}.fa".format(outfile_prefix))
-			print("saving fasta from {} pdb to {}.fa".format(match_accession, outfile_prefix))
-			return "{}.fa".format(outfile_prefix)
-		else:
-			print("pdb not found")
-			return 1
-	else:
-		print("no BLAST hit better than E={} and %ID={}".format(evalue, percentid))
-		return 1
+        params = {
+            "email":      email,
+            "program":    "blastp",
+            "stype":      "protein",
+            "sequence":   seq,
+            "database":   "uniprotkb",
+            "outformat":  "tsv",
+            "alignments": 10,   # must match scores; 0 causes EBI to reject or return no hits
+            "scores":     10,
+            "exp":        "1e-5",  # EBI requires exact string; Python floats like 1e-05 are rejected
+        }
+        if str(taxid) not in ("", "1", "1.0"):
+            params["taxids"] = str(taxid)
+
+        print("Submitting NCBI BLAST job for AFDB lookup…")
+        blast_job_id = ebi_rest.run_job(ebi_rest.NCBIBLAST, params, poll_cb=progress_cb)
+        tsv_bytes = ebi_rest.fetch_result(ebi_rest.NCBIBLAST, blast_job_id, "tsv")
+
+        # save intermediate (mirrors old naming: prefix.ncbiblast.tsv.tsv)
+        tsv_path = f"{outfile_prefix}.ncbiblast.tsv.tsv"
+        with open(tsv_path, "wb") as f:
+            f.write(tsv_bytes)
+
+        lines = open(tsv_path).readlines()
+        if len(lines) < 2:
+            print("No BLAST hits found for AFDB lookup.")
+            return 1
+
+        l = lines[1].strip().split("\t")
+        match_id   = float(l[7])
+        match_eval = float(l[9])
+        match_accession = l[2]
+
+    # try to download AlphaFold model for the matched accession
+    if match_id >= percentid and match_eval <= evalue and match_accession != "":
+        try:
+            pdb_bytes = ebi_rest.dbfetch("afdb", match_accession, "pdb", "raw")
+            pdb_text = pdb_bytes.decode("utf-8", errors="replace")
+        except Exception as e:
+            print(f"dbfetch failed for {match_accession}: {e}")
+            return 1
+
+        # the EBI dbfetch returns an error message as plain text when not found
+        if "ERROR" in pdb_text[:50]:
+            print("pdb not found")
+            return 1
+
+        pdb_path = f"{outfile_prefix}.pdb"
+        with open(pdb_path, "w") as f:
+            f.write(pdb_text)
+        print(f"Saved {match_accession} PDB to {pdb_path}")
+
+        fasta_path = f"{outfile_prefix}.fa"
+        save_fasta(name, get_sequence(pdb_path), fasta_path)
+        print(f"Saved FASTA from PDB to {fasta_path}")
+        return fasta_path
+    else:
+        print(f"No BLAST hit better than E={evalue} and %ID={percentid}")
+        return 1
+
 
 if __name__ == "__main__":
-	
-	from argparse import ArgumentParser
 
-	parser = ArgumentParser()
-	parser.add_argument('-f', '--fasta', '--input_file', action='store', type=str, dest='FASTA_IN', 
-		help = "name of fasta file containing seq.", required=True)
-	parser.add_argument('--email', action='store', type=str, dest='EMAIL', 
-		help = "email address, required by EBI job submission.", required=True)
-	parser.add_argument('--dir', '--working_dir', action='store', type=str, dest='WORKINGDIR', 
-		help = "working directory for output", required=True)
-	parser.add_argument('--name', '--run_name', action='store', type=str, dest='NAME', 
-		help = "name for output", required=True)
-	parser.add_argument('--taxid', action='store', type=str, dest='TAXID', 
-		help = "uniprot taxid to limit BLAST search to", default="1")
-	parser.add_argument('--evalue', action='store', type=float, dest='EVALUE', 
-		help = "evalue threshold for BLAST hit (1e-100)", default=1e-100)
-	parser.add_argument('--percent_id', action='store', type=float, dest='PERCENTID', 
-		help = "Identity threshold for BLAST hit (99)", default=99)
-	parser.add_argument('--clients_folder', action='store', type=str, dest='CLIENTS_FOLDER', 
-		help = "path to EBI webservice clients (default=./ebi_api_clients/)",
-		default = "./scripts/")
+    from argparse import ArgumentParser
 
-	args, unknowns = parser.parse_known_args()
-	
-	search_AFDB(args.FASTA_IN, args.EMAIL, args.WORKINGDIR, args.NAME, 
-					args.TAXID, args.EVALUE, args.PERCENTID, args.CLIENTS_FOLDER)	
+    parser = ArgumentParser()
+    parser.add_argument("-f", "--fasta", "--input_file", action="store", type=str, dest="FASTA_IN",
+        help="path to FASTA file, or a UniProt accession", required=True)
+    parser.add_argument("--email", action="store", type=str, dest="EMAIL",
+        help="email address, required by EBI job submission.", required=True)
+    parser.add_argument("--dir", "--working_dir", action="store", type=str, dest="WORKINGDIR",
+        help="working directory for output", required=True)
+    parser.add_argument("--name", "--run_name", action="store", type=str, dest="NAME",
+        help="name for output", required=True)
+    parser.add_argument("--taxid", action="store", type=str, dest="TAXID",
+        help="UniProt taxid to limit BLAST search to", default="1")
+    parser.add_argument("--evalue", action="store", type=float, dest="EVALUE",
+        help="E-value threshold for BLAST hit (1e-100)", default=1e-100)
+    parser.add_argument("--percent_id", action="store", type=float, dest="PERCENTID",
+        help="Identity threshold for BLAST hit (99)", default=99)
+    parser.add_argument("--clients_folder", action="store", type=str, dest="CLIENTS_FOLDER",
+        help="(unused; retained for CLI compatibility)", default="./scripts/")
 
+    args, unknowns = parser.parse_known_args()
+
+    search_AFDB(args.FASTA_IN, args.EMAIL, args.WORKINGDIR, args.NAME,
+                args.TAXID, args.EVALUE, args.PERCENTID, args.CLIENTS_FOLDER)

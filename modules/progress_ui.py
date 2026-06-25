@@ -1,22 +1,23 @@
-from shiny import ui
+from shiny import ui, module
 
-#Page 2: Progress
+
+@module.ui
 def progress_ui():
-	return ui.page_fluid(
-		#load analyses json
-		ui.h3("Load Analysis"),
-		#load json button
-#		ui.input_file("analysis_json", "Load Analysis JSON file",
-#				accept=['.txt']),
-
-		ui.output_ui("show_or_upload_json"),
-	
-
-		ui.hr(),
-
-		#maybe something here to show the steps of the analysis?
-
-		#run analysis button
-		ui.input_action_button("run_analysis", "Run Analysis", disabled=True)
-	)
-
+    return ui.page_fluid(
+        ui.h3("Load Analysis"),
+        ui.output_ui("show_or_upload_json"),
+        ui.hr(),
+        ui.row(
+            ui.column(4,
+                ui.input_action_button("run_analysis", "Run Analysis", disabled=True,
+                                       class_="btn-primary"),
+            ),
+            ui.column(4,
+                ui.download_button("download_results", "Download Results",
+                                   class_="btn-secondary"),
+            ),
+        ),
+        ui.hr(),
+        ui.h4("Task Status"),
+        ui.output_ui("task_cards"),
+    )

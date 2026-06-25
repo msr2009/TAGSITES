@@ -1,0 +1,183 @@
+"""task_runners.py — in-process wrappers that map a run-JSON args dict to each
+analysis script's main() function.
+
+Used by the Shiny progress module to run tasks in-process (no subprocess)
+instead of launching them as shell commands.  The CLI interface of every
+underlying script is unchanged; only the internal call path differs.
+
+Each runner signature: runner(args_dict, progress_cb=None)
+  args_dict — the "args" sub-dict from the run JSON for one task
+  progress_cb(job_id, status) — optional; forwarded to EBI poll callbacks
+"""
+
+import os
+import sys
+from pathlib import Path
+
+# add scripts/ to sys.path so sibling imports work when called from the app
+_SCRIPTS = Path(__file__).parent
+sys.path.insert(0, str(_SCRIPTS))
+
+
+def _str(v, default=""):
+    """Coerce a value to str; return default for empty/None."""
+    if v is None or v == "":
+        return default
+    return str(v)
+
+
+def _float(v, default=0.0):
+    """Coerce to float with fallback."""
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return default
+
+
+def _int(v, default=0):
+    """Coerce to int with fallback."""
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return default
+
+
+def _bool(v, default=False):
+    """Coerce to bool; handles strings like 'True'/'False'."""
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, str):
+        return v.lower() not in ("false", "0", "")
+    return bool(v) if v is not None else default
+
+
+# ── analysis runners ─────────────────────────────────────────────────────────
+
+def run_blast(args, progress_cb=None):
+    """Run blast_orthologs.main() from a JSON args dict."""
+    import blast_orthologs
+    return blast_orthologs.main(
+        fasta_in       = _str(args.get("input_file") or args.get("fasta")),
+        email          = _str(args.get("email")),
+        workingdir     = _str(args.get("working_dir")),
+        name           = _str(args.get("run_name")),
+        output         = _str(args.get("output")),
+        n              = _int(args.get("max_hits"), 100),
+        evalue         = _float(args.get("evalue"), 1e-10),
+        db             = _str(args.get("db"), "uniprotkb"),
+        length_percent = _float(args.get("length"), 0),
+        align_full_seqs= _bool(args.get("align_full_seqs"), True),
+        taxid          = _str(args.get("taxid"), "1"),
+        clients_folder = str(_SCRIPTS) + "/",
+        exclude_paralogs = _bool(args.get("exclude_paralogs"), False),
+        progress_cb    = progress_cb,
+    )
+
+
+def run_plddt(args, progress_cb=None):
+    """Run the pLDDT pipeline: AFDB search if needed, then extract_from_pdb.main()."""
+    import extract_from_pdb
+    import existing_AF_model
+    import run_status as _run_status
+
+    pdb_path = _str(args.get("pdb"))
+    output   = _str(args.get("output"))
+
+    # run AFDB lookup if no local PDB was provided
+    if not pdb_path:
+        result = existing_AF_model.search_AFDB(
+            fasta_in      = _str(args.get("input_file") or args.get("fasta")),
+            email         = _str(args.get("email")),
+            workingdir    = _str(args.get("working_dir")),
+            name          = _str(args.get("run_name")),
+            taxid         = _str(args.get("taxid") or args.get("species_taxid"), "1"),
+            evalue        = _float(args.get("evalue"), 1e-100),
+            percentid     = _float(args.get("percent_id"), 99),
+            clients_folder= str(_SCRIPTS) + "/",
+            progress_cb   = progress_cb,
+        )
+        if result == 1:
+            raise RuntimeError("AFDB lookup found no matching structure.")
+        pdb_path = result
+
+    extract_from_pdb.main(pdb_path, output)
+
+
+def run_modifications(args, progress_cb=None):
+    """Run regex_sites.main() from a JSON args dict."""
+    import regex_sites
+    fasta_in  = _str(args.get("input_file") or args.get("fasta"))
+    sites_file = _str(args.get("sites_file"))
+    output    = _str(args.get("output"))
+    with open(output, "w") as fout:
+        regex_sites.main(fasta_in, sites_file, fout)
+
+
+def run_domains(args, progress_cb=None):
+    """Run call_interpro.main() from a JSON args dict."""
+    import call_interpro
+    return call_interpro.main(
+        fasta_in      = _str(args.get("input_file") or args.get("fasta")),
+        email         = _str(args.get("email")),
+        workingdir    = _str(args.get("working_dir")),
+        clients_folder= str(_SCRIPTS) + "/",
+        outputfile    = _str(args.get("output")),
+        progress_cb   = progress_cb,
+    )
+
+
+def run_scores(args, progress_cb=None):
+    """Run calculate_protein_scores.main() from a JSON args dict."""
+    import calculate_protein_scores
+    fasta_in   = _str(args.get("input_file") or args.get("fasta"))
+    scores_file = _str(args.get("scores_file"))
+    output     = _str(args.get("output"))
+    window     = _int(args.get("window"), 1)
+    with open(output, "w") as fout:
+        calculate_protein_scores.main(fasta_in, fout, window, scores_file)
+
+
+def run_reagents(args, progress_cb=None):
+    """Run design_tag_reagents.main() from a JSON args dict.
+
+    Runs the Genewise pre-step if needed (empty 'genewise' arg).
+    """
+    import design_tag_reagents
+    import run_genewise
+
+    genewise_path = _str(args.get("genewise"))
+    genomic_fa    = _str(args.get("genomic_fasta"))
+
+    if not genewise_path and genomic_fa:
+        # run both-strand Genewise and pick the winner
+        protein_fa  = _str(args.get("input_file") or args.get("fasta"))
+        email       = _str(args.get("email"))
+        working_dir = _str(args.get("working_dir"))
+        run_name    = _str(args.get("run_name"))
+        outprefix   = os.path.join(working_dir, run_name + "_genewise")
+        run_genewise.main(protein_fa, genomic_fa, email, outprefix)
+        genewise_path = outprefix + ".genewise.out.txt"
+        args = dict(args, genewise=genewise_path,
+                    genomic_fasta=outprefix + ".genewise_genomic.fa")
+
+    design_tag_reagents.main(
+        genewise      = genewise_path,
+        genomic_fasta = _str(args.get("genomic_fasta")),
+        output        = _str(args.get("output")),
+        n_guides      = _int(args.get("n_guides"), 5),
+        arm_length    = _int(args.get("arm_length"), 500),
+        pam           = _str(args.get("PAM"), "NGG"),
+        guide_length  = _int(args.get("guide_length"), 20),
+        cut_offset    = _int(args.get("cut_offset"), 3),
+    )
+
+
+# map analysis type → runner function (used by progress_server and task_runners)
+TASK_RUNNERS = {
+    "blast":         run_blast,
+    "plddt":         run_plddt,
+    "modifications": run_modifications,
+    "domains":       run_domains,
+    "scores":        run_scores,
+    "reagents":      run_reagents,
+}

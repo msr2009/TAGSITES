@@ -17,12 +17,20 @@
 		"reagents": "design_tag_reagents.py"
 	},
 
+	"global_tooltips": {
+		"email": "EBI requires a registered email for all BLAST and InterPro job submissions",
+		"input_file": "Protein sequence as FASTA (.fa/.fasta) or an AlphaFold PDB (.pdb). PDB input auto-extracts the sequence and pre-fills the pLDDT analysis.",
+		"input_genomic": "Genomic FASTA of the region surrounding your gene (orientation unknown is fine — Genewise tests both strands). Required to design CRISPR reagents.",
+		"run_name": "Short identifier used as the prefix for all output files",
+		"working_dir": "Directory where all output files will be written (auto-filled from Analysis Name)"
+	},
+
 	"analyses": {
 		"blast": {
-			"name": "", 
+			"name": "",
 			"type": "blast",
 			"args": {
-				"taxid": "", 
+				"taxid": "",
 				"taxid_file": "",
 				"evalue": ["", "1e-200", "1e-100", "1e-50", "1e-10", "1e-5", "1e-1", "1.0"],
 				"max_hits": "",
@@ -31,12 +39,12 @@
 				"output": ".jsd"
 			},
 			"tooltips": {
-				"taxids": "uniprot taxonomic IDs to search (can be comma-delimited list)", 
-				"taxid_file": "file containing taxonomic IDs to constrain BLAST search",
-				"evalue": "E-value for BLAST results",
-				"max_hits": "maximum number of BLAST hits to report",
-				"db": "Database to search (swissprot: human-curated; trembl: computer curation (large); uniprot: all",
-				"length": "threshold to choose as a protein match, in % of subject length"
+				"taxid": "UniProt taxonomic ID(s) to restrict the BLAST search (comma-separated list, e.g. 6239 for C. elegans). Leave blank to search all species.",
+				"taxid_file": "File containing one taxid per line — alternative to entering them manually",
+				"evalue": "E-value threshold: only BLAST hits better than this cutoff are kept",
+				"max_hits": "Maximum number of BLAST hits to retrieve (default 100)",
+				"db": "UniProt database to search: uniprotkb (all), swissprot (human-curated, smaller), trembl (computationally annotated, largest)",
+				"length": "Minimum hit length as a fraction of your query length — filters out partial matches (0 = no filter)"
 			}
 		},
 		"plddt": {
@@ -50,10 +58,10 @@
 				"existing_AF2": 1
 			},
 			"tooltips": {
-				"pdb": "path to AlphaFold pdb containing pLDDT scores. If blank, will attempt to find correct one.",
-				"evalue": "if finding pdb required, E-value for BLAST results",
-				"percent_id": "if finding pdb required, %ID for good hits",
-				"existing_AF2": "set as 1 to search AFDB for existing structure prediction"  
+				"pdb": "Path to a local AlphaFold PDB file. Leave blank to search the AlphaFold Database automatically.",
+				"evalue": "E-value cutoff for the BLAST search used to find the matching AlphaFold model",
+				"percent_id": "Minimum % sequence identity required to accept an AlphaFold model as a match",
+				"existing_AF2": "1 = search AlphaFold DB for an existing prediction; 0 = use the PDB you supplied"
 			}
 		},
 		"modifications": {
@@ -65,8 +73,8 @@
 				"output": ".txt"
 			},
 			"tooltips": {
-				"fasta": "path to fasta file of sequence",
-				"sites_file": "file containing regular expressions for modifications"
+				"fasta": "Path to the protein FASTA (auto-filled from the sequence input above)",
+				"sites_file": "File of regex patterns defining PTM sites (phosphorylation, ubiquitination, etc.) — defaults to the bundled table"
 			}
 		},
 		"domains": {
@@ -83,12 +91,13 @@
 			"args": {
 				"fasta": "",
 				"scores_file": "",
+				"window": 1,
 				"output": ".tsv"
 			},
 			"tooltips": {
-				"fasta": "path to fasta of sequence",
-				"scores_file": "file containing amino acid scores (e.g., hydrophobicity)",
-				"output": "output filename"
+				"fasta": "Path to the protein FASTA (auto-filled from the sequence input above)",
+				"scores_file": "TSV file of per-amino-acid property scores (e.g., hydrophobicity) — defaults to the bundled Kyle-Doolittle table",
+				"window": "Sliding window size in residues for averaging the property score (1 = no smoothing)"
 			}
 		},
 		"reagents": {

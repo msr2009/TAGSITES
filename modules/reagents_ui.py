@@ -1,12 +1,10 @@
-from shiny import ui
+from shiny import ui, module
 
-#Page 4: Reagents
+
+@module.ui
 def reagents_ui():
-	return ui.page_fluid(
-		ui.h2("Design Reagents"),
-	
-		ui.output_ui("show_or_upload_json_reagents"),
-		ui.hr(),
-
-		)
-
+    return ui.page_fluid(
+        ui.h2("Design Reagents"),
+        ui.output_ui("show_or_upload_json_reagents"),
+        ui.hr(),
+    )

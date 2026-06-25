@@ -1,16 +1,17 @@
+from shiny import reactive
+
 from modules.setup_server import setup_server
 from modules.progress_server import progress_server
 from modules.results_server import results_server
 from modules.reagents_server import reagents_server
 
-from shiny import reactive
-
-shared_values = reactive.Value("")
 
 def app_server(input, output, session):
-	#call each server
-	setup_server(input, output, session, shared_values)
-	progress_server(input, output, session, shared_values)
-	results_server(input, output, session, shared_values)
-	reagents_server(input, output, session, shared_values)
+    # per-session shared state: the path to the active run JSON
+    # created inside app_server so each browser session gets its own value
+    shared_values = reactive.Value("")
 
+    setup_server("setup", shared_json=shared_values)
+    progress_server("progress", shared_json=shared_values)
+    results_server("results", shared_json=shared_values)
+    reagents_server("reagents", shared_json=shared_values)

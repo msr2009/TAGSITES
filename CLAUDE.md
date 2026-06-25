@@ -24,7 +24,6 @@ python app_modular.py
 
 ```
 app_modular.py          # main Shiny entry point
-app.py                  # legacy version
 server.py / ui.py       # top-level Shiny orchestrators
 config.py               # species taxonomy, result type config, JSON defaults
 default_json.json       # default task parameters and script-to-task mappings
@@ -59,6 +58,10 @@ params/
   worm_default.json   # saved parameter preset for C. elegans
   *.json              # user-saved parameter presets
 ```
+
+## Dual-use constraint: Shiny app + standalone CLI
+
+**All scripts in `scripts/` must remain runnable from the command line independently of the Shiny app.** When refactoring script internals, never change argparse interfaces, CLI flag names, or `__main__` entry points. Only internal implementation may change (e.g. swapping a subprocess call for an in-process function call). The Shiny app calls script `main()` functions directly via `scripts/task_runners.py`; the CLI calls the same scripts as subprocesses via `scripts/run_tag_sites_from_json.py`. Both paths must produce identical outputs.
 
 ## Key design patterns
 

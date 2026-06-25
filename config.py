@@ -1,10 +1,16 @@
-#file containing flattened list of uniprot species and taxids
-UNIPROT_SPECIES = "./uniprot_species.flat.txt"
+from pathlib import Path
+import json
 
-#edit the filename below for your defaults
-DEFAULT_JSON = "./default_json.json"
+# project root is the directory containing this file
+_ROOT = Path(__file__).parent
 
-#you can change these if you'd like (except for Other)
+# file containing flattened list of uniprot species and taxids
+UNIPROT_SPECIES = str(_ROOT / "uniprot_species.flat.txt")
+
+# edit the filename below for your defaults
+DEFAULT_JSON = str(_ROOT / "default_json.json")
+
+# you can change these if you'd like (except for Other)
 DEFAULT_SPECIES = {
     "Homo sapiens": 9606,
     "Mus musculus": 10090,
@@ -17,16 +23,20 @@ DEFAULT_SPECIES = {
     "Other (search...)": None  # marker for dynamic search
 }
 
-#don't touch this!
-import json
-INPUT_JSON = json.load(open(DEFAULT_JSON, "r"))
+# don't touch this!
+try:
+    INPUT_JSON = json.load(open(DEFAULT_JSON, "r"))
+except FileNotFoundError:
+    raise RuntimeError(f"Could not find default_json.json at {DEFAULT_JSON}")
 TASK_PARAMETERS = INPUT_JSON["analyses"]
 AVAILABLE_TASKS = list(INPUT_JSON["analyses"].keys())
+# reagents is auto-injected at save time when a genomic FASTA is present; not user-selectable
+SELECTABLE_TASKS = [t for t in AVAILABLE_TASKS if t != "reagents"]
 EXCLUDE_ARGS = ["fasta", "input", "output", "pdb"]
+GLOBAL_TOOLTIPS = INPUT_JSON.get("global_tooltips", {})
 
-#analysis result types
-#add new analysis types here
+# analysis result types — add new analysis types here
 RESULTS_TYPE_DICT = {
-	"CONTINUOUS": ["blast", "plddt", "scores"], 
-	"RANGE": ["domains", "modifications"]
+    "CONTINUOUS": ["blast", "plddt", "scores"],
+    "RANGE": ["domains", "modifications"]
 }

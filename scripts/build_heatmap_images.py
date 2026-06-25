@@ -10,6 +10,8 @@ which runs really slow in the tag sites app.
 Matt Rich, 11/2025
 """
 
+import matplotlib
+matplotlib.use("agg")  # non-interactive backend; required when called from worker threads
 from Bio import SeqIO
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap

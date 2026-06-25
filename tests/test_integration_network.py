@@ -142,7 +142,9 @@ def test_blast_orthologs_produces_output(DATA, email, tmp_path):
     fa = working_dir / "snb-1.fa"
     shutil.copy(DATA / "snb-1.fa", fa)
 
-    output = str(working_dir / "snb-1.BLAST_blast.txt")
+    # output suffix is stripped to form out_prefix, so ".jsd" → out_prefix "snb-1"
+    # and jsd_path = out_prefix + ".jsd" = "snb-1.jsd"
+    output = str(working_dir / "snb-1.jsd")
 
     from blast_orthologs import main as blast_main
     ret = blast_main(
