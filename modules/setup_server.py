@@ -1,366 +1,382 @@
-from shiny import ui, reactive, render, module
-from pathlib import Path
-import json, os, shutil
+"""setup_server.py — Shiny module server for the Setup tab.
 
-from config import DEFAULT_JSON, TASK_PARAMETERS, SELECTABLE_TASKS, EXCLUDE_ARGS, GLOBAL_TOOLTIPS
+Thin reactive layer: reads user inputs, delegates data construction to
+setup_logic.py, writes the run JSON, and publishes its path via shared_json.
+"""
+
+import json
+import os
+import shutil
+from pathlib import Path
+
+from shiny import module, reactive, render, ui
+
+from config import DEFAULT_JSON, EXCLUDE_ARGS, GLOBAL_TOOLTIPS, TASK_PARAMETERS
+from modules.setup_ui import label_with_tip, TASK_DESCRIPTIONS
+from modules.setup_logic import (
+    build_defaults_entry,
+    build_global_block,
+    build_reagents_entry,
+    build_run_json,
+    build_task_entry,
+    make_task,
+)
 from scripts.site_selection_util import get_sequence, save_fasta
 
-# paths to bundled data dirs — relative to this file, not cwd
 _ROOT = Path(__file__).parent.parent
 _PARAMS_DIR = _ROOT / "params"
-_TABLES_DIR = _ROOT / "tables"
 
 
-def label_with_tip(text, tip=""):
-    """Return a label element: plain text when no tip, ⓘ icon + tooltip when tip is provided."""
-    if not tip:
-        return text
-    return ui.span(
-        text,
-        ui.tooltip(
-            ui.span("ⓘ", class_="tip-icon"),
-            tip,
-            placement="top",
-        ),
-    )
+# ── widget builders ───────────────────────────────────────────────────────────
 
+def _make_param_widget(widget_id, param, value, tip):
+    """Return one input widget for a task parameter."""
+    lbl = label_with_tip(param.replace("_", " "), tip)
+    if isinstance(value, list):
+        return ui.input_select(widget_id, label=lbl,
+                               choices=value, selected=value[0], size=1)
+    return ui.input_text(widget_id, label=lbl, value=str(value) if value != "" else "")
+
+
+def _build_param_inputs(task, task_values_snap):
+    """Build the list of param widgets for one task card."""
+    tips = task.get("tooltips", {})
+    widgets = []
+    for p, default in task["params"].items():
+        if p in EXCLUDE_ARGS:
+            continue
+        widget_id = f"{task['id']}_{p}"
+        # use the snapshotted value if present (preserves edits across re-renders)
+        current = task_values_snap.get(task["id"], {}).get(p, default)
+        widgets.append(_make_param_widget(widget_id, p, current, tips.get(p, "")))
+    return widgets
+
+
+# ── module server ─────────────────────────────────────────────────────────────
 
 @module.server
 def setup_server(input, output, session, shared_json):
 
-    selected_tasks = reactive.Value([])  # list of task dicts added by the user
-    task_values = reactive.Value({})     # snapshot of user-entered param values, keyed by task id
+    # reload defaults fresh per session — avoids cross-session mutation
+    INPUT_JSON = json.load(open(DEFAULT_JSON))
 
-    # reload INPUT_JSON fresh per session to avoid cross-session mutation of defaults
-    INPUT_JSON = json.load(open(DEFAULT_JSON, "r"))
+    tasks      = reactive.Value([])   # list of in-memory task dicts
+    task_snap  = reactive.Value({})   # {task_id: {param: value}} — preserved across re-renders
 
-    def populate_default_params():
-        """Populate the Load Defaults dropdown from params/ json files."""
-        params_files = [j.name.removesuffix(".json") for j in _PARAMS_DIR.glob("*.json")]
-        ui.update_selectize("load_default_tasks", choices=params_files)
-        ui.update_selectize("load_default_tasks", selected="")
+    # ── preset refresh (called after saving a new preset) ────────────────────
 
-    session.on_flush(populate_default_params, once=True)
+    def _populate_presets():
+        """Refresh the Load preset dropdown after a new preset is saved."""
+        names = [p.stem for p in sorted(_PARAMS_DIR.glob("*.json"))]
+        ui.update_selectize("load_preset", choices=names)
+        ui.update_selectize("load_preset", selected="")
 
-    # ── sidebar global inputs (rendered so tooltips can be dynamic) ───────────
+    # ── button enable / disable ───────────────────────────────────────────────
 
-    @render.ui
-    def sidebar_global_inputs():
-        """Render sidebar global inputs with ⓘ tooltip icons."""
-        t = GLOBAL_TOOLTIPS
-        return ui.div(
-            ui.input_text("email", label_with_tip("Email Address", t.get("email", "")),
-                          value=INPUT_JSON["global"]["email"]),
-            ui.input_file("input_file",
-                          label_with_tip("Protein sequence (.fa, .fasta, or .pdb)",
-                                         t.get("input_file", "")),
-                          accept=[".fa", ".fasta", ".pdb"]),
-            ui.input_file("input_genomic",
-                          label_with_tip("Genomic region FASTA (optional — needed for CRISPR reagents)",
-                                         t.get("input_genomic", "")),
-                          accept=[".fasta", ".fa"]),
-            ui.tags.small(
-                ui.tags.em("⚠ Upload a genomic FASTA to enable CRISPR reagent design."),
-                style="color:#856404; display:block; margin-top:-8px; margin-bottom:8px;",
-            ),
-            ui.input_text("run_name",
-                          label_with_tip("Analysis name", t.get("run_name", ""))),
-            ui.input_text("working_dir",
-                          label_with_tip("Output directory", t.get("working_dir", "")),
-                          width="100%"),
+    @reactive.effect
+    @reactive.event(input.task_label)
+    def _toggle_add():
+        """Enable Add only when a task label has been typed."""
+        ui.update_action_button("add_task", disabled=not bool(input.task_label()))
+
+    @reactive.effect
+    def _toggle_load():
+        """Enable Load only when a preset is selected."""
+        ui.update_action_button("load_preset_btn",
+                                disabled=not bool(input.load_preset()))
+
+    @reactive.effect
+    def _toggle_save_preset():
+        """Enable Save preset only when a name is typed and tasks exist."""
+        ui.update_action_button(
+            "save_preset_btn",
+            disabled=not (bool(input.preset_name()) and len(tasks()) > 0),
         )
 
-    # ── button state management ───────────────────────────────────────────────
-
-    @reactive.effect
-    @reactive.event(input.run_name)
-    def update_working_dir():
-        """Auto-fill working_dir whenever the run name changes."""
-        base = INPUT_JSON["global"]["working_dir"] or os.getcwd()
-        if input.run_name():
-            ui.update_text("working_dir", value=f"{base}/{input.run_name()}/")
-
-    @reactive.effect
-    def update_load_defaults_button_state():
-        """Enable the Load button only when a default set is selected."""
-        ui.update_action_button("load_defaults_button",
-                                disabled=not bool(input.load_default_tasks()))
-
-    @reactive.effect
-    @reactive.event(input.task_desc_name)
-    def update_task_name_button_state():
-        """Enable the Add Task button only when a task name is typed."""
-        ui.update_action_button("add_task", disabled=not bool(input.task_desc_name()))
-
     @reactive.calc
-    def requirements_filled():
-        """True when all fields required to save an analysis are present."""
+    def _ready():
+        """True when all required fields for Save Analysis are present."""
         return (
             bool(input.email())
             and bool(input.input_file())
             and bool(input.working_dir())
-            and len(selected_tasks()) > 0
+            and len(tasks()) > 0
         )
 
     @reactive.effect
-    @reactive.event(requirements_filled)
-    def update_save_analysis_button_state():
-        """Enable the Save Analysis button when all requirements are met."""
-        ui.update_action_button("save_analysis", disabled=not requirements_filled())
+    @reactive.event(_ready)
+    def _toggle_save():
+        ui.update_action_button("save_analysis", disabled=not _ready())
+
+    # ── auto-fill working directory ───────────────────────────────────────────
+
+    @reactive.effect
+    @reactive.event(input.run_name)
+    def _autofill_dir():
+        """Derive working_dir from run_name when the user types a name."""
+        if not input.run_name():
+            return
+        base = INPUT_JSON["global"].get("working_dir") or os.getcwd()
+        ui.update_text("working_dir", value=f"{base}/{input.run_name()}/")
+
+    # ── save-status hint ──────────────────────────────────────────────────────
 
     @render.text
-    def tip_save_analysis():
-        """Status hint displayed next to the Save Analysis button."""
-        if not requirements_filled():
-            return "Requires email, sequence, analysis name, and at least one task."
+    def save_status():
+        """One-line hint next to the Save button."""
+        if not _ready():
+            return "Requires email, a sequence file, an analysis name, and at least one task."
         if input.save_analysis() == 0:
-            return "Click to save analysis"
-        return f"Saved to {input.working_dir()}{input.run_name()}.json"
+            return "Ready — click Save Analysis to write the run configuration."
+        return f"Saved → {input.working_dir()}{input.run_name()}.json"
 
-    # ── task param rendering ──────────────────────────────────────────────────
+    @render.text
+    def task_type_desc():
+        """One-line description of the currently selected analysis type."""
+        return TASK_DESCRIPTIONS.get(input.task_type(), "")
 
-    def build_task_params_input(task):
-        """Build the list of UI inputs for one task's configurable parameters."""
-        param_list = []
-        tips = task.get("tooltips", {})
-        for p in task["params"]:
-            if p in EXCLUDE_ARGS:
-                continue
-            lbl = label_with_tip(p.replace("_", " "), tips.get(p, ""))
-            if isinstance(task["params"][p], list):
-                # list-valued param → select dropdown
-                current = task_values().get(task["id"], {}).get(p)
-                selected = current if current is not None else task["params"][p][0]
-                param_list.append(ui.input_select(
-                    f"{task['id']}_{p}", label=lbl,
-                    selected=selected, choices=task["params"][p], size=1,
-                ))
+    # ── task state helpers ────────────────────────────────────────────────────
+
+    def _snapshot():
+        """Read all current param inputs into task_snap (copy-and-set for reactivity)."""
+        snap = {}
+        for t in tasks():
+            snap[t["id"]] = {}
+            for p in t["params"]:
+                if p in EXCLUDE_ARGS:
+                    continue
+                wid = f"{t['id']}_{p}"
+                if wid in input:
+                    snap[t["id"]][p] = input[wid]()
+        task_snap.set(snap)
+
+    def _collect_args(task):
+        """Read input values for all params in a task, falling back to config defaults."""
+        base = TASK_PARAMETERS[task["name"]]["args"]
+        args = {}
+        for p, default in base.items():
+            wid = f"{task['id']}_{p}"
+            # is_set() returns False for params excluded from the UI (no widget exists)
+            if input[wid].is_set():
+                args[p] = input[wid]()
             else:
-                # scalar param → free text
-                param_list.append(ui.input_text(
-                    f"{task['id']}_{p}",
-                    value=task_values().get(task["id"], {}).get(p, task["params"][p]),
-                    label=lbl,
-                ))
-        return param_list
+                args[p] = default
+        return args
 
-    @render.ui
-    def task_params_container():
-        """Render all task configuration cards dynamically."""
-        tasks = selected_tasks()
-        if not tasks:
-            return ui.div(
-                ui.tags.em("No analysis tasks added yet. Use the form above to add one.",
-                           style="color:#6c757d;"),
-            )
+    # ── task CRUD ─────────────────────────────────────────────────────────────
 
-        cards = []
-        for task in tasks:
-            label = task["id"].rsplit("_", 1)[0]  # strip trailing analysis type
-            remove_btn = ui.input_action_button(
-                f"{task['id']}_remove", "✕ Remove",
-                class_="btn-sm btn-outline-danger",
-            )
-            cards.append(
-                ui.card(
-                    ui.card_header(
-                        ui.span(f"{label}"),
-                        ui.tags.small(f" — {task['name']}", style="color:#6c757d; font-weight:400;"),
-                        remove_btn,
-                    ),
-                    ui.card_body(
-                        ui.layout_column_wrap(
-                            *build_task_params_input(task),
-                            width=1/2,
-                        ),
-                    ),
-                    class_="task-card",
-                )
-            )
-        return ui.div(*cards)
-
-    # ── task remove handler (dynamic, one observer per task) ──────────────────
-
-    def _make_remove_handler(task_id):
-        """Register a reactive effect that removes this task when its button is clicked."""
+    def _register_remove(task_id):
+        """Register a one-off reactive effect that removes a task when its button fires."""
         @reactive.effect
         @reactive.event(lambda: input[f"{task_id}_remove"]())
         def _handler():
-            save_task_values()
-            remaining = [t for t in selected_tasks() if t["id"] != task_id]
-            selected_tasks.set(remaining)
-
-    # ── task loading ──────────────────────────────────────────────────────────
-
-    @reactive.effect
-    @reactive.event(input.load_defaults_button)
-    def add_tasks_from_default():
-        """Load a saved task list from a params/ JSON file."""
-        default_name = input.load_default_tasks()
-        if not default_name:
-            return
-        path = _PARAMS_DIR / f"{default_name}.json"
-        default_task_json = json.load(open(path, "r"))
-        new_tasks = [
-            {"id": tid,
-             "name": default_task_json[tid]["analysis"],
-             "params": default_task_json[tid]["args"],
-             "tooltips": TASK_PARAMETERS.get(default_task_json[tid]["analysis"], {}).get("tooltips", {})}
-            for tid in default_task_json
-        ]
-        save_task_values()
-        selected_tasks.set(selected_tasks() + new_tasks)
-        for t in new_tasks:
-            _make_remove_handler(t["id"])
-
-    @reactive.effect
-    def update_save_default_tasks_button():
-        """Enable the Save as Default button when a name and tasks both exist."""
-        enabled = bool(input.new_default_name()) and len(selected_tasks()) > 0
-        ui.update_action_button("save_default_tasks_button", disabled=not enabled)
-
-    @reactive.effect
-    @reactive.event(input.save_default_tasks_button)
-    def make_new_default():
-        """Serialize the current task list to a new defaults JSON file."""
-        save_task_values()
-        path = _PARAMS_DIR / f"{input.new_default_name()}.json"
-        def_json = {}
-        for task in selected_tasks():
-            def_json = {**def_json, **write_task_json(task)}
-        with open(path, "w") as f:
-            json.dump(def_json, f, indent=4)
-
-    def save_task_values():
-        """Snapshot current input values for all tasks into task_values reactive."""
-        snapshot = {}
-        for task in selected_tasks():
-            task_params = {}
-            for param in task["params"]:
-                input_id = f"{task['id']}_{param}"
-                if input_id in input:
-                    task_params[param] = input[input_id]()
-            snapshot[task["id"]] = task_params
-        task_values.set(snapshot)
+            _snapshot()
+            tasks.set([t for t in tasks() if t["id"] != task_id])
 
     @reactive.effect
     @reactive.event(input.add_task)
-    def add_task():
-        """Add a new task row for the selected analysis type."""
-        task_name = input.task_selector()
-        if not task_name:
+    def _add_task():
+        """Append a new task card for the selected analysis type."""
+        ttype = input.task_type()
+        label = input.task_label().strip()
+        if not ttype or not label:
             return
-        save_task_values()
-        task_id = f"{input.task_desc_name()}_{task_name}"
-        default_params = INPUT_JSON["analyses"][task_name]["args"]
-        task_params = {p: default_params[p] for p in default_params if p not in EXCLUDE_ARGS}
-        default_tips = INPUT_JSON["analyses"][task_name]["tooltips"]
-        task_tooltips = {p: default_tips[p] for p in default_tips if p not in EXCLUDE_ARGS}
-        new_task = {
-            "id": task_id, "name": task_name,
-            "params": task_params, "tooltips": task_tooltips,
-        }
-        selected_tasks.set(selected_tasks() + [new_task])
-        _make_remove_handler(task_id)
-        ui.update_text("task_desc_name", value="")
+        _snapshot()
+        cfg = TASK_PARAMETERS[ttype]
+        # filter excluded args from the in-memory params (they'll still be written at save time)
+        params = {p: v for p, v in cfg["args"].items() if p not in EXCLUDE_ARGS}
+        tips   = {p: v for p, v in cfg.get("tooltips", {}).items() if p not in EXCLUDE_ARGS}
+        task = make_task(ttype, label, params, tips)
+        task["start_open"] = True   # newly added tasks open by default
+        tasks.set(tasks() + [task])
+        _register_remove(task["id"])
+        ui.update_text("task_label", value="")
 
-    # ── serialisation helpers ─────────────────────────────────────────────────
+    # ── preset load / save ────────────────────────────────────────────────────
 
-    def write_task_json(task, global_params=None):
-        """Serialize one task's current parameter inputs to a dict."""
-        task_json = {task["id"]: {"analysis": task["name"], "args": {}}}
-        for p in TASK_PARAMETERS[task["name"]]["args"]:
-            input_id = f"{task['id']}_{p}"
-            if input[input_id].is_set():
-                value = input[input_id]()
-            else:
-                value = TASK_PARAMETERS[task["name"]]["args"][p]
-            task_json[task["id"]]["args"][p] = value
-        if global_params is not None:
-            task_json[task["id"]]["args"] = {**task_json[task["id"]]["args"], **global_params}
-        # build output path from working dir + run name + task id + default extension
-        out_suffix = TASK_PARAMETERS[task["name"]]["args"]["output"]
-        task_json[task["id"]]["args"]["output"] = (
-            f"{input.working_dir()}{input.run_name()}.{task['id']}{out_suffix}"
+    @reactive.effect
+    @reactive.event(input.load_preset_btn)
+    def _load_preset():
+        """Load a saved task set from params/ and append to the current list."""
+        name = input.load_preset()
+        if not name:
+            return
+        path = _PARAMS_DIR / f"{name}.json"
+        try:
+            data = json.load(open(path))
+        except FileNotFoundError:
+            ui.notification_show(f"Preset '{name}' not found.", type="error")
+            return
+        _snapshot()
+        new_tasks = []
+        for tid, entry in data.items():
+            ttype = entry["analysis"]
+            cfg = TASK_PARAMETERS.get(ttype, {})
+            # use saved args as params, supplement tooltips from config
+            params = {p: v for p, v in entry["args"].items() if p not in EXCLUDE_ARGS}
+            tips   = {p: v for p, v in cfg.get("tooltips", {}).items() if p not in EXCLUDE_ARGS}
+            task = {"id": tid, "name": ttype, "params": params, "tooltips": tips,
+                    "start_open": False}   # preloaded tasks start collapsed
+            new_tasks.append(task)
+            _register_remove(tid)
+        tasks.set(tasks() + new_tasks)
+
+    @reactive.effect
+    @reactive.event(input.save_preset_btn)
+    def _save_preset():
+        """Write the current task set (no global block) to a new params/ file."""
+        _snapshot()
+        name = input.preset_name().strip()
+        if not name:
+            return
+        result = {}
+        wd, rn = input.working_dir(), input.run_name()
+        for task in tasks():
+            args = _collect_args(task)
+            out_suffix = TASK_PARAMETERS[task["name"]]["args"].get("output", "")
+            result.update(build_defaults_entry(task["id"], task["name"], args, out_suffix, wd, rn))
+        path = _PARAMS_DIR / f"{name}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w") as f:
+            json.dump(result, f, indent=4)
+        ui.notification_show(f"Saved preset '{name}'.", type="message", duration=3)
+        _populate_presets()
+
+    # ── task card rendering ───────────────────────────────────────────────────
+
+    @render.ui
+    def task_cards():
+        """Render tasks as a collapsible accordion; new tasks open, preloaded closed."""
+        current_tasks = tasks()
+        snap = task_snap()
+
+        if not current_tasks:
+            return ui.p(
+                "No tasks yet — choose a type and label above, then click Add.",
+                style="color:#6c757d; margin-top:0.4rem; font-size:0.8rem;",
+            )
+
+        open_ids = [t["id"] for t in current_tasks if t.get("start_open", False)]
+
+        panels = []
+        for task in current_tasks:
+            label = task["id"].rsplit("_", 1)[0]
+            widgets = _build_param_inputs(task, snap)
+            panels.append(
+                ui.accordion_panel(
+                    ui.span(
+                        label,
+                        ui.tags.span(task["name"], class_="task-type-badge"),
+                    ),
+                    # params grid
+                    ui.layout_column_wrap(*widgets, width=1/2) if widgets else
+                    ui.p("No configurable parameters.", style="color:#6c757d; font-size:0.8rem;"),
+                    # remove button at bottom of body
+                    ui.div(
+                        ui.input_action_button(
+                            f"{task['id']}_remove", "✕ Remove task",
+                            class_="btn-sm btn-outline-danger",
+                        ),
+                        style="margin-top:0.6rem;",
+                    ),
+                    value=task["id"],
+                )
+            )
+
+        return ui.accordion(
+            *panels,
+            open=open_ids,
+            multiple=True,
+            class_="task-accordion",
         )
-        return task_json
 
     # ── save analysis ─────────────────────────────────────────────────────────
 
     @reactive.effect
     @reactive.event(input.save_analysis)
-    def save_analysis():
-        """Write all parameters to a run JSON and publish the path to shared state."""
-        # create working directory
-        Path(input.working_dir()).mkdir(parents=True, exist_ok=True)
+    def _save_analysis():
+        """Write the run JSON and publish its path via shared_json."""
+        wd  = input.working_dir()
+        rn  = input.run_name()
+        email = input.email()
 
-        # update global parameters in this session's copy of INPUT_JSON
-        INPUT_JSON["global"]["email"] = input.email()
-        INPUT_JSON["global"]["run_name"] = input.run_name()
-        INPUT_JSON["global"]["working_dir"] = input.working_dir()
+        Path(wd).mkdir(parents=True, exist_ok=True)
 
-        # copy uploaded input file into working directory with a clean name
-        tmp_input = Path(input.input_file()[0]["datapath"])
-        new_input_filename = input.working_dir() + input.run_name()
-        new_input_filename += ".pdb" if tmp_input.suffix == ".pdb" else ".fa"
-        INPUT_JSON["global"]["input_file"] = new_input_filename
-        shutil.copy(tmp_input, new_input_filename)
+        # copy uploaded protein file to the working directory
+        tmp_protein = Path(input.input_file()[0]["datapath"])
+        ext = ".pdb" if tmp_protein.suffix.lower() == ".pdb" else ".fa"
+        protein_dest = wd + rn + ext
+        shutil.copy(tmp_protein, protein_dest)
 
-        # copy optional genomic FASTA if provided; track its path for reagents auto-inject
+        # if PDB: extract FASTA and set pdb field; otherwise pdb stays empty
+        pdb_path = ""
+        input_file = protein_dest
+        if ext == ".pdb":
+            pdb_path = protein_dest
+            fasta_dest = protein_dest.replace(".pdb", ".fa")
+            save_fasta(Path(pdb_path).stem, get_sequence(pdb_path), fasta_dest)
+            input_file = fasta_dest
+
+        # copy optional genomic FASTA
         genomic_path = ""
         if input.input_genomic():
-            tmp_genomic = Path(input.input_genomic()[0]["datapath"])
-            new_genomic = (
-                input.working_dir() + input.run_name() + ".genomic" + tmp_genomic.suffix
-            )
-            INPUT_JSON["global"]["genomic_file"] = new_genomic
-            shutil.copy(tmp_genomic, new_genomic)
-            genomic_path = new_genomic
+            tmp_gen = Path(input.input_genomic()[0]["datapath"])
+            genomic_dest = wd + rn + ".genomic" + tmp_gen.suffix
+            shutil.copy(tmp_gen, genomic_dest)
+            genomic_path = genomic_dest
 
-        # for PDB input, extract FASTA and point input_file at it
-        if tmp_input.suffix == ".pdb":
-            INPUT_JSON["global"]["pdb"] = INPUT_JSON["global"]["input_file"]
-            new_fasta = INPUT_JSON["global"]["pdb"].replace(".pdb", ".fa")
-            save_fasta(
-                Path(INPUT_JSON["global"]["pdb"]).stem,
-                get_sequence(INPUT_JSON["global"]["pdb"]),
-                new_fasta,
-            )
-            INPUT_JSON["global"]["input_file"] = new_fasta
+        # build the global block
+        global_block = build_global_block(
+            base_global  = INPUT_JSON["global"],
+            email        = email,
+            run_name     = rn,
+            working_dir  = wd,
+            input_file   = input_file,
+            pdb          = pdb_path,
+            genomic_file = genomic_path,
+        )
 
-        # assemble and write the run JSON
-        out_json_name = f"{input.working_dir()}{input.run_name()}.json"
-        out_json = {
-            "scripts": INPUT_JSON["scripts"],
-            "global": INPUT_JSON["global"],
-        }
-        for task in selected_tasks():
-            # plddt needs to know whether we have a PDB vs AFDB lookup
+        # build per-task entries
+        task_entries = []
+        for task in tasks():
+            args = _collect_args(task)
+            # plddt: auto-set existing_AF2 based on whether a PDB was supplied
             if task["name"] == "plddt":
-                task["params"]["existing_AF2"] = 0 if INPUT_JSON["global"].get("pdb") else 1
-            out_json = {**out_json, **write_task_json(task, INPUT_JSON["global"])}
+                args["existing_AF2"] = 0 if pdb_path else 1
+            out_suffix = TASK_PARAMETERS[task["name"]]["args"].get("output", "")
+            task_entries.append(
+                build_task_entry(task["id"], task["name"], args, global_block,
+                                 out_suffix, wd, rn)
+            )
 
-        # auto-inject reagents task when a genomic FASTA was uploaded
+        # build reagents entry or warn
+        reagents_entry = None
         if genomic_path:
-            rea_args = dict(TASK_PARAMETERS["reagents"]["args"])
-            rea_args["genomic_fasta"] = genomic_path
-            rea_args["genewise"] = ""   # task_runner will run Genewise automatically
-            rea_args["email"] = input.email()
-            rea_args["working_dir"] = input.working_dir()
-            rea_args["run_name"] = input.run_name()
-            rea_args["input_file"] = INPUT_JSON["global"]["input_file"]
-            out_suffix = TASK_PARAMETERS["reagents"]["args"]["output"]
-            rea_args["output"] = f"{input.working_dir()}{input.run_name()}.reagents{out_suffix}"
-            out_json["REAGENTS_reagents"] = {"analysis": "reagents", "args": rea_args}
+            reagents_entry = build_reagents_entry(
+                defaults_cfg = TASK_PARAMETERS["reagents"]["args"],
+                genomic_path = genomic_path,
+                email        = email,
+                working_dir  = wd,
+                run_name     = rn,
+                input_file   = input_file,
+            )
         else:
             ui.notification_show(
                 "No genomic FASTA uploaded — CRISPR reagent design will not run. "
-                "Upload a genomic FASTA in the sidebar and re-save to enable it.",
+                "Upload a genomic region FASTA and re-save to enable it.",
                 type="warning",
                 duration=8,
             )
 
-        with open(out_json_name, "w") as f:
-            json.dump(out_json, f, indent=4)
+        run_json = build_run_json(
+            scripts        = INPUT_JSON["scripts"],
+            global_block   = global_block,
+            task_entries   = task_entries,
+            reagents_entry = reagents_entry,
+        )
 
-        shared_json.set(out_json_name)
+        out_path = f"{wd}{rn}.json"
+        with open(out_path, "w") as f:
+            json.dump(run_json, f, indent=4)
+
+        shared_json.set(out_path)
