@@ -18,9 +18,9 @@ def smooth_iterative(data, windowsize):
         smoothed data (list)
     """
     
-    # If windowsize is an int, change it into a list
-    if not isinstance(windowsize, list):
-        windowsize = list(windowsize)
+    # If windowsize is an int or float, wrap it into a list
+    if not isinstance(windowsize, (list, tuple)):
+        windowsize = [windowsize]
      
     # Perform iterative smoothing
     tmp_smoothed = data

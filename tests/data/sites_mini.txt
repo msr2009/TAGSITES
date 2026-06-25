@@ -1,0 +1,2 @@
+n_terminal_met	^M
+lysine	K

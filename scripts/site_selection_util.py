@@ -188,10 +188,12 @@ def pLDDT_tag_sites(pdb_file, max_score, window, passes, nsites, min_dist):
 	- nsites (int): number of minima to report
 	- min_dist (int): minimum distance (in residues) between minima
 
-	Returns: 
+	Returns:
 	- list: indices of potential tag sites
 	- array (2d): smoothed pLDDT, for plotting
 	"""
+	# Local import to avoid circular dependency (pLDDT_minima imports three_to_one from here)
+	from pLDDT_minima import find_insertion_sites, smooth_iterative
 
 	pdb_parser = PDB.PDBParser()
 	structure = pdb_parser.get_structure("foo", pdb_file)
