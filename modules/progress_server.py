@@ -1,13 +1,9 @@
 """progress_server.py — Shiny module server for the Progress tab.
 
-Responsibilities:
-- Display the current run JSON (or allow uploading one)
-- Launch all analysis tasks concurrently via reactive.extended_task
-- Show per-task status cards (gray → amber → green/red) that update while
-  tasks run by polling the run-status JSON file every 2 seconds
-- Persist task status + EBI jobIds to {working_dir}/{run_name}.status.json
-  so a crashed session can be diagnosed and the CLI can resume
-- Offer a download button to zip completed output files
+Thin reactive layer: loads the run JSON via shared_json, polls the status
+file every 2 s while tasks are running, and renders a collapsible accordion
+with one panel per job (status badge always visible; params hidden by default).
+All data-shaping is delegated to progress_logic.py.
 """
 
 import asyncio
@@ -18,36 +14,65 @@ import sys
 import zipfile
 from pathlib import Path
 
-from shiny import reactive, render, ui, module
+from shiny import module, reactive, render, ui
 
 # ensure scripts/ is importable from the app context
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 import run_status as _run_status
 from task_runners import TASK_RUNNERS
 
-# card background colors by status
-_STATUS_COLORS = {
-    "pending": "#cccccc",
-    "running": "#fd7e14",
-    "success": "#28a745",
-    "failed":  "#dc3545",
-}
+from modules.progress_logic import display_params, parse_run, status_label
+from modules.setup_ui import label_with_tip
 
+
+# ── helpers ───────────────────────────────────────────────────────────────────
+
+def _status_badge(state):
+    """Return a colored status badge element for an accordion title."""
+    return ui.tags.span(state, class_=f"status-badge status-{state}")
+
+
+def _param_grid(args, global_block, analysis=None):
+    """Build a read-only 2-column grid of per-job parameters."""
+    params = display_params(args, global_block, analysis=analysis)
+    if not params:
+        return ui.p("No configurable parameters.", class_="section-hint")
+    cells = []
+    for k, v in params.items():
+        cells.append(ui.div(k.replace("_", " "), class_="param-label"))
+        cells.append(ui.div(str(v) if v != "" else "—", class_="param-value"))
+    return ui.div(*cells, class_="param-grid")
+
+
+def _build_body(task, global_block, entry):
+    """Build the full accordion panel body: param grid + job-id / error lines."""
+    children = [_param_grid(task["args"], global_block, analysis=task.get("analysis"))]
+    job_id  = entry.get("job_id", "")
+    message = entry.get("message", "")
+    if job_id:
+        children.append(ui.p(f"Job ID: {job_id}", class_="job-id-line"))
+    if message:
+        children.append(ui.p(f"Error: {message}", class_="error-line"))
+    return ui.div(*children)
+
+
+# ── module server ─────────────────────────────────────────────────────────────
 
 @module.server
 def progress_server(input, output, session, shared_json):
 
     # per-session state derived from the loaded JSON
-    working_dir = reactive.Value("")
-    run_name    = reactive.Value("")
-    task_list   = reactive.Value([])  # [{id, analysis, output}, ...]
+    global_block = reactive.Value({})
+    working_dir  = reactive.Value("")
+    run_name     = reactive.Value("")
+    task_list    = reactive.Value([])   # [{"id","analysis","args","output"}, ...]
 
     # ── parse JSON whenever the shared path changes ────────────────────────────
 
     @reactive.effect
     @reactive.event(shared_json)
     def _parse_json():
-        """Extract working_dir, run_name, and task list from the loaded JSON."""
+        """Extract global block and task list from the loaded run JSON."""
         path = shared_json.get()
         if not path:
             return
@@ -56,16 +81,15 @@ def progress_server(input, output, session, shared_json):
                 j = json.load(f)
         except Exception:
             return
-        working_dir.set(j["global"].get("working_dir", ""))
-        run_name.set(j["global"].get("run_name", ""))
-        tasks = [
-            {"id": k, "analysis": v["analysis"], "output": v["args"].get("output", "")}
-            for k, v in j.items()
-            if k not in ("scripts", "global")
-        ]
+
+        gb, tasks = parse_run(j)
+        global_block.set(gb)
+        working_dir.set(gb.get("working_dir", ""))
+        run_name.set(gb.get("run_name", ""))
         task_list.set(tasks)
-        # initialise any not-yet-seen tasks as "pending" in the status file
-        wd, rn = working_dir.get(), run_name.get()
+
+        # seed any not-yet-seen tasks as "pending" in the status file
+        wd, rn = gb.get("working_dir", ""), gb.get("run_name", "")
         if wd and rn:
             for t in tasks:
                 entry = _run_status.load_status(wd, rn).get(t["id"], {})
@@ -74,23 +98,7 @@ def progress_server(input, output, session, shared_json):
                                             status="pending", job_id="",
                                             message="", output=t["output"])
 
-    # ── upload/display JSON ────────────────────────────────────────────────────
-
-    @render.ui
-    def show_or_upload_json():
-        """Display the loaded JSON config or prompt to upload one."""
-        elems = [ui.input_file("upload_json", "Upload / Reload JSON File", accept=[".json"])]
-        path = shared_json.get()
-        if path:
-            try:
-                with open(path) as f:
-                    content = json.load(f)
-                elems.append(ui.pre(json.dumps(content, indent=4)))
-            except FileNotFoundError:
-                elems.append(ui.div("Error: saved JSON file not found."))
-        else:
-            elems.append(ui.div("No JSON file loaded. Upload one or save an analysis in Setup."))
-        return ui.div(*elems)
+    # ── upload handler ─────────────────────────────────────────────────────────
 
     @reactive.effect
     @reactive.event(input.upload_json)
@@ -103,11 +111,29 @@ def progress_server(input, output, session, shared_json):
     # ── run-button state ───────────────────────────────────────────────────────
 
     @reactive.effect
-    def _update_run_button():
+    def _toggle_run():
         """Enable Run when JSON is loaded and no tasks are currently running."""
-        has_json  = bool(shared_json.get())
+        has_json   = bool(shared_json.get())
         is_running = run_all_tasks.status() == "running"
         ui.update_action_button("run_analysis", disabled=not has_json or is_running)
+
+    # ── run header ─────────────────────────────────────────────────────────────
+
+    @render.ui
+    def run_header():
+        """Show a one-line summary of the loaded run, or a prompt to load one."""
+        path = shared_json.get()
+        if not path:
+            return ui.p("No analysis loaded — save one in Setup or upload a JSON file.",
+                        class_="section-hint")
+        rn = run_name.get()
+        wd = working_dir.get()
+        n  = len(task_list.get())
+        return ui.p(
+            ui.tags.strong(rn or "(unnamed)"),
+            f" · {wd or '—'} · {n} task{'s' if n != 1 else ''}",
+            class_="run-header",
+        )
 
     # ── concurrent task execution ──────────────────────────────────────────────
 
@@ -120,43 +146,41 @@ def progress_server(input, output, session, shared_json):
         """
         with open(json_path) as f:
             j = json.load(f)
-        tasks = {k: v for k, v in j.items() if k not in ("scripts", "global")}
+        _, tasks = parse_run(j)
 
-        def _run_one(task_id, config):
-            """Run a single task synchronously, updating status file on state changes."""
-            analysis = config["analysis"]
-            args     = config["args"]
-            output   = args.get("output", "")
+        def _run_one(task):
+            """Run a single task synchronously, updating the status file on each state change."""
+            tid      = task["id"]
+            analysis = task["analysis"]
+            args     = task["args"]
+            output   = task["output"]
             runner   = TASK_RUNNERS.get(analysis)
             if runner is None:
-                _run_status.update_task(wd, rn, task_id, status="failed",
+                _run_status.update_task(wd, rn, tid, status="failed",
                                         message=f"Unknown analysis type '{analysis}'")
                 return
 
-            # check if already complete (resume: skip finished tasks)
-            entry = _run_status.load_status(wd, rn).get(task_id, {})
+            # skip tasks already completed (resume logic)
+            entry = _run_status.load_status(wd, rn).get(tid, {})
             if _run_status.is_complete(entry, output):
-                return  # already done on a previous run
+                return
 
-            _run_status.update_task(wd, rn, task_id, status="running", job_id="")
+            _run_status.update_task(wd, rn, tid, status="running", job_id="")
 
-            # progress_cb captures EBI jobIds into the status file
+            # capture EBI jobIds into the status file via the progress callback
             def _cb(job_id, status_str):
-                _run_status.update_task(wd, rn, task_id, job_id=job_id)
+                _run_status.update_task(wd, rn, tid, job_id=job_id)
 
             try:
                 runner(args, progress_cb=_cb)
-                _run_status.update_task(wd, rn, task_id, status="success", output=output)
+                _run_status.update_task(wd, rn, tid, status="success", output=output)
             except Exception as exc:
-                _run_status.update_task(wd, rn, task_id, status="failed",
-                                        message=str(exc))
+                _run_status.update_task(wd, rn, tid, status="failed", message=str(exc))
 
         loop = asyncio.get_running_loop()
-        coros = [
-            loop.run_in_executor(None, _run_one, tid, cfg)
-            for tid, cfg in tasks.items()
-        ]
-        await asyncio.gather(*coros)
+        await asyncio.gather(*[
+            loop.run_in_executor(None, _run_one, t) for t in tasks
+        ])
         return "done"
 
     @reactive.effect
@@ -177,44 +201,72 @@ def progress_server(input, output, session, shared_json):
             return {}
         return _run_status.load_status(wd, rn)
 
-    # ── task cards ─────────────────────────────────────────────────────────────
+    # ── task accordion ─────────────────────────────────────────────────────────
+    #
+    # Two-step render to prevent the 2-second status poll from collapsing open
+    # panels:
+    #   1. task_cards — builds the accordion DOM; fires only when task_list
+    #      changes (new JSON loaded), so open/closed state is never reset.
+    #   2. _update_status_badges — fires every poll cycle and surgically updates
+    #      each panel's title and body via update_accordion_panel, leaving the
+    #      open/closed state untouched.
+
+    _ACCORDION_ID = "task_accordion"
 
     @render.ui
+    @reactive.event(task_list, global_block)
     def task_cards():
-        """Render one status card per task; colors reflect current status."""
-        tasks  = task_list.get()
-        status = _current_status()
+        """Render accordion skeleton; re-renders only when the task list changes."""
+        tasks = task_list.get()
+        gb    = global_block.get()
 
         if not tasks:
-            return ui.div("No tasks loaded — save an analysis in Setup or upload a JSON.")
+            return ui.p(
+                "No tasks loaded — save an analysis in Setup or upload a JSON file.",
+                class_="section-hint",
+            )
 
-        cards = []
+        # read status directly (not via reactive calc) to avoid a polling dependency
+        wd, rn = working_dir.get(), run_name.get()
+        status = _run_status.load_status(wd, rn) if (wd and rn) else {}
+
+        panels = []
         for t in tasks:
-            entry   = status.get(t["id"], {})
-            st      = entry.get("status", "pending")
-            job_id  = entry.get("job_id", "")
-            message = entry.get("message", "")
-            color   = _STATUS_COLORS.get(st, "#cccccc")
-
-            body = [
-                ui.tags.strong(t["id"]),
-                ui.p(f"Analysis: {t['analysis']}", style="margin:0;"),
-                ui.p(f"Status: {st}", style="margin:0;"),
-            ]
-            if job_id:
-                body.append(ui.p(f"Job ID: {job_id}",
-                                 style="margin:0; font-size:0.8em; font-family:monospace;"))
-            if message:
-                body.append(ui.p(f"Error: {message}",
-                                 style="margin:0; font-size:0.85em; color:#dc3545;"))
-
-            cards.append(
-                ui.card(
-                    ui.card_body(*body),
-                    style=f"border-left: 6px solid {color}; margin-bottom: 8px;",
+            tid   = t["id"]
+            label = tid.rsplit("_", 1)[0]
+            entry = status.get(tid, {})
+            state = status_label(entry)
+            panels.append(
+                ui.accordion_panel(
+                    ui.span(label,
+                            ui.tags.span(t["analysis"], class_="task-type-badge"),
+                            _status_badge(state)),
+                    _build_body(t, gb, entry),
+                    value=tid,
                 )
             )
-        return ui.div(*cards)
+
+        return ui.accordion(*panels, open=False, multiple=True,
+                            class_="task-accordion", id=_ACCORDION_ID)
+
+    @reactive.effect
+    def _update_status_badges():
+        """Surgically update each panel title + body without re-rendering the accordion."""
+        tasks  = task_list.get()
+        gb     = global_block.get()
+        status = _current_status()   # provides the 2 s invalidation while running
+        for t in tasks:
+            tid   = t["id"]
+            label = tid.rsplit("_", 1)[0]
+            entry = status.get(tid, {})
+            state = status_label(entry)
+            ui.update_accordion_panel(
+                _ACCORDION_ID, tid,
+                _build_body(t, gb, entry),
+                title=ui.span(label,
+                              ui.tags.span(t["analysis"], class_="task-type-badge"),
+                              _status_badge(state)),
+            )
 
     # ── download completed results ─────────────────────────────────────────────
 

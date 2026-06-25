@@ -52,7 +52,7 @@
 			"type": "plddt", 
 			"args": {
 				"pdb": "",
-				"evalue": ["", 1e-200, 1e-100, 1e-50, 1e-10, 1e-5, 1e-3, 1e-1, 1.0],
+				"evalue": [1e-10, 1e-200, 1e-100, 1e-50, 1e-5, 1e-3, 1e-1, 1.0],
 				"percent_id": "",
 				"output": ".txt",
 				"existing_AF2": 1

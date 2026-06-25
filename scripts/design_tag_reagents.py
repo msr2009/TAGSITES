@@ -221,6 +221,21 @@ def design_reagents(
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
+def main(genewise, genomic_fasta, output, n_guides=5, arm_length=500,
+         pam='NGG', guide_length=20, cut_offset=3):
+    """Entry point for in-process calls from task_runners."""
+    df = design_reagents(
+        genewise_out  = genewise,
+        genomic_fasta = genomic_fasta,
+        n_guides      = n_guides,
+        arm_length    = arm_length,
+        pam           = pam,
+        guide_length  = guide_length,
+        cut_offset    = cut_offset,
+    )
+    df.to_csv(output, sep='\t', index=False)
+
+
 if __name__ == '__main__':
     from argparse import ArgumentParser
 
