@@ -1,9 +1,5 @@
 /* ── Native canvas plot (line tracks + features + sequence strip) ────────────── */
 
-#ts-plot-wrap {
-  position: relative;   /* legend, tooltip, and button positioned absolutely within */
-  width: 100%;
-}
 
 #ts_plot_div {
   display: block;
@@ -60,20 +56,98 @@
 
 /* ── 3D structure pane ──────────────────────────────────────────────────────── */
 
-#ts-struct-pane {
-  display: none; /* shown via JS when PDB is available */
+/* Outer column wrapper fills the grid cell (Bootstrap row uses align-items:stretch) */
+.ts-struct-col {
+  display: flex;
   flex-direction: column;
   height: 100%;
 }
 
+#ts-struct-pane {
+  display: none; /* shown via JS when PDB is available */
+  flex-direction: column;
+  flex: 1;        /* fill .ts-struct-col */
+}
+
 #ts-viewer-container {
   width: 100%;
-  height: 400px;
+  flex: 1;          /* fill remaining height after color-by buttons */
+  min-height: 420px;
   position: relative;
   background: #ffffff;
   border: 1px solid #ddd;
   border-radius: 4px;
   overflow: hidden;
+}
+
+/* structure color legend — floats over the bottom-left of the viewer */
+#ts-struct-pane {
+  position: relative;
+}
+
+#ts-struct-legend {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  z-index: 100;
+  background: rgba(255, 255, 255, 0.70);
+  padding: 6px 9px;
+  border-radius: 4px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.15);
+  font-size: 11px;
+  width: 200px;       /* fixed width so the gradient bar has room to fill */
+  max-width: 280px;
+  pointer-events: none;
+}
+
+.ts-sleg-label {
+  color: #555;
+  margin-bottom: 3px;
+  font-size: 10px;
+}
+
+.ts-sleg-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.ts-sleg-bar {
+  flex: 1;
+  height: 10px;
+  border-radius: 3px;
+}
+
+.ts-sleg-tick {
+  color: #666;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.ts-sleg-cat {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+}
+
+.ts-sleg-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ts-sleg-swatch {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.ts-sleg-name {
+  color: #555;
+  font-size: 10px;
+  word-break: break-word;
 }
 
 /* color-by button row above the structure viewer */
@@ -195,11 +269,14 @@
 .ts-main-left {
   display: flex;
   flex-direction: column;
+  height: 100%;   /* fill the grid cell so the right column can match it */
   gap: 6px;
 }
 
-/* give the plot wrap a reserved min-height matching the canvas */
 #ts-plot-wrap {
+  position: relative;
+  width: 100%;
+  flex: 1;          /* grow to fill .ts-main-left after the toolbar */
   min-height: 520px;
 }
 

@@ -430,11 +430,8 @@
     var top = layout.legendTop;
     var h   = LEGEND_H;
 
-    ctx.fillStyle   = "#f4f4f4";
+    ctx.fillStyle = "#ffffff";
     ctx.fillRect(LEFT_GUTTER, top, inf.dataW, h);
-    ctx.strokeStyle = "#d8d8d8";
-    ctx.lineWidth   = 0.5;
-    ctx.strokeRect(LEFT_GUTTER, top, inf.dataW, h);
 
     legendHitBoxes = [];
     if (lineTracks.length === 0) return;
@@ -723,20 +720,6 @@
       }
     });
 
-    // scroll-wheel zoom centered on cursor position
-    canvas.addEventListener("wheel", function (e) {
-      e.preventDefault();
-      var rect   = canvas.getBoundingClientRect();
-      var cx     = e.clientX - rect.left;
-      var inf    = getCanvasInfo();
-      if (!inf || !inDataArea(cx, inf)) return;
-      var r      = getXRange();
-      var factor = e.deltaY > 0 ? 1.18 : 1 / 1.18;
-      var pivot  = r[0] + (cx - LEFT_GUTTER) / inf.dataW * (r[1] - r[0]);
-      currentRange = clampRange(pivot - (pivot - r[0]) * factor, pivot + (r[1] - pivot) * factor);
-      render();
-    }, { passive: false });
-
     // ── Click: legend toggle or residue selection ────────────────────────────────
 
     canvas.addEventListener("click", function (e) {
@@ -837,7 +820,9 @@
       }
     );
 
+    viewer.resize();
     viewer.zoomTo();
+    viewer.zoom(1.5, 0);  // tighter fit to fill the panel
     viewer.render();
   }
 
@@ -882,11 +867,29 @@
 
   /* ── Exposed globals ─────────────────────────────────────────────────────────── */
 
+  window.tsZoomIn = function () {
+    var r    = getXRange();
+    var mid  = (r[0] + r[1]) / 2;
+    var half = (r[1] - r[0]) / 2 / 1.5;
+    currentRange = clampRange(mid - half, mid + half);
+    render();
+  };
+
+  window.tsZoomOut = function () {
+    var r    = getXRange();
+    var mid  = (r[0] + r[1]) / 2;
+    var half = (r[1] - r[0]) / 2 * 1.5;
+    currentRange = clampRange(mid - half, mid + half);
+    render();
+  };
+
+  // Switch drag mode; clicking the active button reverts to default (zoom/set-region).
   window.tsSetMode = function (mode) {
-    dragMode = mode;
+    dragMode = (dragMode === mode && mode !== "zoom") ? "zoom" : mode;
     document.querySelectorAll(".ts-mode-btn").forEach(function (btn) {
-      var isTarget = (btn.getAttribute("onclick") || "").indexOf("'" + mode + "'") !== -1;
-      btn.classList.toggle("ts-mode-active", isTarget);
+      var onclick = btn.getAttribute("onclick") || "";
+      var isMode  = onclick.indexOf("tsSetMode") !== -1;
+      btn.classList.toggle("ts-mode-active", isMode && onclick.indexOf("'" + dragMode + "'") !== -1);
     });
   };
 
@@ -949,10 +952,11 @@
     perResidueColors = [];
     currentRange     = null;
     dragMode         = "zoom";
-    // reset toolbar active state to zoom
+    // reset toolbar — set-region (zoom) is the default active mode
     document.querySelectorAll(".ts-mode-btn").forEach(function (btn) {
+      var onclick = btn.getAttribute("onclick") || "";
       btn.classList.toggle("ts-mode-active",
-        (btn.getAttribute("onclick") || "").indexOf("'zoom'") !== -1);
+        onclick.indexOf("tsSetMode") !== -1 && onclick.indexOf("'zoom'") !== -1);
     });
 
     // attach interactions exactly once per canvas element
@@ -983,7 +987,51 @@
   Shiny.addCustomMessageHandler("tagsites_set_colors", function (msg) {
     perResidueColors = msg.colors || [];
     applyViewerColors();
+    // when no data colors are set (None), show the default N→C rainbow legend
+    var legend = msg.legend || (perResidueColors.length === 0 ? {type: "rainbow"} : null);
+    renderStructLegend(legend);
   });
+
+  // ── Structure color legend ─────────────────────────────────────────────────────
+
+  // viridis stops for the gradient bar (matches residue_colors_gradient in Python)
+  var _VIRIDIS_CSS = "linear-gradient(to right," +
+    "#440154,#48306e,#3e4989,#31688e,#26838f,#1f9e89,#35b779,#6ece58,#b5de2b,#fde725)";
+
+  // rainbow N→C matches 3Dmol's default chain-spectrum coloring
+  var _RAINBOW_CSS = "linear-gradient(to right,#0000ff,#00ffff,#00ff00,#ffff00,#ff0000)";
+
+  function renderStructLegend(legend) {
+    var el = document.getElementById("ts-struct-legend");
+    if (!el) return;
+    if (!legend) { el.innerHTML = ""; return; }
+
+    if (legend.type === "gradient") {
+      el.innerHTML =
+        '<div class="ts-sleg-label">' + legend.label + '</div>' +
+        '<div class="ts-sleg-bar-row">' +
+          '<span class="ts-sleg-tick">' + legend.vmin + '</span>' +
+          '<div class="ts-sleg-bar" style="background:' + _VIRIDIS_CSS + '"></div>' +
+          '<span class="ts-sleg-tick">' + legend.vmax + '</span>' +
+        '</div>';
+    } else if (legend.type === "rainbow") {
+      el.innerHTML =
+        '<div class="ts-sleg-label">N → C</div>' +
+        '<div class="ts-sleg-bar-row">' +
+          '<span class="ts-sleg-tick">N</span>' +
+          '<div class="ts-sleg-bar" style="background:' + _RAINBOW_CSS + '"></div>' +
+          '<span class="ts-sleg-tick">C</span>' +
+        '</div>';
+    } else if (legend.type === "categorical") {
+      var items = (legend.items || []).map(function (it) {
+        return '<div class="ts-sleg-item">' +
+          '<span class="ts-sleg-swatch" style="background:' + it.color + '"></span>' +
+          '<span class="ts-sleg-name">' + it.label + '</span>' +
+        '</div>';
+      }).join("");
+      el.innerHTML = '<div class="ts-sleg-cat">' + items + '</div>';
+    }
+  }
 
   Shiny.addCustomMessageHandler("tagsites_set_bg", function (msg) {
     setViewerBackground(msg.bg);

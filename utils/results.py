@@ -272,8 +272,15 @@ def residue_colors_for_track(aa_df, task_name, hex_color):
     return residue_colors_gradient(aa_df, task_name, hex_color)
 
 
-def residue_colors_gradient(aa_df, task_name, hex_color):
-    """White → hex_color gradient for any continuous track, ignoring analysis type."""
+def residue_colors_gradient(aa_df, task_name, hex_color=None):
+    """Viridis gradient for any continuous track (hex_color ignored, kept for API compat)."""
+    # viridis sampled at 9 stops (low → high)
+    _VIRIDIS = [
+        (68,  1,  84), (72,  40, 120), (62,  74, 137), (49, 104, 142),
+        (38, 130, 142), (31, 158, 137), (53, 183, 121), (110, 206,  88),
+        (181, 222,  43), (253, 231,  37),
+    ]
+
     if task_name not in aa_df.columns:
         return []
     series = aa_df.set_index("pos")[task_name]
@@ -283,17 +290,21 @@ def residue_colors_gradient(aa_df, task_name, hex_color):
     else:
         normed = (series - vmin) / (vmax - vmin)
 
-    r_end, g_end, b_end = _hex_to_rgb(hex_color)
+    def _viridis_hex(t):
+        # linearly interpolate between the two nearest stops
+        t = max(0.0, min(1.0, t))
+        idx = t * (len(_VIRIDIS) - 1)
+        lo, hi = int(idx), min(int(idx) + 1, len(_VIRIDIS) - 1)
+        frac = idx - lo
+        r = int(_VIRIDIS[lo][0] + (_VIRIDIS[hi][0] - _VIRIDIS[lo][0]) * frac)
+        g = int(_VIRIDIS[lo][1] + (_VIRIDIS[hi][1] - _VIRIDIS[lo][1]) * frac)
+        b = int(_VIRIDIS[lo][2] + (_VIRIDIS[hi][2] - _VIRIDIS[lo][2]) * frac)
+        return f"#{r:02x}{g:02x}{b:02x}"
+
     colors = []
     for pos in sorted(series.index):
         v = normed.get(pos, float("nan"))
-        if pd.isna(v):
-            colors.append("#ffffff")
-        else:
-            r = int(255 + (r_end - 255) * v)
-            g = int(255 + (g_end - 255) * v)
-            b = int(255 + (b_end - 255) * v)
-            colors.append(f"#{r:02x}{g:02x}{b:02x}")
+        colors.append("#aaaaaa" if pd.isna(v) else _viridis_hex(v))
     return colors
 
 
@@ -344,6 +355,67 @@ def residue_colors_for_domains(range_df, seq_len):
     return colors
 
 
+# Qualitative palette for unique-per-annotation coloring — saturated, maximally distinct
+_ANNOTATION_PALETTE = [
+    "#e41a1c", "#1565c0", "#2e7d32", "#e65100", "#6a1b9a",
+    "#00838f", "#ad1457", "#9e9d24", "#283593", "#00695c",
+    "#b71c1c", "#0277bd", "#33691e", "#bf360c", "#4a148c",
+    "#006064", "#880e4f", "#f9a825", "#1a237e", "#004d40",
+]
+
+# Sources shown in the feature panel (same filter applied to plot and structure)
+_FEATURE_SOURCES = {"Pfam", "Phobius", "modification"}
+
+# paint priority: last painted wins; modifications end up on top
+_FEATURE_PAINT_ORDER = ["Pfam", "Phobius", "modification"]
+
+
+def _annotation_color_map(range_df):
+    """Assign unique palette colors to each visible (source, description) pair.
+
+    Only considers rows whose source is in _FEATURE_SOURCES so non-displayed
+    InterPro annotations don't consume palette slots.
+    Returns an ordered dict {(source, desc): hex_color}.
+    """
+    color_map = {}
+    if range_df is None:
+        return color_map
+    for _, row in range_df.iterrows():
+        if row["source"] not in _FEATURE_SOURCES:
+            continue
+        key = (str(row["source"]), str(row["description"]))
+        if key not in color_map:
+            color_map[key] = _ANNOTATION_PALETTE[len(color_map) % len(_ANNOTATION_PALETTE)]
+    return color_map
+
+
+def residue_colors_for_annotations(range_df, seq_len):
+    """Unique color per visible annotation (source + description) for the structure viewer.
+
+    Mirrors exactly the annotations drawn in the feature panel.
+    Returns (per_residue_colors, legend_items).
+    """
+    color_map = _annotation_color_map(range_df)
+    colors = ["#e8e8e8"] * seq_len
+
+    # paint in priority order so modifications land on top
+    for source in _FEATURE_PAINT_ORDER:
+        for _, row in range_df[range_df["source"] == source].iterrows():
+            key = (str(row["source"]), str(row["description"]))
+            color = color_map.get(key)
+            if color is None:
+                continue
+            start, stop = int(row["start"]), int(row["stop"])
+            for pos in range(start - 1, min(stop, seq_len)):
+                colors[pos] = color
+
+    legend_items = [
+        {"color": color, "label": f"{desc} ({src})"}
+        for (src, desc), color in color_map.items()
+    ]
+    return colors, legend_items
+
+
 def build_plot_payload(aa_df, range_df, title="Results"):
     """Serialize plot data for the native canvas renderer (tagsites_set_plot message).
 
@@ -361,16 +433,18 @@ def build_plot_payload(aa_df, range_df, title="Results"):
 
     range_features = []
     if range_df is not None and not range_df.empty:
+        color_map = _annotation_color_map(range_df)
         for _, row in range_df.iterrows():
             src = row["source"]
             if src not in y_positions:
                 continue
+            key = (str(src), str(row["description"]))
             range_features.append({
                 "source": src,
                 "start": int(row["start"]),
                 "stop": int(row["stop"]),
                 "desc": str(row["description"]),
-                "color": DOMAIN_SOURCE_COLORS.get(src, "#888888"),
+                "color": color_map.get(key, "#888888"),
                 "yRow": y_positions[src],
             })
 

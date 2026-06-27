@@ -11,7 +11,10 @@ def app_server(input, output, session):
     # created inside app_server so each browser session gets its own value
     shared_values = reactive.Value("")
 
+    # chosen tag sites — list of residue positions (ints) from the Results page
+    shared_sites = reactive.Value([])
+
     setup_server("setup", shared_json=shared_values)
     progress_server("progress", shared_json=shared_values)
-    results_server("results", shared_json=shared_values)
-    reagents_server("reagents", shared_json=shared_values)
+    results_server("results", shared_json=shared_values, shared_sites=shared_sites)
+    reagents_server("reagents", shared_json=shared_values, shared_sites=shared_sites)

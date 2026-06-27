@@ -8,10 +8,57 @@ from utils.results import (
     assign_task_colors,
     residue_colors_for_track,
     residue_colors_gradient,
-    residue_colors_for_domains,
+    residue_colors_for_annotations,
     _guess_analysis_type,
 )
-from config import RESULTS_TYPE_DICT
+from config import RESULTS_TYPE_DICT, DOMAIN_SOURCE_COLORS
+
+# pLDDT 4-band legend items (values stored 0-1 after /100 at load time)
+_PLDDT_LEGEND = [
+    {"color": "#0053D6", "label": "Very high (≥0.90)"},
+    {"color": "#65CBF3", "label": "Confident (0.70–0.90)"},
+    {"color": "#FFDB13", "label": "Low (0.50–0.70)"},
+    {"color": "#FF7D45", "label": "Very low (<0.50)"},
+]
+
+
+def _build_colors_and_legend(track, task_name, scheme, aa_df, range_df, seq_len, hex_color):
+    """Single entry point: compute per-residue structure colors AND the matching legend.
+
+    Returns (colors, legend) where legend is a dict ready for JSON serialization,
+    or (None, None) when the track cannot be resolved.
+    """
+    # ── Annotation coloring (domains / modifications / Phobius) ─────────────────
+    if track == "__domains__":
+        if range_df is None or not seq_len:
+            return None, None
+        colors, items = residue_colors_for_annotations(range_df, seq_len)
+        return colors, {"type": "categorical", "items": items}
+
+    # ── Continuous track coloring ────────────────────────────────────────────────
+    if aa_df is None or task_name not in aa_df.columns:
+        return None, None
+
+    if scheme == "continuous":
+        colors = residue_colors_gradient(aa_df, task_name, hex_color)
+    else:
+        colors = residue_colors_for_track(aa_df, task_name, hex_color)
+
+    # pLDDT categorical (4-band) — excludes SASA and forced-continuous variants
+    if (_guess_analysis_type(task_name) == "plddt"
+            and not task_name.endswith("_sasa")
+            and scheme != "continuous"):
+        legend = {"type": "categorical", "items": _PLDDT_LEGEND}
+    else:
+        series = aa_df[task_name].dropna()
+        legend = {
+            "type": "gradient",
+            "label": task_name,
+            "vmin": round(float(series.min()), 3),
+            "vmax": round(float(series.max()), 3),
+        }
+
+    return colors, legend
 
 
 @module.server
@@ -60,31 +107,28 @@ def results_server(input, output, session, shared_json, shared_sites):
         ui.update_select("color_by", choices=choices, selected="(none)")
 
         await _send_plot(aa_df, range_df, meta, json_content["global"]["run_name"])
+        # always reset structure colors on load — don't rely on color_by reactive firing
+        # (it won't fire if color_by was already "(none)" before this load)
+        await session.send_custom_message("tagsites_set_colors", {"colors": [], "legend": None})
         if meta.get("pdb_path"):
             await _send_struct(meta["pdb_path"])
         pending_sites.set(set())
         shared_sites.set([])
 
     @reactive.effect
-    @reactive.event(input.plot_results_button)
+    @reactive.event(input.json_file_input)
     async def load_results():
-        """Load results on button click (uploaded file or shared pipeline JSON)."""
+        """Auto-plot when the user selects an uploaded JSON file."""
+        if not input.json_file_input():
+            return
         try:
-            if shared_json.get():
-                with open(shared_json.get()) as f:
-                    json_content = json.load(f)
-            elif input.json_file_input():
-                with open(input.json_file_input()[0]["datapath"]) as f:
-                    json_content = json.load(f)
-            else:
-                ui.notification_show("No JSON file loaded.", type="warning", duration=4)
-                return
+            with open(input.json_file_input()[0]["datapath"]) as f:
+                json_content = json.load(f)
         except FileNotFoundError:
-            ui.notification_show("JSON file not found. Has the analysis been saved?",
-                                 type="error", duration=6)
+            ui.notification_show("Uploaded file not found.", type="error", duration=6)
             return
         except json.JSONDecodeError:
-            ui.notification_show("Could not parse JSON file — file may be malformed.",
+            ui.notification_show("Could not parse JSON — file may be malformed.",
                                  type="error", duration=6)
             return
         await _do_load(json_content)
@@ -249,30 +293,25 @@ def results_server(input, output, session, shared_json, shared_sites):
     async def sync_js_colors():
         """Compute per-residue colors for the selected track and send to 3D viewer."""
         track = input.color_by()
-        aa_df = aa_data.get()
-        range_df = range_data.get()
+        if not track or track == "(none)":
+            await session.send_custom_message("tagsites_set_colors",
+                                              {"colors": [], "legend": None})
+            return
+
+        task_name, scheme = track.rsplit(":", 1) if ":" in track else (track, "categorical")
         meta = run_meta.get()
         seq_len = meta.get("seq_len", 0) if meta else 0
-        if not track or track == "(none)":
-            await session.send_custom_message("tagsites_set_colors", {"colors": []})
-            return
-        # parse optional scheme suffix added for pLDDT tracks (e.g. "AF2_plddt:continuous")
-        if ":" in track:
-            task_name, scheme = track.rsplit(":", 1)
-        else:
-            task_name, scheme = track, "categorical"
+        hex_color = task_colors.get().get(task_name, "#888888")
 
-        if track == "__domains__" and range_df is not None and seq_len:
-            colors = residue_colors_for_domains(range_df, seq_len)
-        elif aa_df is not None and task_name in aa_df.columns:
-            hex_color = task_colors.get().get(task_name, "#888888")
-            if scheme == "continuous":
-                colors = residue_colors_gradient(aa_df, task_name, hex_color)
-            else:
-                colors = residue_colors_for_track(aa_df, task_name, hex_color)
-        else:
+        colors, legend = _build_colors_and_legend(
+            track, task_name, scheme,
+            aa_data.get(), range_data.get(), seq_len, hex_color,
+        )
+        if colors is None:
             return
-        await session.send_custom_message("tagsites_set_colors", {"colors": colors})
+
+        await session.send_custom_message("tagsites_set_colors",
+                                          {"colors": colors, "legend": legend})
 
     # ── Outputs ──────────────────────────────────────────────────────────────────
 

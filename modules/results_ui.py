@@ -11,11 +11,9 @@ def results_ui():
 
         ui.h2("Results"),
 
-        # file upload + plot button — compact inline row
+        # file upload — auto-plots on selection
         ui.div(
             ui.input_file("json_file_input", "Upload results JSON", accept=[".json"]),
-            ui.input_action_button("plot_results_button", "Plot Results",
-                                   class_="btn-primary"),
             class_="ts-controls-row",
         ),
         ui.hr(),
@@ -24,14 +22,18 @@ def results_ui():
         ui.layout_columns(
             # left column: toolbar + native canvas plot
             ui.div(
-                # zoom / pan / reset toolbar
+                # pan / set-region / zoom-in / zoom-out / reset toolbar
                 ui.div(
-                    ui.tags.button("⊕ Zoom", onclick="tsSetMode('zoom')",
-                                   class_="btn btn-sm ts-mode-btn ts-mode-active"),
-                    ui.tags.button("✥ Pan",  onclick="tsSetMode('pan')",
-                                   class_="btn btn-sm ts-mode-btn"),
-                    ui.tags.button("⟳ Reset", onclick="tsResetZoom()",
-                                   class_="btn btn-sm btn-outline-secondary"),
+                    ui.tags.button("✥", onclick="tsSetMode('pan')",
+                                   class_="btn btn-sm ts-mode-btn", title="Pan"),
+                    ui.tags.button("⬚", onclick="tsSetMode('zoom')",
+                                   class_="btn btn-sm ts-mode-btn ts-mode-active", title="Set region"),
+                    ui.tags.button("⊕", onclick="tsZoomIn()",
+                                   class_="btn btn-sm ts-mode-btn", title="Zoom in"),
+                    ui.tags.button("⊖", onclick="tsZoomOut()",
+                                   class_="btn btn-sm ts-mode-btn", title="Zoom out"),
+                    ui.tags.button("⟳", onclick="tsResetZoom()",
+                                   class_="btn btn-sm btn-outline-secondary", title="Reset zoom"),
                     class_="ts-plot-toolbar",
                 ),
                 ui.div(
@@ -53,10 +55,13 @@ def results_ui():
                     ui.output_ui("color_buttons_ui"),
                     # the viewer itself
                     ui.div(id="ts-viewer-container"),
+                    # color legend (populated by JS on color change)
+                    ui.div(id="ts-struct-legend"),
                     id="ts-struct-pane",
                 ),
+                class_="ts-struct-col",
             ),
-            col_widths=(8, 4),
+            col_widths=(7, 5),
         ),
 
         # ── Chosen tag sites: chips | Add highlighted | Clear ─────────────────
