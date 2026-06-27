@@ -53,23 +53,6 @@ def results_ui():
                     ui.output_ui("color_buttons_ui"),
                     # the viewer itself
                     ui.div(id="ts-viewer-container"),
-                    # background selector + download below the viewer
-                    ui.div(
-                        ui.tags.button("White",
-                                       onclick="tsSetBackground('white')",
-                                       class_="btn btn-sm ts-bg-btn"),
-                        ui.tags.button("Black",
-                                       onclick="tsSetBackground('black')",
-                                       class_="btn btn-sm ts-bg-btn"),
-                        ui.tags.button("Transparent",
-                                       onclick="tsSetBackground('transparent')",
-                                       class_="btn btn-sm ts-bg-btn ts-bg-btn-active",
-                                       id="ts-bg-transparent"),
-                        ui.tags.button("⬇ Download",
-                                       onclick="tsDownloadStructure()",
-                                       class_="btn btn-sm btn-outline-primary ts-dl-btn"),
-                        class_="ts-struct-bottom",
-                    ),
                     id="ts-struct-pane",
                 ),
             ),

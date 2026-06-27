@@ -57,44 +57,6 @@
   box-shadow: 0 2px 6px rgba(0,0,0,0.25);
 }
 
-/* legend overlay */
-#ts-legend {
-  position: absolute;
-  top: 32px;
-  right: 14px;
-  background: rgba(255, 255, 255, 0.93);
-  border: 1px solid #ccc;
-  border-radius: 4px;
-  padding: 5px 9px;
-  font-size: 12px;
-  z-index: 10;
-  min-width: 80px;
-  box-shadow: 0 1px 4px rgba(0,0,0,0.12);
-}
-
-.ts-legend-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: 3px 0;
-  cursor: pointer;
-  user-select: none;
-  white-space: nowrap;
-}
-
-.ts-legend-item.ts-hidden {
-  opacity: 0.35;
-  text-decoration: line-through;
-}
-
-.ts-legend-swatch {
-  display: inline-block;
-  width: 16px;
-  height: 3px;
-  flex-shrink: 0;
-  border-radius: 1px;
-}
-
 
 /* ── 3D structure pane ──────────────────────────────────────────────────────── */
 
@@ -140,38 +102,6 @@
   background: #888;
   color: #fff;
   border-color: #777;
-}
-
-/* background selector + download row below the structure viewer */
-.ts-struct-bottom {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 6px;
-}
-
-/* medium gray background toggle buttons */
-.ts-bg-btn {
-  color: #888;
-  background: #f5f5f5;
-  border: 1px solid #ccc;
-}
-
-.ts-bg-btn:hover {
-  color: #555;
-  background: #e8e8e8;
-  border-color: #bbb;
-}
-
-.ts-bg-btn.ts-bg-btn-active {
-  color: #fff;
-  background: #888;
-  border-color: #777;
-}
-
-/* download button pushed to the far right */
-.ts-dl-btn {
-  margin-left: auto;
 }
 
 

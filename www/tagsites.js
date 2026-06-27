@@ -35,6 +35,7 @@
   var rangeFeatures = [];   // [{source, start, stop, desc, color, yRow}]
   var hiddenTracks  = new Set();
   var plotTitle     = "";
+  var legendHitBoxes = [];  // [{name, x0, y0, x1, y1}] — rebuilt on each render
 
   // 3D-viewer click timer
   var structLastPos  = null;
@@ -53,6 +54,7 @@
   var RIGHT_GUTTER = 14;
   var TOP_GUTTER   = 28;   // title
   var SEQ_H        = 58;   // fixed height for sequence strip
+  var LEGEND_H     = 22;   // fixed-height legend band between line and feature panels
   var PANEL_GAP    = 8;    // gap between panels
   // line panel gets 65% of the remaining height; feature panel gets the rest
   var LINE_FRAC    = 0.65;
@@ -168,17 +170,23 @@
 
   // Compute panel boundary positions (all in CSS px, top-down).
   function getPanelLayout(cssH) {
-    // content area sits below title and above fixed SEQ_H, with gaps between panels
-    var contentH = Math.max(cssH - TOP_GUTTER - SEQ_H - PANEL_GAP * 2, 40);
-    var lineH = Math.round(contentH * LINE_FRAC);
-    var featH = contentH - lineH;
+    // fixed overhead: title + legend band + seq strip + 3 gaps
+    var contentH  = Math.max(cssH - TOP_GUTTER - LEGEND_H - SEQ_H - PANEL_GAP * 3, 40);
+    var lineH     = Math.round(contentH * LINE_FRAC);
+    var featH     = contentH - lineH;
+    var lineTop   = TOP_GUTTER;
+    var legendTop = lineTop + lineH + PANEL_GAP;
+    var featTop   = legendTop + LEGEND_H + PANEL_GAP;
+    var seqTop    = featTop + featH + PANEL_GAP;
     return {
-      lineTop: TOP_GUTTER,
-      lineH:   lineH,
-      featTop: TOP_GUTTER + lineH + PANEL_GAP,
-      featH:   featH,
-      seqTop:  TOP_GUTTER + lineH + PANEL_GAP + featH + PANEL_GAP,
-      seqH:    SEQ_H,
+      lineTop:   lineTop,
+      lineH:     lineH,
+      legendTop: legendTop,
+      legendH:   LEGEND_H,
+      featTop:   featTop,
+      featH:     featH,
+      seqTop:    seqTop,
+      seqH:      SEQ_H,
     };
   }
 
@@ -207,6 +215,7 @@
 
     drawTitle(ctx, inf, layout);
     drawLinePanel(ctx, inf, layout);
+    drawLegendBand(ctx, inf, layout);
     drawFeaturePanel(ctx, inf, layout);
     drawSeqStrip(ctx, inf, layout);
 
@@ -330,14 +339,10 @@
 
   /* ── Feature panel (row 2: range annotations) ──────────────────────────────── */
 
-  // Row positions match Python's y_positions = {"Phobius":2, "Pfam":4, "modification":6}
   var FEAT_ROWS = ["Phobius", "Pfam", "modification"];
-  var FEAT_YVALS = { Phobius: 2, Pfam: 4, modification: 6 };
-  var FEAT_YMIN  = 0, FEAT_YMAX = 8;  // axis range matching Python
 
   function drawFeaturePanel(ctx, inf, layout) {
     var top = layout.featTop, h = layout.featH;
-    var ySpan = FEAT_YMAX - FEAT_YMIN;
 
     // panel background + border
     ctx.fillStyle   = "#fafafa";
@@ -346,30 +351,37 @@
     ctx.lineWidth   = 1;
     ctx.strokeRect(LEFT_GUTTER, top, inf.dataW, h);
 
+    // only show rows that actually have data
+    var activeRows = FEAT_ROWS.filter(function (name) {
+      return rangeFeatures.some(function (f) { return f.source === name; });
+    });
+    if (activeRows.length === 0) return;
+
+    // assign evenly-spaced y positions within the panel
+    var n = activeRows.length;
+    var dynYPos = {};
+    activeRows.forEach(function (name, idx) { dynYPos[name] = idx + 1; });
+    var dynYMin = 0, dynYMax = n + 1;
+    var ySpan   = dynYMax - dynYMin;
+
     // row labels and subtle separators
     ctx.textAlign    = "right";
     ctx.textBaseline = "middle";
     ctx.font         = "10px sans-serif";
     ctx.fillStyle    = "#777";
-    FEAT_ROWS.forEach(function (name) {
-      var yv  = FEAT_YVALS[name];
-      var py  = top + h - (yv - FEAT_YMIN) / ySpan * h;
-      // row separator
+    activeRows.forEach(function (name) {
+      var py = top + h - (dynYPos[name] - dynYMin) / ySpan * h;
       ctx.strokeStyle = "#ebebeb";
       ctx.lineWidth   = 0.5;
       ctx.beginPath();
       ctx.moveTo(LEFT_GUTTER, py);
       ctx.lineTo(LEFT_GUTTER + inf.dataW, py);
       ctx.stroke();
-      // label
       ctx.fillText(name, LEFT_GUTTER - 3, py);
     });
 
-    if (rangeFeatures.length === 0) return;
-
-    var r = getXRange();
-    var rowPx   = (2 / ySpan) * h;          // pixels per 2-unit row spacing
-    var bandH   = Math.max(6, rowPx * 0.55); // ~55% of row height, min 6px
+    var r     = getXRange();
+    var bandH = Math.max(6, (h / ySpan) * 0.55);
 
     // clip feature rects to data area
     ctx.save();
@@ -378,16 +390,15 @@
     ctx.clip();
 
     rangeFeatures.forEach(function (feat) {
-      var yv = FEAT_YVALS[feat.source];
+      var yv = dynYPos[feat.source];
       if (yv === undefined) return;
-      // skip entirely off-screen features
       if (feat.stop < r[0] || feat.start > r[1]) return;
 
       var x0 = posToX(feat.start - 0.5, inf);
       var x1 = posToX(feat.stop  + 0.5, inf);
       if (x1 <= x0 + 0.5) return;
 
-      var py = top + h - (yv - FEAT_YMIN) / ySpan * h;
+      var py = top + h - (yv - dynYMin) / ySpan * h;
 
       ctx.globalAlpha = 0.78;
       ctx.fillStyle   = feat.color;
@@ -400,8 +411,8 @@
       // inline label when rect is wide enough
       var w = x1 - x0;
       if (w > 28) {
-        var label  = feat.desc.length > 14 ? feat.desc.slice(0, 13) + "…" : feat.desc;
-        var fsize  = Math.min(10, Math.max(7, w * 0.12));
+        var label = feat.desc.length > 14 ? feat.desc.slice(0, 13) + "…" : feat.desc;
+        var fsize = Math.min(10, Math.max(7, w * 0.12));
         ctx.font         = fsize + "px sans-serif";
         ctx.fillStyle    = "#fff";
         ctx.textAlign    = "center";
@@ -411,6 +422,57 @@
     });
 
     ctx.restore();
+  }
+
+  /* ── Legend band (between line panel and feature panel) ─────────────────────── */
+
+  function drawLegendBand(ctx, inf, layout) {
+    var top = layout.legendTop;
+    var h   = LEGEND_H;
+
+    ctx.fillStyle   = "#f4f4f4";
+    ctx.fillRect(LEFT_GUTTER, top, inf.dataW, h);
+    ctx.strokeStyle = "#d8d8d8";
+    ctx.lineWidth   = 0.5;
+    ctx.strokeRect(LEFT_GUTTER, top, inf.dataW, h);
+
+    legendHitBoxes = [];
+    if (lineTracks.length === 0) return;
+
+    var SWATCH_W = 14, SWATCH_H = 3, GAP = 4, ITEM_PAD = 10, LEFT_PAD = 8;
+    var cy = top + h / 2;
+    var cx = LEFT_GUTTER + LEFT_PAD;
+    var rightEdge = LEFT_GUTTER + inf.dataW - LEFT_PAD;
+
+    ctx.font         = "10px sans-serif";
+    ctx.textBaseline = "middle";
+    ctx.textAlign    = "left";
+
+    lineTracks.forEach(function (tr) {
+      var textW = ctx.measureText(tr.name).width;
+      var itemW = SWATCH_W + GAP + textW + ITEM_PAD;
+      if (cx + itemW > rightEdge) return;
+
+      var hidden = hiddenTracks.has(tr.name);
+      ctx.globalAlpha = hidden ? 0.3 : 1.0;
+
+      // swatch as a short colored stroke
+      ctx.strokeStyle = tr.color;
+      ctx.lineWidth   = SWATCH_H;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(cx + SWATCH_W, cy);
+      ctx.stroke();
+
+      // track name
+      ctx.fillStyle = "#333";
+      ctx.fillText(tr.name, cx + SWATCH_W + GAP, cy);
+
+      ctx.globalAlpha = 1;
+
+      legendHitBoxes.push({ name: tr.name, x0: cx, y0: top, x1: cx + itemW, y1: top + h });
+      cx += itemW;
+    });
   }
 
   /* ── Sequence strip (row 3) ────────────────────────────────────────────────── */
@@ -438,6 +500,12 @@
     var cellW = inf.dataW / (r[1] - r[0]);
     var lo    = Math.max(1, Math.floor(r[0]));
     var hi    = Math.min(seqArray.length, Math.ceil(r[1]));
+
+    // clip residue drawing to the data area so partially-visible edge residues don't bleed into gutters
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(LEFT_GUTTER, top, inf.dataW, LETTER_H);
+    ctx.clip();
 
     for (var pos = lo; pos <= hi; pos++) {
       var aa   = seqArray[pos - 1];
@@ -474,6 +542,8 @@
       }
     }
 
+    ctx.restore();  // end residue clip
+
     // auto-spaced position ticks (labels ≥ 45px apart)
     var step = niceInterval(Math.ceil(45 / Math.max(cellW, 0.1)));
     ctx.fillStyle    = "#777";
@@ -494,45 +564,9 @@
     }
   }
 
-  /* ── Legend ────────────────────────────────────────────────────────────────── */
+  /* ── Legend (now drawn on canvas — buildLegend kept as no-op for safety) ─────── */
 
-  function buildLegend() {
-    var wrap = document.getElementById("ts-plot-wrap");
-    if (!wrap) return;
-    // remove existing
-    var existing = document.getElementById("ts-legend");
-    if (existing) existing.parentNode.removeChild(existing);
-    if (lineTracks.length === 0) return;
-
-    var div = document.createElement("div");
-    div.id = "ts-legend";
-
-    lineTracks.forEach(function (tr) {
-      var item = document.createElement("div");
-      item.className = "ts-legend-item" + (hiddenTracks.has(tr.name) ? " ts-hidden" : "");
-      item.setAttribute("data-track", tr.name);
-
-      var swatch = document.createElement("span");
-      swatch.className    = "ts-legend-swatch";
-      swatch.style.background = tr.color;
-
-      var label = document.createElement("span");
-      label.textContent = tr.name;
-
-      item.appendChild(swatch);
-      item.appendChild(label);
-      item.addEventListener("click", function () {
-        var name = this.getAttribute("data-track");
-        if (hiddenTracks.has(name)) hiddenTracks.delete(name);
-        else hiddenTracks.add(name);
-        this.classList.toggle("ts-hidden", hiddenTracks.has(name));
-        render();
-      });
-      div.appendChild(item);
-    });
-
-    wrap.appendChild(div);
-  }
+  function buildLegend() { /* legend is drawn in drawLegendBand(); nothing to do here */ }
 
   /* ── Tooltip ───────────────────────────────────────────────────────────────── */
 
@@ -577,6 +611,10 @@
 
     var pos    = xToPos(cx, inf);
     var layout = getPanelLayout(inf.cssH);
+
+    // no tooltip over the legend band
+    if (cy >= layout.legendTop && cy <= layout.legendTop + LEGEND_H) { hideTooltip(); return; }
+
     var lines  = ["Position: " + pos];
 
     // show track values when hovering the line panel
@@ -604,14 +642,17 @@
 
   function initCanvasInteractions(canvas) {
 
-    // ── Drag-to-zoom / shift-drag-to-pan ───────────────────────────────────────
+    // ── Drag tracked on document so it survives the mouse leaving the canvas ────
+    // Private handler refs so we can remove them exactly.
+    var _onDragMove = null;
+    var _onDragUp   = null;
 
     canvas.addEventListener("mousedown", function (e) {
       if (e.button !== 0 && e.button !== 1) return;
-      wasDrag = false;
       var rect = canvas.getBoundingClientRect();
       var cx   = e.clientX - rect.left;
       var r    = getXRange();
+      wasDrag   = false;
       dragState = {
         startX:  cx,
         lastX:   cx,
@@ -620,51 +661,66 @@
         startR1: r[1],
       };
       e.preventDefault();
-    });
 
-    canvas.addEventListener("mousemove", function (e) {
-      var rect = canvas.getBoundingClientRect();
-      var cx   = e.clientX - rect.left;
-
-      if (dragState) {
-        if (Math.abs(cx - dragState.startX) > 4) wasDrag = true;
-        dragState.lastX = cx;
-
+      _onDragMove = function (ev) {
+        var rect2 = canvas.getBoundingClientRect();
+        var mx    = ev.clientX - rect2.left;
+        if (Math.abs(mx - dragState.startX) > 4) wasDrag = true;
+        dragState.lastX = mx;
         if (wasDrag && dragState.mode === "pan") {
           var inf  = getCanvasInfo();
           if (inf) {
             var span   = dragState.startR1 - dragState.startR0;
-            var dataDx = (dragState.startX - cx) / inf.dataW * span;
+            var dataDx = (dragState.startX - mx) / inf.dataW * span;
             currentRange = clampRange(dragState.startR0 + dataDx, dragState.startR1 + dataDx);
           }
         }
         if (wasDrag) render();
-      }
+      };
 
+      _onDragUp = function (ev) {
+        document.removeEventListener("mousemove", _onDragMove);
+        document.removeEventListener("mouseup",   _onDragUp);
+        if (wasDrag && dragState && dragState.mode === "zoom") {
+          var rect2 = canvas.getBoundingClientRect();
+          var mx    = ev.clientX - rect2.left;
+          var x0    = Math.min(dragState.startX, mx);
+          var x1    = Math.max(dragState.startX, mx);
+          var inf   = getCanvasInfo();
+          if (inf && x1 - x0 > 4) {
+            var r2   = getXRange();
+            currentRange = clampRange(
+              r2[0] + (x0 - LEFT_GUTTER) / inf.dataW * (r2[1] - r2[0]),
+              r2[0] + (x1 - LEFT_GUTTER) / inf.dataW * (r2[1] - r2[0])
+            );
+          }
+        }
+        dragState = null;
+        render();
+      };
+
+      document.addEventListener("mousemove", _onDragMove);
+      document.addEventListener("mouseup",   _onDragUp);
+    });
+
+    // ── Tooltip + pointer cursor; drag is handled by document listeners above ───
+
+    canvas.addEventListener("mousemove", function (e) {
+      if (dragState) return;  // drag active — skip tooltip
+      var rect   = canvas.getBoundingClientRect();
+      var cy     = e.clientY - rect.top;
+      var inf    = getCanvasInfo();
+      var layout = getPanelLayout(inf ? inf.cssH : 520);
+      var inLegend = inf && cy >= layout.legendTop && cy <= layout.legendTop + LEGEND_H;
+      canvas.style.cursor = inLegend ? "pointer" : "crosshair";
       updateTooltip(e);
     });
 
-    canvas.addEventListener("mouseup", function (e) {
-      if (dragState && wasDrag && dragState.mode === "zoom") {
-        var rect = canvas.getBoundingClientRect();
-        var cx   = e.clientX - rect.left;
-        var x0   = Math.min(dragState.startX, cx);
-        var x1   = Math.max(dragState.startX, cx);
-        var inf  = getCanvasInfo();
-        if (inf && x1 - x0 > 4) {
-          var r    = getXRange();
-          var r0new = r[0] + (x0 - LEFT_GUTTER) / inf.dataW * (r[1] - r[0]);
-          var r1new = r[0] + (x1 - LEFT_GUTTER) / inf.dataW * (r[1] - r[0]);
-          currentRange = clampRange(r0new, r1new);
-          render();
-        }
-      }
-      dragState = null;
-    });
-
     canvas.addEventListener("mouseleave", function () {
-      // don't cancel dragState here — user may re-enter; just hide tooltip
-      hideTooltip();
+      if (!dragState) {
+        hideTooltip();
+        canvas.style.cursor = "crosshair";
+      }
     });
 
     // scroll-wheel zoom centered on cursor position
@@ -681,18 +737,35 @@
       render();
     }, { passive: false });
 
-    // ── Click / dblclick (residue selection) ────────────────────────────────────
-    // Two rapid clicks cancel each other (toggle-on then toggle-off) before dblclick
-    // fires — net state is unchanged, then dblclick commits or resets zoom cleanly.
+    // ── Click: legend toggle or residue selection ────────────────────────────────
 
     canvas.addEventListener("click", function (e) {
       if (wasDrag) { wasDrag = false; return; }
-      var rect = canvas.getBoundingClientRect();
-      var cx   = e.clientX - rect.left;
-      var inf  = getCanvasInfo();
+      var rect   = canvas.getBoundingClientRect();
+      var cx     = e.clientX - rect.left;
+      var cy     = e.clientY - rect.top;
+      var inf    = getCanvasInfo();
+      var layout = getPanelLayout(inf ? inf.cssH : 520);
+
+      // legend click → toggle track visibility
+      if (cy >= layout.legendTop && cy <= layout.legendTop + LEGEND_H) {
+        for (var i = 0; i < legendHitBoxes.length; i++) {
+          var box = legendHitBoxes[i];
+          if (cx >= box.x0 && cx <= box.x1) {
+            if (hiddenTracks.has(box.name)) hiddenTracks.delete(box.name);
+            else hiddenTracks.add(box.name);
+            render();
+            return;
+          }
+        }
+        return;
+      }
+
       if (!inf || !inDataArea(cx, inf)) return;
       shinySet(inputNames.residue_click, xToPos(cx, inf));
     });
+
+    // ── Dblclick: seq strip → commit residue, elsewhere → reset zoom ────────────
 
     canvas.addEventListener("dblclick", function (e) {
       if (wasDrag) { wasDrag = false; return; }
@@ -702,8 +775,9 @@
       var inf    = getCanvasInfo();
       var layout = getPanelLayout(inf ? inf.cssH : 520);
 
-      // dblclick in the sequence strip → commit/remove residue
-      // dblclick elsewhere (plot panels, gutter) → reset zoom to full range
+      // legend dblclick → no-op (single click already handles toggle)
+      if (cy >= layout.legendTop && cy <= layout.legendTop + LEGEND_H) return;
+
       if (cy >= layout.seqTop && inf && inDataArea(cx, inf)) {
         shinySet(inputNames.residue_dblclick, xToPos(cx, inf));
       } else {
