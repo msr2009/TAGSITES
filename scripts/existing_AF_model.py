@@ -30,15 +30,16 @@ from site_selection_util import get_sequence, uniprot_accession_regex, save_fast
 
 sys.path.insert(0, str(Path(__file__).parent))
 import ebi_rest
+from progress import report as _report, resolve_reporter, poll_adapter
 
 
 def search_AFDB(fasta_in, email, workingdir, name, taxid, evalue, percentid,
-                clients_folder, progress_cb=None):
+                clients_folder, report=None):
     """BLAST → AFDB lookup → write PDB + FASTA files.
 
-    progress_cb(job_id, status) is called on each EBI poll when provided.
     Returns the path to the downloaded AF2 FASTA, or 1 if not found.
     """
+    reporter = resolve_reporter(report)
     match_accession = ""
     match_eval = 1e-200
     match_id = 100.0
@@ -65,8 +66,8 @@ def search_AFDB(fasta_in, email, workingdir, name, taxid, evalue, percentid,
         if str(taxid) not in ("", "1", "1.0"):
             params["taxids"] = str(taxid)
 
-        print("Submitting NCBI BLAST job for AFDB lookup…")
-        blast_job_id = ebi_rest.run_job(ebi_rest.NCBIBLAST, params, poll_cb=progress_cb)
+        _report(reporter, "Submitting NCBI BLAST job for AFDB lookup…", stage="afdb_submit")
+        blast_job_id = ebi_rest.run_job(ebi_rest.NCBIBLAST, params, poll_cb=poll_adapter(reporter))
         tsv_bytes = ebi_rest.fetch_result(ebi_rest.NCBIBLAST, blast_job_id, "tsv")
 
         # save intermediate (mirrors old naming: prefix.ncbiblast.tsv.tsv)
@@ -76,7 +77,7 @@ def search_AFDB(fasta_in, email, workingdir, name, taxid, evalue, percentid,
 
         lines = open(tsv_path).readlines()
         if len(lines) < 2:
-            print("No BLAST hits found for AFDB lookup.")
+            _report(reporter, "no BLAST hits found for AFDB lookup", stage="afdb_nohit")
             return 1
 
         l = lines[1].strip().split("\t")
@@ -90,25 +91,28 @@ def search_AFDB(fasta_in, email, workingdir, name, taxid, evalue, percentid,
             pdb_bytes = ebi_rest.dbfetch("afdb", match_accession, "pdb", "raw")
             pdb_text = pdb_bytes.decode("utf-8", errors="replace")
         except Exception as e:
-            print(f"dbfetch failed for {match_accession}: {e}")
+            _report(reporter, f"dbfetch failed for {match_accession}: {e}",
+                    stage="afdb_fetch", level="error")
             return 1
 
         # the EBI dbfetch returns an error message as plain text when not found
         if "ERROR" in pdb_text[:50]:
-            print("pdb not found")
+            _report(reporter, f"PDB not found in AFDB for {match_accession}",
+                    stage="afdb_fetch", level="warning")
             return 1
 
         pdb_path = f"{outfile_prefix}.pdb"
         with open(pdb_path, "w") as f:
             f.write(pdb_text)
-        print(f"Saved {match_accession} PDB to {pdb_path}")
+        _report(reporter, f"saved {match_accession} PDB to {pdb_path}", stage="afdb_save")
 
         fasta_path = f"{outfile_prefix}.fa"
         save_fasta(name, get_sequence(pdb_path), fasta_path)
-        print(f"Saved FASTA from PDB to {fasta_path}")
+        _report(reporter, f"saved FASTA from PDB to {fasta_path}", stage="afdb_save")
         return fasta_path
     else:
-        print(f"No BLAST hit better than E={evalue} and %ID={percentid}")
+        _report(reporter, f"no BLAST hit better than E={evalue} and %ID={percentid}",
+                stage="afdb_nohit", level="warning")
         return 1
 
 

@@ -9,13 +9,27 @@ Add --force to re-run everything regardless of prior status.
 Matt Rich, 09/24 / updated 2026
 """
 
-import subprocess, os, json, sys
+import subprocess, os, json, sys, threading
 from pathlib import Path
 
 # ensure scripts/ is on sys.path for sibling imports
 _SCRIPTS = Path(__file__).parent
 sys.path.insert(0, str(_SCRIPTS))
 import run_status
+import progress
+
+
+def _stderr_reader(proc, task_id, working_dir, run_name):
+    """Drain proc.stderr line-by-line, parsing [stage] events into the status file."""
+    log_lines = []
+    stage = ""
+    for line in proc.stderr:
+        s, msg, level = progress.parse_line(line)
+        if s:
+            stage = s
+        log_lines.append(line.rstrip("\n"))
+        run_status.update_task(working_dir, run_name, task_id,
+                               stage=stage, log="\n".join(log_lines))
 
 
 def genewise_required(j, global_args, task_scripts, scripts_folder, interpreter):
@@ -186,20 +200,27 @@ def main(json_input_file, force=False):
         print(cmd)
     print("#############\n#############\n#############")
 
-    # launch all remaining tasks concurrently, then collect exit codes
+    # launch all remaining tasks concurrently; reader threads drain stderr live
     procs = []
     for task_id, cmd, output_path in task_commands:
-        run_status.update_task(working_dir, run_name, task_id, status="running")
-        procs.append((task_id, subprocess.Popen(cmd, shell=True), output_path))
+        run_status.update_task(working_dir, run_name, task_id, status="running", stage="", log="")
+        proc = subprocess.Popen(cmd, shell=True,
+                                stderr=subprocess.PIPE, text=True, bufsize=1)
+        reader = threading.Thread(target=_stderr_reader,
+                                  args=(proc, task_id, working_dir, run_name),
+                                  daemon=True)
+        reader.start()
+        procs.append((task_id, proc, output_path, reader))
 
-    for task_id, proc, output_path in procs:
+    for task_id, proc, output_path, reader in procs:
         ret = proc.wait()
+        reader.join()   # drain any remaining stderr before writing final status
         if ret == 0 and (not output_path or os.path.exists(output_path)):
-            run_status.update_task(working_dir, run_name, task_id, status="success")
+            run_status.update_task(working_dir, run_name, task_id, status="success", stage="done")
         else:
             msg = f"exit code {ret}" if ret != 0 else "output file not found"
             run_status.update_task(working_dir, run_name, task_id,
-                                   status="failed", message=msg)
+                                   status="failed", message=msg, stage="failed")
 
     print("####DONE WITH ANALYSIS####")
 

@@ -53,7 +53,7 @@ def _bool(v, default=False):
 
 # ── analysis runners ─────────────────────────────────────────────────────────
 
-def run_blast(args, progress_cb=None):
+def run_blast(args, report=None):
     """Run blast_orthologs.main() from a JSON args dict."""
     import blast_orthologs
     return blast_orthologs.main(
@@ -70,11 +70,11 @@ def run_blast(args, progress_cb=None):
         taxid          = _str(args.get("taxid"), "1"),
         clients_folder = str(_SCRIPTS) + "/",
         exclude_paralogs = _bool(args.get("exclude_paralogs"), False),
-        progress_cb    = progress_cb,
+        report         = report,
     )
 
 
-def run_plddt(args, progress_cb=None):
+def run_plddt(args, report=None):
     """Run the pLDDT pipeline: AFDB search if needed, then extract_from_pdb.main()."""
     import extract_from_pdb
     import existing_AF_model
@@ -94,7 +94,7 @@ def run_plddt(args, progress_cb=None):
             evalue        = _float(args.get("evalue"), 1e-10),
             percentid     = _float(args.get("percent_id"), 99),
             clients_folder= str(_SCRIPTS) + "/",
-            progress_cb   = progress_cb,
+            report        = report,
         )
         if result == 1:
             raise RuntimeError("AFDB lookup found no matching structure.")
@@ -103,7 +103,7 @@ def run_plddt(args, progress_cb=None):
     extract_from_pdb.main(pdb_path, output)
 
 
-def run_modifications(args, progress_cb=None):
+def run_modifications(args, report=None):
     """Run regex_sites.main() from a JSON args dict."""
     import regex_sites
     fasta_in  = _str(args.get("input_file") or args.get("fasta"))
@@ -113,7 +113,7 @@ def run_modifications(args, progress_cb=None):
         regex_sites.main(fasta_in, sites_file, fout)
 
 
-def run_domains(args, progress_cb=None):
+def run_domains(args, report=None):
     """Run call_interpro.main() from a JSON args dict."""
     import call_interpro
     return call_interpro.main(
@@ -122,11 +122,11 @@ def run_domains(args, progress_cb=None):
         workingdir    = _str(args.get("working_dir")),
         clients_folder= str(_SCRIPTS) + "/",
         outputfile    = _str(args.get("output")),
-        progress_cb   = progress_cb,
+        report        = report,
     )
 
 
-def run_scores(args, progress_cb=None):
+def run_scores(args, report=None):
     """Run calculate_protein_scores.main() from a JSON args dict."""
     import calculate_protein_scores
     fasta_in   = _str(args.get("input_file") or args.get("fasta"))
@@ -137,7 +137,7 @@ def run_scores(args, progress_cb=None):
         calculate_protein_scores.main(fasta_in, fout, window, scores_file)
 
 
-def run_reagents(args, progress_cb=None):
+def run_reagents(args, report=None):
     """Run design_tag_reagents.main() from a JSON args dict.
 
     Runs the Genewise pre-step if needed (empty 'genewise' arg).
@@ -155,7 +155,7 @@ def run_reagents(args, progress_cb=None):
         working_dir = _str(args.get("working_dir"))
         run_name    = _str(args.get("run_name"))
         outprefix   = os.path.join(working_dir, run_name + "_genewise")
-        run_genewise.main(protein_fa, genomic_fa, email, outprefix)
+        run_genewise.main(protein_fa, genomic_fa, email, outprefix, report=report)
         genewise_path = outprefix + ".genewise.out.txt"
         args = dict(args, genewise=genewise_path,
                     genomic_fasta=outprefix + ".genewise_genomic.fa")
@@ -169,6 +169,7 @@ def run_reagents(args, progress_cb=None):
         pam           = _str(args.get("PAM"), "NGG"),
         guide_length  = _int(args.get("guide_length"), 20),
         cut_offset    = _int(args.get("cut_offset"), 3),
+        report        = report,
     )
 
 

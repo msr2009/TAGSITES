@@ -52,6 +52,7 @@ from Bio.Seq import Seq
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from crispr_util import reverse_complement
 from parse_genewise import parse_genewise_score, cds_coverage, parse_genewise
+from progress import report as _report, resolve_reporter
 
 # Score / coverage thresholds
 LOW_SCORE_WARN   = 50.0   # bits – below this a warning is printed
@@ -60,7 +61,7 @@ LOW_COVER_WARN   = 0.50   # fraction of protein length covered by CDS
 
 # ── EBI client wrapper ────────────────────────────────────────────────────────
 
-def run_genewise_client(protein_fa, genomic_fa, email, outfile_prefix):
+def run_genewise_client(protein_fa, genomic_fa, email, outfile_prefix, report=None):
     """
     Run the EBI Genewise REST client and return the path to the .out.txt result.
 
@@ -94,7 +95,7 @@ def run_genewise_client(protein_fa, genomic_fa, email, outfile_prefix):
         dna=genomic_fa,
         out=outfile_prefix,
     )
-    print('  Running: {}'.format(cmd), file=sys.stderr)
+    _report(resolve_reporter(report), 'Running: {}'.format(cmd), stage='genewise_run')
     ret = subprocess.call(cmd, shell=True)
     if ret != 0:
         raise RuntimeError('Genewise client exited with status {}'.format(ret))
@@ -211,7 +212,7 @@ def write_rc_fasta(genomic_fa, rc_fa_path):
 
 # ── Main entry point ──────────────────────────────────────────────────────────
 
-def main(protein_fasta, genomic_fasta, email, outprefix):
+def main(protein_fasta, genomic_fasta, email, outprefix, report=None):
     """
     Full both-strand Genewise run + orientation selection.
 
@@ -223,6 +224,8 @@ def main(protein_fasta, genomic_fasta, email, outprefix):
       <outprefix>.genewise_genomic.fa   Genomic FASTA in winning orientation
       <outprefix>.genewise_orientation.txt  '+' or 'rc'
     """
+    reporter = resolve_reporter(report)
+
     # Handle PDB input: extract protein FASTA if needed
     if protein_fasta.endswith('.pdb'):
         prot_fa = outprefix + '.protein.fa'
@@ -232,42 +235,34 @@ def main(protein_fasta, genomic_fasta, email, outprefix):
         seq = get_sequence(protein_fasta)
         save_fasta(os.path.basename(outprefix), seq, prot_fa)
         protein_fasta = prot_fa
-        print('  Extracted protein FASTA from PDB → {}'.format(prot_fa),
-              file=sys.stderr)
+        _report(reporter, 'extracted protein FASTA from PDB → {}'.format(prot_fa),
+                stage='genewise_prep')
 
     # Write RC genomic FASTA
     rc_fa = outprefix + '.rc.fa'
     write_rc_fasta(genomic_fasta, rc_fa)
-    print('  Wrote RC FASTA → {}'.format(rc_fa), file=sys.stderr)
+    _report(reporter, 'wrote RC FASTA → {}'.format(rc_fa), stage='genewise_prep')
 
     # Run Genewise on both orientations
-    print('  Running Genewise (forward orientation)…', file=sys.stderr)
+    _report(reporter, 'running Genewise (forward orientation)…', stage='genewise_fwd')
     fwd_out = run_genewise_client(protein_fasta, genomic_fasta,
-                                  email, outprefix + '.fwd')
+                                  email, outprefix + '.fwd', report=reporter)
 
-    print('  Running Genewise (reverse-complement orientation)…', file=sys.stderr)
+    _report(reporter, 'running Genewise (reverse-complement orientation)…', stage='genewise_rc')
     rc_out  = run_genewise_client(protein_fasta, rc_fa,
-                                  email, outprefix + '.rc')
+                                  email, outprefix + '.rc', report=reporter)
 
     # Select best orientation
     result = select_orientation(fwd_out, genomic_fasta, rc_out, rc_fa)
 
-    print(
-        '\n  Forward score : {:.2f} bits'.format(result['fwd_score']),
-        file=sys.stderr,
-    )
-    print(
-        '  RC score      : {:.2f} bits'.format(result['rc_score']),
-        file=sys.stderr,
-    )
-    print(
-        '  Selected      : {} orientation ({:.2f} bits)'.format(
-            result['orientation'], result['winner_score']),
-        file=sys.stderr,
-    )
+    _report(reporter,
+            'forward score: {:.2f} bits  RC score: {:.2f} bits  selected: {} ({:.2f} bits)'.format(
+                result['fwd_score'], result['rc_score'],
+                result['orientation'], result['winner_score']),
+            stage='genewise_select')
 
     if result['warning']:
-        print('\n' + result['warning'] + '\n', file=sys.stderr)
+        _report(reporter, result['warning'], stage='genewise_select', level='warning')
 
     # Write canonical output files
     winner_out = outprefix + '.genewise.out.txt'
@@ -279,9 +274,8 @@ def main(protein_fasta, genomic_fasta, email, outprefix):
     with open(orient_file, 'w') as fh:
         fh.write(result['orientation'] + '\n')
 
-    print('  Winner .out.txt → {}'.format(winner_out), file=sys.stderr)
-    print('  Winner genomic  → {}'.format(winner_fa), file=sys.stderr)
-    print('  Orientation     → {}'.format(orient_file), file=sys.stderr)
+    _report(reporter, 'winner → {}  genomic → {}  orientation → {}'.format(
+        winner_out, winner_fa, orient_file), stage='genewise_select')
 
     return result
 

@@ -74,6 +74,21 @@ _STYLE = """
     /* file input sizing */
     .shiny-input-file .btn { font-size: 0.8rem !important; padding: 0.2rem 0.5rem !important; }
     .shiny-input-file .form-control { font-size: 0.8rem; }
+
+    /* current-stage chip in accordion title */
+    .stage-chip {
+        font-size: 0.68rem; font-weight: 400; color: #fff;
+        background: #6c757d; border-radius: 3px; padding: 1px 5px;
+        margin-left: 0.3rem; vertical-align: middle; font-style: italic;
+    }
+
+    /* per-task log output */
+    .task-log {
+        width: 100%; margin-top: 0.5rem;
+        font-family: monospace; font-size: 0.72rem;
+        background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 3px;
+        padding: 0.3rem 0.5rem; resize: vertical; color: #212529;
+    }
 """
 
 
@@ -83,19 +98,11 @@ def progress_ui():
 
         ui.tags.style(_STYLE),
 
-        # ── run header & upload ─────────────────────────────────────────────────
-        ui.card(
-            ui.card_body(
-                ui.output_ui("run_header"),
-                ui.input_file("upload_json",
-                              "Upload / Reload JSON file",
-                              accept=[".json"]),
-            ),
-        ),
+        ui.output_ui("json_upload_card"),
+
+        ui.output_ui("run_header"),
 
         # ── task accordion ──────────────────────────────────────────────────────
-        ui.p("Each panel shows live job status; expand to see parameters.",
-             class_="section-hint"),
         ui.output_ui("task_cards"),
 
         # ── sticky action bar ───────────────────────────────────────────────────

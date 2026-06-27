@@ -14,6 +14,7 @@ from site_selection_util import read_fasta
 # ensure scripts/ is importable when called from the app
 sys.path.insert(0, str(Path(__file__).parent))
 import ebi_rest
+from progress import report as _report, resolve_reporter, poll_adapter
 
 
 def hit_to_dict(j):
@@ -31,12 +32,9 @@ def hit_to_dict(j):
 def main(fasta_in, email, workingdir, name, output,
          n, evalue, db, length_percent,
          align_full_seqs, taxid, clients_folder, exclude_paralogs,
-         progress_cb=None):
-    """Run BLAST → filter hits → fetch full seqs → clustalo → JSD scoring.
-
-    progress_cb(job_id, status) is called on each EBI poll when provided
-    (used by the Shiny app to surface job IDs and intermediate status).
-    """
+         report=None):
+    """Run BLAST → filter hits → fetch full seqs → clustalo → JSD scoring."""
+    reporter = resolve_reporter(report)
 
     seq_name, seq = read_fasta(fasta_in)
     seq_len = float(len(seq))
@@ -61,8 +59,8 @@ def main(fasta_in, email, workingdir, name, output,
     if str(taxid) not in ("", "1", "1.0"):
         blast_params["taxids"] = str(taxid)
 
-    print("Submitting NCBI BLAST job…")
-    blast_job_id = ebi_rest.run_job(ebi_rest.NCBIBLAST, blast_params, poll_cb=progress_cb)
+    _report(reporter, "Submitting NCBI BLAST job…", stage="blast_submit")
+    blast_job_id = ebi_rest.run_job(ebi_rest.NCBIBLAST, blast_params, poll_cb=poll_adapter(reporter))
 
     # fetch JSON result and save to the path the rest of the script expects
     blast_json_bytes = ebi_rest.fetch_result(ebi_rest.NCBIBLAST, blast_job_id, "json")
@@ -125,14 +123,16 @@ def main(fasta_in, email, workingdir, name, output,
                     acc_fasta_bytes = ebi_rest.dbfetch("uniprotkb", h["acc"], "fasta", "raw")
                     acc_fasta = acc_fasta_bytes.decode("utf-8")
                 except Exception as e:
-                    print(f"dbfetch failed for {h['acc']}: {e}; skipping")
+                    _report(reporter, f"dbfetch failed for {h['acc']}: {e}; skipping",
+                            stage="dbfetch", level="warning")
                     continue
 
                 acc_fasta_name = acc_fasta.split("\n")[0].split()[0]
                 acc_fasta_seq = "".join(acc_fasta.split("\n")[1:])
 
                 if acc_fasta_seq == seq:
-                    print(f"FOUND MATCH TO INPUT: {acc_fasta.split(chr(10))[0]}")
+                    _report(reporter, f"found match to input: {acc_fasta.split(chr(10))[0]}",
+                            stage="dbfetch")
                     input_match = acc_fasta_name[1:]
 
                 # filter by total length
@@ -147,7 +147,7 @@ def main(fasta_in, email, workingdir, name, output,
 
     # if no exact match to input, insert our query sequence at the front
     if input_match == "":
-        print("NO MATCH TO INPUT: making best hit input seq")
+        _report(reporter, "no exact match to input; using best BLAST hit as query", stage="dbfetch")
         fasta_str_list = [">{}\n{}\n".format(seq_name, seq)] + fasta_str_list[1:]
         input_match = seq_name
 
@@ -164,7 +164,7 @@ def main(fasta_in, email, workingdir, name, output,
 
     if len(fasta_str_list) <= 1:
         # clustalo requires ≥2 sequences; fall back to copying input as alignment
-        print("CLUSTAL SKIPPED: only one sequence. Copying input as .aln.")
+        _report(reporter, "only one sequence; skipping Clustal, copying input as .aln", stage="align")
         with open(aln_path, "w") as f:
             f.write("".join(fasta_str_list))
     else:
@@ -177,8 +177,9 @@ def main(fasta_in, email, workingdir, name, output,
             "stype":    "protein",
             "outfmt":   "fa",
         }
-        print("Submitting Clustal Omega job…")
-        clustalo_job_id = ebi_rest.run_job(ebi_rest.CLUSTALO, clustalo_params, poll_cb=progress_cb)
+        _report(reporter, "Submitting Clustal Omega job…", stage="align_submit")
+        clustalo_job_id = ebi_rest.run_job(ebi_rest.CLUSTALO, clustalo_params,
+                                           poll_cb=poll_adapter(reporter))
         aln_bytes = ebi_rest.fetch_result(ebi_rest.CLUSTALO, clustalo_job_id, "aln-fasta")
         with open(aln_path, "wb") as f:
             f.write(aln_bytes)
@@ -192,7 +193,7 @@ def main(fasta_in, email, workingdir, name, output,
         import build_heatmap_images
         build_heatmap_images.plot_alignment_matrix_matplotlib(aln_path, "svg", "")
     except Exception as e:
-        print(f"WARNING: alignment image generation failed: {e}")
+        _report(reporter, f"alignment image generation failed: {e}", stage="align_img", level="warning")
 
     ###########################
     # CALCULATE JSD
@@ -204,7 +205,7 @@ def main(fasta_in, email, workingdir, name, output,
     _scripts = str(Path(__file__).parent) + "/"
     blosum_bg = [0.078, 0.051, 0.041, 0.052, 0.024, 0.034, 0.059, 0.083, 0.025,
                  0.062, 0.092, 0.056, 0.024, 0.044, 0.043, 0.059, 0.055, 0.014, 0.034, 0.072]
-    print(f"Scoring conservation: {aln_path} → {jsd_path}")
+    _report(reporter, f"Scoring conservation: {aln_path} → {jsd_path}", stage="score")
     with open(jsd_path, "w") as jsd_out:
         sc.main(
             align_file         = aln_path,

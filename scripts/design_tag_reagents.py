@@ -45,6 +45,7 @@ sys.path.insert(0, __file__.rsplit('/', 1)[0])
 from crispr_util import find_guides, build_frame_lookup, disrupt_pam
 from parse_genewise import parse_genewise, enumerate_insertion_sites, \
     parse_genewise_score, cds_coverage
+from progress import report as _report, resolve_reporter
 
 
 # ── Core logic ────────────────────────────────────────────────────────────────
@@ -57,6 +58,7 @@ def design_reagents(
     pam='NGG',
     guide_length=20,
     cut_offset=3,
+    report=None,
 ):
     """
     Full pipeline: Genewise output + genomic FASTA → reagent table (DataFrame).
@@ -71,6 +73,8 @@ def design_reagents(
     guide_length   : int  spacer length (default 20)
     cut_offset     : int  cut distance from PAM (SpCas9=3)
     """
+    reporter = resolve_reporter(report)
+
     # 1. Load genomic sequence
     records = list(SeqIO.parse(genomic_fasta, 'fasta'))
     if not records:
@@ -85,7 +89,7 @@ def design_reagents(
     # orchestrator pre-step) is responsible for supplying the correct .out.txt;
     # we guard against silent garbage mappings via the score/coverage check below.
     cds_df = parse_genewise(genewise_out)
-    print('  {} CDS exons parsed'.format(len(cds_df)), file=sys.stderr)
+    _report(reporter, '{} CDS exons parsed'.format(len(cds_df)), stage='parse_genewise')
 
     # Low-score / low-coverage guard: warn loudly so we never silently process
     # a garbage (wrong-strand or failed) Genewise alignment.
@@ -94,18 +98,14 @@ def design_reagents(
         n_protein = len(cds_df)   # rough proxy; real protein length unknown here
         coverage  = cds_coverage(cds_df, n_protein) if n_protein > 0 else 0.0
         if score < 50.0:
-            print(
-                'WARNING: Genewise alignment score is very low ({:.2f} bits). '
-                'This may indicate the wrong strand was used. '
-                'Try reverse-complementing your genomic FASTA and re-running '
-                'Genewise, or use run_genewise.py to run both orientations '
-                'automatically.'.format(score),
-                file=sys.stderr,
-            )
+            _report(reporter,
+                    'Genewise score very low ({:.2f} bits); may indicate wrong strand or '
+                    'failed alignment'.format(score),
+                    stage='parse_genewise', level='warning')
 
     # 3. Enumerate insertion sites
     sites = enumerate_insertion_sites(cds_df, dna)
-    print('  {} residues / insertion sites'.format(len(sites)), file=sys.stderr)
+    _report(reporter, '{} residues / insertion sites'.format(len(sites)), stage='sites')
 
     # 4. Build per-position frame lookup for synonymous mutation
     frame_lookup = build_frame_lookup(cds_df, dna)
@@ -113,8 +113,7 @@ def design_reagents(
     # 5. Find all guide cut sites
     guides = find_guides(dna, pam=pam, guide_length=guide_length,
                          cut_offset=cut_offset)
-    print('  {} guide sites found (PAM={})'.format(len(guides), pam),
-          file=sys.stderr)
+    _report(reporter, '{} guide sites found (PAM={})'.format(len(guides), pam), stage='guides')
 
     pam_len = len(pam)
     rows = []
@@ -222,7 +221,7 @@ def design_reagents(
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 def main(genewise, genomic_fasta, output, n_guides=5, arm_length=500,
-         pam='NGG', guide_length=20, cut_offset=3):
+         pam='NGG', guide_length=20, cut_offset=3, report=None):
     """Entry point for in-process calls from task_runners."""
     df = design_reagents(
         genewise_out  = genewise,
@@ -232,6 +231,7 @@ def main(genewise, genomic_fasta, output, n_guides=5, arm_length=500,
         pam           = pam,
         guide_length  = guide_length,
         cut_offset    = cut_offset,
+        report        = report,
     )
     df.to_csv(output, sep='\t', index=False)
 

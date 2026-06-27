@@ -3,10 +3,12 @@
 Status file path: {working_dir}/{run_name}.status.json
 Schema per task entry:
     {
-        "status": "pending | running | success | failed",
-        "job_id": "ebi-jobId-or-empty",
+        "status":  "pending | running | success | failed",
+        "job_id":  "ebi-jobId-or-empty",
         "message": "error message if failed",
-        "output":  "/path/to/expected/output/file"
+        "output":  "/path/to/expected/output/file",
+        "stage":   "current high-level step token, e.g. 'blast_submit' (optional)",
+        "log":     "full progress log as a newline-joined string (optional)"
     }
 
 A task is "complete" when status == "success" AND its output file exists on disk.

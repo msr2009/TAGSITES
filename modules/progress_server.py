@@ -20,6 +20,7 @@ from shiny import module, reactive, render, ui
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 import run_status as _run_status
 from task_runners import TASK_RUNNERS
+from progress import make_status_reporter, report as _progress_report
 
 from modules.progress_logic import display_params, parse_run, status_label
 from modules.setup_ui import label_with_tip
@@ -30,6 +31,13 @@ from modules.setup_ui import label_with_tip
 def _status_badge(state):
     """Return a colored status badge element for an accordion title."""
     return ui.tags.span(state, class_=f"status-badge status-{state}")
+
+
+def _stage_chip(stage):
+    """Return a small muted stage chip, or empty span when no stage is set."""
+    if not stage or stage in ("done", "failed"):
+        return ui.span()
+    return ui.tags.span(stage, class_="stage-chip")
 
 
 def _param_grid(args, global_block, analysis=None):
@@ -45,14 +53,17 @@ def _param_grid(args, global_block, analysis=None):
 
 
 def _build_body(task, global_block, entry):
-    """Build the full accordion panel body: param grid + job-id / error lines."""
+    """Build the full accordion panel body: param grid + log textarea."""
     children = [_param_grid(task["args"], global_block, analysis=task.get("analysis"))]
-    job_id  = entry.get("job_id", "")
-    message = entry.get("message", "")
-    if job_id:
-        children.append(ui.p(f"Job ID: {job_id}", class_="job-id-line"))
-    if message:
-        children.append(ui.p(f"Error: {message}", class_="error-line"))
+    log = entry.get("log", "")
+    children.append(
+        ui.tags.textarea(
+            log,
+            readonly=True,
+            class_="task-log",
+            rows=6,
+        )
+    )
     return ui.div(*children)
 
 
@@ -64,7 +75,7 @@ def progress_server(input, output, session, shared_json):
     # per-session state derived from the loaded JSON
     global_block = reactive.Value({})
     working_dir  = reactive.Value("")
-    run_name     = reactive.Value("")
+    run_name     = reactive.Value(None)
     task_list    = reactive.Value([])   # [{"id","analysis","args","output"}, ...]
 
     # ── parse JSON whenever the shared path changes ────────────────────────────
@@ -120,12 +131,42 @@ def progress_server(input, output, session, shared_json):
     # ── run header ─────────────────────────────────────────────────────────────
 
     @render.ui
+    def json_upload_card():
+        """Render the JSON upload card; collapsed and warning-free when a run is loaded."""
+        has_json = run_name.get() is not None
+        warning = ui.span() if has_json else ui.span(
+            "⚠ no current JSON",
+            style="color:#dc3545; font-size:0.8em; font-style:italic;",
+        )
+        return ui.div(
+            ui.div(
+                ui.div(
+                    ui.span("Upload run JSON"),
+                    warning,
+                    class_="card-header d-flex justify-content-between align-items-center",
+                    style="cursor:pointer;",
+                    **{"data-bs-toggle": "collapse",
+                       "data-bs-target": "#ts-prog-json-body",
+                       "aria-expanded": "false" if has_json else "true"},
+                ),
+                ui.div(
+                    ui.div(
+                        ui.input_file("upload_json", None, accept=[".json"]),
+                        class_="card-body py-2",
+                    ),
+                    id="ts-prog-json-body",
+                    class_="collapse" if has_json else "collapse show",
+                ),
+                class_="card",
+            ),
+            class_="mb-2",
+        )
+
+    @render.ui
     def run_header():
-        """Show a one-line summary of the loaded run, or a prompt to load one."""
-        path = shared_json.get()
-        if not path:
-            return ui.p("No analysis loaded — save one in Setup or upload a JSON file.",
-                        class_="section-hint")
+        """Show a one-line run summary when a JSON is loaded; nothing otherwise."""
+        if run_name.get() is None:
+            return ui.span()
         rn = run_name.get()
         wd = working_dir.get()
         n  = len(task_list.get())
@@ -157,7 +198,8 @@ def progress_server(input, output, session, shared_json):
             runner   = TASK_RUNNERS.get(analysis)
             if runner is None:
                 _run_status.update_task(wd, rn, tid, status="failed",
-                                        message=f"Unknown analysis type '{analysis}'")
+                                        message=f"Unknown analysis type '{analysis}'",
+                                        log=f"ERROR: Unknown analysis type '{analysis}'")
                 return
 
             # skip tasks already completed (resume logic)
@@ -165,17 +207,19 @@ def progress_server(input, output, session, shared_json):
             if _run_status.is_complete(entry, output):
                 return
 
-            _run_status.update_task(wd, rn, tid, status="running", job_id="")
-
-            # capture EBI jobIds into the status file via the progress callback
-            def _cb(job_id, status_str):
-                _run_status.update_task(wd, rn, tid, job_id=job_id)
+            log = []
+            _run_status.update_task(wd, rn, tid, status="running", job_id="", log="", stage="")
+            reporter = make_status_reporter(wd, rn, tid, log)
 
             try:
-                runner(args, progress_cb=_cb)
+                runner(args, report=reporter)
+                _progress_report(reporter, "Done.", stage="done")
                 _run_status.update_task(wd, rn, tid, status="success", output=output)
             except Exception as exc:
-                _run_status.update_task(wd, rn, tid, status="failed", message=str(exc))
+                import traceback
+                log.append(traceback.format_exc())
+                _run_status.update_task(wd, rn, tid, status="failed", message=str(exc),
+                                        log="\n".join(log), stage="failed")
 
         loop = asyncio.get_running_loop()
         await asyncio.gather(*[
@@ -221,10 +265,7 @@ def progress_server(input, output, session, shared_json):
         gb    = global_block.get()
 
         if not tasks:
-            return ui.p(
-                "No tasks loaded — save an analysis in Setup or upload a JSON file.",
-                class_="section-hint",
-            )
+            return ui.span()
 
         # read status directly (not via reactive calc) to avoid a polling dependency
         wd, rn = working_dir.get(), run_name.get()
@@ -236,18 +277,24 @@ def progress_server(input, output, session, shared_json):
             label = tid.rsplit("_", 1)[0]
             entry = status.get(tid, {})
             state = status_label(entry)
+            stage = entry.get("stage", "")
             panels.append(
                 ui.accordion_panel(
                     ui.span(label,
                             ui.tags.span(t["analysis"], class_="task-type-badge"),
-                            _status_badge(state)),
+                            _status_badge(state),
+                            _stage_chip(stage)),
                     _build_body(t, gb, entry),
                     value=tid,
                 )
             )
 
-        return ui.accordion(*panels, open=False, multiple=True,
-                            class_="task-accordion", id=_ACCORDION_ID)
+        return ui.div(
+            ui.p("Each panel shows live job status; expand to see parameters.",
+                 class_="section-hint"),
+            ui.accordion(*panels, open=False, multiple=True,
+                         class_="task-accordion", id=_ACCORDION_ID),
+        )
 
     @reactive.effect
     def _update_status_badges():
@@ -260,12 +307,14 @@ def progress_server(input, output, session, shared_json):
             label = tid.rsplit("_", 1)[0]
             entry = status.get(tid, {})
             state = status_label(entry)
+            stage = entry.get("stage", "")
             ui.update_accordion_panel(
                 _ACCORDION_ID, tid,
                 _build_body(t, gb, entry),
                 title=ui.span(label,
                               ui.tags.span(t["analysis"], class_="task-type-badge"),
-                              _status_badge(state)),
+                              _status_badge(state),
+                              _stage_chip(stage)),
             )
 
     # ── download completed results ─────────────────────────────────────────────
