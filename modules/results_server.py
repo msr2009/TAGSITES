@@ -10,6 +10,7 @@ from utils.results import (
     residue_colors_gradient,
     residue_colors_for_annotations,
     residue_colors_for_phobius,
+    residue_colors_jet,
     _guess_analysis_type,
 )
 from config import RESULTS_TYPE_DICT, DOMAIN_SOURCE_COLORS
@@ -113,7 +114,9 @@ def results_server(input, output, session, shared_json, shared_sites):
         await _send_plot(aa_df, range_df, meta, json_content["global"]["run_name"])
         # always reset structure colors on load — don't rely on color_by reactive firing
         # (it won't fire if color_by was already "(none)" before this load)
-        await session.send_custom_message("tagsites_set_colors", {"colors": [], "legend": None})
+        jet_colors = residue_colors_jet(meta.get("seq_len", 0))
+        await session.send_custom_message("tagsites_set_colors",
+                                          {"colors": jet_colors, "legend": {"type": "rainbow"}})
         if meta.get("pdb_path"):
             await _send_struct(meta["pdb_path"])
         pending_sites.set(set())
@@ -304,8 +307,12 @@ def results_server(input, output, session, shared_json, shared_sites):
         """Compute per-residue colors for the selected track and send to 3D viewer."""
         track = input.color_by()
         if not track or track == "(none)":
+            meta = run_meta.get()
+            seq_len = meta.get("seq_len", 0) if meta else 0
+            colors = residue_colors_jet(seq_len) if seq_len else []
             await session.send_custom_message("tagsites_set_colors",
-                                              {"colors": [], "legend": None})
+                                              {"colors": colors,
+                                               "legend": {"type": "rainbow"}})
             return
 
         task_name, scheme = track.rsplit(":", 1) if ":" in track else (track, "categorical")

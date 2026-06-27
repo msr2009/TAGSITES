@@ -831,7 +831,6 @@
 
     viewer.resize();
     viewer.zoomTo();
-    viewer.zoom(1.5, 0);  // tighter fit to fill the panel
     viewer.render();
   }
 

@@ -17,6 +17,8 @@ _PHOBIUS_KEYWORDS = [
     ("cytoplasm",              "Cytoplasmic"),
     ("extracellular region",   "Extracellular"),
     ("embedded in the membrane", "Transmembrane"),
+    ("signal peptide",         "Signal peptide"),
+    ("signal sequence",        "Signal peptide"),
 ]
 
 
@@ -27,6 +29,30 @@ def _translate_phobius_desc(desc):
         if keyword in d:
             return label
     return desc
+
+
+def _merge_phobius_intervals(phobius_df):
+    """Merge overlapping/contiguous Phobius rows that share the same translated label.
+
+    Handles cases like signal peptides, which InterProScan5 emits as several
+    overlapping sub-region rows (N-terminal, hydrophobic, C-terminal, whole span).
+    Returns a new DataFrame with the merged rows.
+    """
+    merged_rows = []
+    for desc, group in phobius_df.groupby("description", sort=False):
+        intervals = sorted(zip(group["start"].astype(int), group["stop"].astype(int)))
+        cur_start, cur_stop = intervals[0]
+        for start, stop in intervals[1:]:
+            # contiguous or overlapping: extend current interval
+            if start <= cur_stop + 1:
+                cur_stop = max(cur_stop, stop)
+            else:
+                merged_rows.append({"source": "Phobius", "start": cur_start,
+                                    "stop": cur_stop, "description": desc})
+                cur_start, cur_stop = start, stop
+        merged_rows.append({"source": "Phobius", "start": cur_start,
+                            "stop": cur_stop, "description": desc})
+    return pd.DataFrame(merged_rows, columns=["source", "start", "stop", "description"])
 
 
 def load_data_from_json(json_in, type_dict):
@@ -121,10 +147,12 @@ def load_data_from_json(json_in, type_dict):
             print(f"Unknown analysis type '{analysis}' for task '{task}'. Skipping.")
             continue
 
-    # translate verbose Phobius descriptions to short topology labels
+    # translate verbose Phobius descriptions and merge overlapping intervals per label
     if not dat.empty:
         mask = dat["source"] == "Phobius"
         dat.loc[mask, "description"] = dat.loc[mask, "description"].map(_translate_phobius_desc)
+        phobius_merged = _merge_phobius_intervals(dat[mask])
+        dat = pd.concat([dat[~mask], phobius_merged], ignore_index=True)
 
     return df, dat, alns
 
@@ -463,6 +491,36 @@ def residue_colors_for_phobius(range_df, seq_len):
         if src == "Phobius"
     ]
     return colors, legend_items
+
+
+# 5-stop jet colormap matching the CSS legend gradient (blue→cyan→green→yellow→red)
+_JET_STOPS = [
+    (0.00, (0,   0,   255)),
+    (0.25, (0,   255, 255)),
+    (0.50, (0,   255, 0  )),
+    (0.75, (255, 255, 0  )),
+    (1.00, (255, 0,   0  )),
+]
+
+
+def _jet_hex(t):
+    """Return hex color for t ∈ [0,1] using the 5-stop jet gradient."""
+    t = max(0.0, min(1.0, t))
+    for i in range(len(_JET_STOPS) - 1):
+        t0, c0 = _JET_STOPS[i]
+        t1, c1 = _JET_STOPS[i + 1]
+        if t <= t1:
+            f = (t - t0) / (t1 - t0)
+            r, g, b = (int(c0[j] + f * (c1[j] - c0[j])) for j in range(3))
+            return f"#{r:02x}{g:02x}{b:02x}"
+    return "#ff0000"
+
+
+def residue_colors_jet(seq_len):
+    """N→C jet gradient per residue, matching the structure legend CSS gradient."""
+    if seq_len <= 1:
+        return ["#0000ff"] * max(seq_len, 0)
+    return [_jet_hex(i / (seq_len - 1)) for i in range(seq_len)]
 
 
 def build_plot_payload(aa_df, range_df, title="Results"):

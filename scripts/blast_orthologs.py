@@ -76,6 +76,10 @@ def main(fasta_in, email, workingdir, name, output,
         blast_output = json.load(f)
 
     qlen = blast_output["query_len"]
+    if not blast_output.get("hits"):
+        _report(reporter, "BLAST returned no hits — check the sequence and search parameters.",
+                stage="blast", level="error")
+        return
     query_species = blast_output["hits"][0]["hit_os"]
 
     blast_hits = {query_species: []}
