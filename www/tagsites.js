@@ -35,6 +35,7 @@
   var rangeFeatures = [];   // [{source, start, stop, desc, color, yRow}]
   var hiddenTracks  = new Set();
   var plotTitle     = "";
+  var plotYMax      = 1.1;  // fixed y ceiling for the line panel
   var legendHitBoxes = [];  // [{name, x0, y0, x1, y1}] — rebuilt on each render
 
   // 3D-viewer click timer
@@ -52,7 +53,7 @@
 
   var LEFT_GUTTER  = 62;   // y-axis labels
   var RIGHT_GUTTER = 14;
-  var TOP_GUTTER   = 28;   // title
+  var TOP_GUTTER   = 6;    // top margin
   var SEQ_H        = 58;   // fixed height for sequence strip
   var LEGEND_H     = 22;   // fixed-height legend band between line and feature panels
   var PANEL_GAP    = 8;    // gap between panels
@@ -213,7 +214,6 @@
 
     var layout = getPanelLayout(inf.cssH);
 
-    drawTitle(ctx, inf, layout);
     drawLinePanel(ctx, inf, layout);
     drawLegendBand(ctx, inf, layout);
     drawFeaturePanel(ctx, inf, layout);
@@ -269,21 +269,30 @@
     ctx.fillText("Score", 0, 0);
     ctx.restore();
 
+    // run name in top-left corner of the panel
+    if (plotTitle) {
+      ctx.save();
+      ctx.font         = "bold 11px sans-serif";
+      ctx.fillStyle    = "#555";
+      ctx.textAlign    = "left";
+      ctx.textBaseline = "top";
+      ctx.fillText(plotTitle, LEFT_GUTTER + 5, top + 4);
+      ctx.restore();
+    }
+
     if (lineTracks.length === 0) return;
 
-    // compute shared y range across all visible tracks
-    var yMin = Infinity, yMax = -Infinity;
+    // fixed y ceiling (plotYMax); auto-range only the minimum
+    var yMin = Infinity;
+    var yMax = plotYMax;
     lineTracks.forEach(function (tr) {
       if (hiddenTracks.has(tr.name)) return;
       tr.values.forEach(function (v) {
-        if (v !== null && isFinite(v)) {
-          if (v < yMin) yMin = v;
-          if (v > yMax) yMax = v;
-        }
+        if (v !== null && isFinite(v) && v < yMin) yMin = v;
       });
     });
-    if (!isFinite(yMin)) { yMin = 0; yMax = 1; }
-    if (yMin === yMax)   { yMin -= 0.5; yMax += 0.5; }
+    if (!isFinite(yMin)) yMin = 0;
+    if (yMin >= yMax)    yMin = yMax - 1;
     var ySpan = yMax - yMin;
 
     // y-axis grid lines and tick labels
@@ -943,6 +952,7 @@
   Shiny.addCustomMessageHandler("tagsites_set_plot", function (msg) {
     inputNames    = msg.inputs || {};
     plotTitle     = msg.title  || "";
+    plotYMax      = (typeof msg.yMax === "number") ? msg.yMax : 1.1;
     lineTracks    = msg.lineTracks    || [];
     rangeFeatures = msg.rangeFeatures || [];
     seqArray      = (msg.seq || "").split("");

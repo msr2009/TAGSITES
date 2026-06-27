@@ -50,13 +50,7 @@ def _build_colors_and_legend(track, task_name, scheme, aa_df, range_df, seq_len,
             and scheme != "continuous"):
         legend = {"type": "categorical", "items": _PLDDT_LEGEND}
     else:
-        series = aa_df[task_name].dropna()
-        legend = {
-            "type": "gradient",
-            "label": task_name,
-            "vmin": round(float(series.min()), 3),
-            "vmax": round(float(series.max()), 3),
-        }
+        legend = {"type": "gradient", "label": task_name, "vmin": 0, "vmax": 1}
 
     return colors, legend
 
@@ -68,7 +62,7 @@ def results_server(input, output, session, shared_json, shared_sites):
     aa_data     = reactive.Value()     # continuous scores DataFrame
     range_data  = reactive.Value()     # range annotations DataFrame
     aln_meta    = reactive.Value([])   # list of (path, task_name, params)
-    run_name    = reactive.Value()
+    run_name    = reactive.Value(None)
     run_meta    = reactive.Value({})   # {query_seq, pdb_path, seq_len}
     task_colors = reactive.Value({})   # task_name → hex color (stable across renders)
 
@@ -259,6 +253,12 @@ def results_server(input, output, session, shared_json, shared_sites):
         pending_sites.set(set())
 
     @reactive.effect
+    @reactive.event(input.add_suggested_button)
+    def on_add_suggested():
+        """Placeholder — suggested site logic to be implemented."""
+        pass
+
+    @reactive.effect
     @reactive.event(input.clear_highlights_button)
     def on_clear():
         """Clear all committed and pending tag sites."""
@@ -314,6 +314,14 @@ def results_server(input, output, session, shared_json, shared_sites):
                                           {"colors": colors, "legend": legend})
 
     # ── Outputs ──────────────────────────────────────────────────────────────────
+
+    @render.ui
+    def json_card_warning():
+        """Show a warning badge in the upload card header when no data is loaded."""
+        if run_name.get() is not None:
+            return ui.span()
+        return ui.span("⚠ no current JSON",
+                       style="color:#dc3545; font-size:0.8em; font-style:italic;")
 
     @render.ui
     def color_buttons_ui():

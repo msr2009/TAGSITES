@@ -18,11 +18,11 @@
 	},
 
 	"global_tooltips": {
-		"email": "EBI requires a registered email for all BLAST and InterPro job submissions",
+		"email": "EBI requires an email address for remote jobs",
 		"input_file": "Protein sequence as FASTA (.fa/.fasta) or an AlphaFold PDB (.pdb). PDB input auto-extracts the sequence and pre-fills the pLDDT analysis.",
-		"input_genomic": "Genomic FASTA of the region surrounding your gene (orientation unknown is fine — Genewise tests both strands). Required to design CRISPR reagents.",
+		"input_genomic": "FASTA of genomic region containing gene (include at least 500bp up- and downstream)",
 		"run_name": "Short identifier used as the prefix for all output files",
-		"working_dir": "Directory where all output files will be written (auto-filled from Analysis Name)"
+		"working_dir": "Directory for output. Autocompleted from Analysis name and editable"
 	},
 
 	"analyses": {

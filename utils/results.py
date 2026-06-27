@@ -69,7 +69,8 @@ def load_data_from_json(json_in, type_dict):
                                                   comment="#", na_values=[-1000])
                             stmp = pd.DataFrame()
                             stmp["pos"] = sasa_df.iloc[:, 0].astype(int)
-                            stmp[task + "_sasa"] = sasa_df.iloc[:, 1]
+                            sasa_vals = sasa_df.iloc[:, 1].rolling(window=3, center=True, min_periods=1).mean().clip(upper=1.0)
+                            stmp[task + "_sasa"] = sasa_vals
                             df = pd.merge(df, stmp, how="outer", on="pos")
                         except Exception as e:
                             print(f"Error loading SASA for task '{task}': {e}")
@@ -284,11 +285,8 @@ def residue_colors_gradient(aa_df, task_name, hex_color=None):
     if task_name not in aa_df.columns:
         return []
     series = aa_df.set_index("pos")[task_name]
-    vmin, vmax = series.min(), series.max()
-    if vmax == vmin:
-        normed = series.apply(lambda x: 0.5 if pd.notna(x) else float("nan"))
-    else:
-        normed = (series - vmin) / (vmax - vmin)
+    # normalize to fixed [0, 1] so color position is absolute, not relative to data range
+    normed = series
 
     def _viridis_hex(t):
         # linearly interpolate between the two nearest stops
@@ -425,11 +423,16 @@ def build_plot_payload(aa_df, range_df, title="Results"):
     y_positions = {"Phobius": 2, "Pfam": 4, "modification": 6}
 
     line_tracks = []
+    data_max = -float("inf")
     if aa_df is not None:
         colors = assign_task_colors(aa_df)
         for col in aa_df.columns[1:]:  # skip 'pos'
             vals = [None if pd.isna(v) else float(v) for v in aa_df[col]]
             line_tracks.append({"name": col, "color": colors.get(col, "#888888"), "values": vals})
+            col_max = aa_df[col].dropna().max()
+            if pd.notna(col_max):
+                data_max = max(data_max, float(col_max))
+    y_max = max(1.1, data_max) if data_max > -float("inf") else 1.1
 
     range_features = []
     if range_df is not None and not range_df.empty:
@@ -448,7 +451,8 @@ def build_plot_payload(aa_df, range_df, title="Results"):
                 "yRow": y_positions[src],
             })
 
-    return {"title": title, "lineTracks": line_tracks, "rangeFeatures": range_features}
+    return {"title": title, "lineTracks": line_tracks, "rangeFeatures": range_features,
+            "yMax": y_max}
 
 
 def _hex_to_rgb(hex_color):

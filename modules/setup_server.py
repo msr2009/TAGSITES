@@ -25,6 +25,12 @@ from scripts.site_selection_util import get_sequence, save_fasta
 
 _ROOT = Path(__file__).parent.parent
 _PARAMS_DIR = _ROOT / "params"
+_TABLES_DIR = _ROOT / "tables"
+
+
+def _table_choices(ext="*.tsv"):
+    """Return {absolute_path_str: display_name} for files in tables/ matching ext."""
+    return {str(f): f.stem for f in sorted(_TABLES_DIR.glob(ext))}
 
 
 # ── widget builders ───────────────────────────────────────────────────────────
@@ -32,6 +38,10 @@ _PARAMS_DIR = _ROOT / "params"
 def _make_param_widget(widget_id, param, value, tip):
     """Return one input widget for a task parameter."""
     lbl = label_with_tip(param.replace("_", " "), tip)
+    if param == "scores_file":
+        choices = _table_choices("*.tsv")
+        selected = value if value in choices else next(iter(choices), "")
+        return ui.input_select(widget_id, label=lbl, choices=choices, selected=selected)
     if isinstance(value, list):
         return ui.input_select(widget_id, label=lbl,
                                choices=value, selected=value[0], size=1)
@@ -68,8 +78,8 @@ def setup_server(input, output, session, shared_json):
     def _populate_presets():
         """Refresh the Load preset dropdown after a new preset is saved."""
         names = [p.stem for p in sorted(_PARAMS_DIR.glob("*.json"))]
-        ui.update_selectize("load_preset", choices=names)
-        ui.update_selectize("load_preset", selected="")
+        choices = {"": "— select —", **{n: n for n in names}}
+        ui.update_select("load_preset", choices=choices, selected="")
 
     # ── button enable / disable ───────────────────────────────────────────────
 
@@ -173,6 +183,23 @@ def setup_server(input, output, session, shared_json):
             _snapshot()
             tasks.set([t for t in tasks() if t["id"] != task_id])
 
+    def _register_table_upload(task_id):
+        """Copy an uploaded TSV to /tables/, update snap, and re-render the card."""
+        @reactive.effect
+        @reactive.event(lambda: input[f"{task_id}_add_table"]())
+        def _handler():
+            files = input[f"{task_id}_add_table"]()
+            if not files:
+                return
+            f = files[0]
+            dest = _TABLES_DIR / f["name"]
+            shutil.copy(f["datapath"], dest)
+            snap = dict(task_snap())
+            snap.setdefault(task_id, {})["scores_file"] = str(dest)
+            task_snap.set(snap)
+            tasks.set(list(tasks()))
+            ui.notification_show(f"Table '{f['name']}' added.", type="message", duration=3)
+
     @reactive.effect
     @reactive.event(input.add_task)
     def _add_task():
@@ -190,6 +217,8 @@ def setup_server(input, output, session, shared_json):
         task["start_open"] = True   # newly added tasks open by default
         tasks.set(tasks() + [task])
         _register_remove(task["id"])
+        if ttype == "scores":
+            _register_table_upload(task["id"])
         ui.update_text("task_label", value="")
 
     # ── preset load / save ────────────────────────────────────────────────────
@@ -219,6 +248,8 @@ def setup_server(input, output, session, shared_json):
                     "start_open": False}   # preloaded tasks start collapsed
             new_tasks.append(task)
             _register_remove(tid)
+            if ttype == "scores":
+                _register_table_upload(tid)
         tasks.set(tasks() + new_tasks)
 
     @reactive.effect
@@ -262,6 +293,14 @@ def setup_server(input, output, session, shared_json):
         for task in current_tasks:
             label = task["id"].rsplit("_", 1)[0]
             widgets = _build_param_inputs(task, snap)
+            add_table = (
+                ui.div(
+                    ui.input_file(f"{task['id']}_add_table", "＋ Add table (.tsv)",
+                        accept=[".tsv"]),
+                    style="margin-top:0.2rem;",
+                )
+                if task["name"] == "scores" else None
+            )
             panels.append(
                 ui.accordion_panel(
                     ui.span(
@@ -271,6 +310,8 @@ def setup_server(input, output, session, shared_json):
                     # params grid
                     ui.layout_column_wrap(*widgets, width=1/2) if widgets else
                     ui.p("No configurable parameters.", style="color:#6c757d; font-size:0.8rem;"),
+                    # scores-only: upload a new property table
+                    *([add_table] if add_table else []),
                     # remove button at bottom of body
                     ui.div(
                         ui.input_action_button(

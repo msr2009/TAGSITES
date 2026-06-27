@@ -9,9 +9,10 @@ from config import INPUT_JSON, SELECTABLE_TASKS, GLOBAL_TOOLTIPS
 _PARAMS_DIR = Path(__file__).parent.parent / "params"
 
 
-def _preset_names():
-    """Return current list of saved preset names from params/."""
-    return [p.stem for p in sorted(_PARAMS_DIR.glob("*.json"))]
+def _preset_choices():
+    """Return {name: name} dict for selectize, with a leading empty option."""
+    names = [p.stem for p in sorted(_PARAMS_DIR.glob("*.json"))]
+    return {"": "— select —", **{n: n for n in names}}
 
 
 def label_with_tip(text, tip=""):
@@ -70,6 +71,7 @@ _STYLE = """
 
     /* tooltip icon */
     .tip-icon { cursor: help; color: #adb5bd; font-size: 0.75em; margin-left: 3px; }
+    .tooltip-inner { max-width: 320px; }
 
     /* task description line */
     .task-desc { font-size: 0.78rem; color: #495057; margin-top: 0.15rem; min-height: 1.1em; }
@@ -80,8 +82,26 @@ _STYLE = """
         border-top: 2px solid #dee2e6; padding: 0.5rem 1rem;
         margin-top: 0.5rem; z-index: 100;
         display: flex; align-items: center; gap: 0.75rem;
+        justify-content: space-between;
     }
     .save-bar #save_status { font-size: 0.8rem; color: #6c757d; margin: 0; }
+    .save-bar-right { display: flex; align-items: center; gap: 0.4rem; }
+    .save-bar-right .form-label { margin: 0; white-space: nowrap; }
+    .save-bar-right .shiny-input-container { margin-bottom: 0 !important; }
+
+    /* inline task builder rows */
+    .task-type-row, .task-label-row {
+        display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+    }
+    .task-type-row { margin-bottom: 0.3rem; }
+    .task-label-row { margin-bottom: 0.3rem; }
+    .task-type-row .shiny-input-container > label,
+    .task-label-row .shiny-input-container > label { display: none; }
+    .task-type-row .shiny-input-container,
+    .task-label-row .shiny-input-container { margin-bottom: 0 !important; }
+    .task-type-row .form-label { white-space: nowrap; margin: 0; }
+    .task-label-row .form-label { white-space: nowrap; margin: 0; }
+    .task-type-row .task-desc { margin: 0; }
 
     /* misc */
     .section-hint { font-size: 0.8rem; color: #6c757d; margin-bottom: 0.3rem; margin-top: 0; }
@@ -118,36 +138,28 @@ def setup_ui():
                 ui.p("Configure your run and upload your sequence(s).", class_="section-hint"),
 
                 ui.div(
-                    # Row 1: email + analysis name
-                    ui.layout_column_wrap(
-                        ui.input_text("email",
-                            label_with_tip("Email", _t.get("email", "")),
-                            value=INPUT_JSON["global"]["email"],
-                            placeholder="required for EBI submissions"),
-                        ui.input_text("run_name",
-                            label_with_tip("Analysis name", _t.get("run_name", "")),
-                            placeholder="e.g. SNB1"),
-                        width=1/2, gap="0.5rem",
-                    ),
+                    ui.input_text("email",
+                        label_with_tip("Email", _t.get("email", "")),
+                        value=INPUT_JSON["global"]["email"],
+                        placeholder="required for EBI submissions", width="100%"),
+                    ui.input_text("run_name",
+                        label_with_tip("Analysis name", _t.get("run_name", "")),
+                        placeholder="e.g. SNB1", width="100%"),
                     # Row 2: output directory (full width of the container)
                     ui.input_text("working_dir",
                         label_with_tip("Output directory", _t.get("working_dir", "")),
                         placeholder="auto-filled", width="100%"),
-                    # Row 3: file uploads
-                    ui.layout_column_wrap(
+                    # Row 3: file uploads (stacked full-width)
+                    ui.div(
                         ui.input_file("input_file",
                             label_with_tip("Protein sequence (.fa, .fasta, or .pdb)",
                                            _t.get("input_file", "")),
-                            accept=[".fa", ".fasta", ".pdb"]),
+                            accept=[".fa", ".fasta", ".pdb"], width="100%"),
                         ui.input_file("input_genomic",
-                            label_with_tip("Genomic region FASTA (optional)",
+                            label_with_tip("Genomic region FASTA (required for reagent design)",
                                            _t.get("input_genomic", "")),
-                            accept=[".fasta", ".fa"]),
-                        width=1/2, gap="0.5rem",
-                    ),
-                    ui.tags.small(
-                        "⚠ Required for CRISPR reagent design.",
-                        style="color:#856404; display:block; margin-top:-2px;",
+                            accept=[".fasta", ".fa"], width="100%"),
+                        style="margin-top: 0.75rem;",
                     ),
                     class_="inputs-inner",
                 ),
@@ -159,43 +171,16 @@ def setup_ui():
                 "2 · Analyses",
                 ui.p("Build the set of analyses to run.", class_="section-hint"),
 
-                # preset load / save — compact single row
+                # preset load row
                 ui.card(
                     ui.card_body(
                         ui.div(
-                            # Load half
-                            ui.div(
-                                ui.tags.label("Load saved set", class_="form-label"),
-                                ui.div(
-                                    ui.div(
-                                        ui.input_selectize("load_preset", "",
-                                            choices=_preset_names(), multiple=False,
-                                            selected=None, options={"create": False}),
-                                        class_="selectize-wrapper",
-                                    ),
-                                    ui.input_action_button("load_preset_btn", "Load",
-                                        class_="btn-sm btn-outline-secondary"),
-                                    class_="preset-pair",
-                                ),
-                            ),
-                            # divider
-                            ui.tags.div(style=(
-                                "width:1px; background:#dee2e6; margin:0 1rem; "
-                                "align-self:stretch;"
-                            )),
-                            # Save half
-                            ui.div(
-                                ui.tags.label("Save current set as", class_="form-label"),
-                                ui.div(
-                                    ui.input_text("preset_name", "",
-                                        placeholder="preset name"),
-                                    ui.input_action_button("save_preset_btn", "Save",
-                                        disabled=True,
-                                        class_="btn-sm btn-outline-secondary"),
-                                    class_="preset-pair",
-                                ),
-                            ),
-                            style="display:flex; align-items:flex-start; gap:0;",
+                            ui.tags.label("Load saved analyses set", class_="form-label"),
+                            ui.input_select("load_preset", label="",
+                                choices=_preset_choices(), selected=""),
+                            ui.input_action_button("load_preset_btn", "Load",
+                                class_="btn-sm btn-outline-secondary"),
+                            class_="task-type-row",
                         ),
                     ),
                 ),
@@ -203,23 +188,23 @@ def setup_ui():
                 # task builder
                 ui.card(
                     ui.card_body(
-                        ui.layout_column_wrap(
-                            ui.div(
-                                ui.input_select("task_type",
-                                    label_with_tip("Analysis type",
-                                        "Choose what to compute. A description appears below."),
-                                    SELECTABLE_TASKS),
-                                ui.output_text("task_type_desc"),
+                        # Row 1: Analysis type | dropdown | description
+                        ui.div(
+                            ui.tags.label("Analysis type", class_="form-label"),
+                            ui.input_select("task_type", label="", choices=SELECTABLE_TASKS),
+                            ui.span(ui.output_text("task_type_desc"), class_="task-desc"),
+                            class_="task-type-row",
+                        ),
+                        # Row 2: Task label | text input
+                        ui.div(
+                            ui.tags.label("Task label", class_="form-label"),
+                            ui.input_text("task_label", label="",
+                                placeholder="short ID, e.g. WORM or BROAD"),
+                            ui.tags.small(
+                                "Names output files, e.g. WORM_blast.jsd.",
+                                class_="text-muted",
                             ),
-                            ui.div(
-                                ui.input_text("task_label", "Task label",
-                                    placeholder="short ID, e.g. WORM or BROAD"),
-                                ui.tags.small(
-                                    "Used to name output files (e.g. WORM_blast.jsd).",
-                                    class_="text-muted",
-                                ),
-                            ),
-                            width=1/2,
+                            class_="task-label-row",
                         ),
                         ui.div(
                             ui.input_action_button("add_task", "＋ Add task",
@@ -241,9 +226,21 @@ def setup_ui():
 
         # ── Sticky save bar ───────────────────────────────────────────────────
         ui.div(
-            ui.input_action_button("save_analysis", "💾 Save Analysis",
-                disabled=True, class_="btn-success btn-sm"),
-            ui.output_text("save_status"),
+            # left: save + status
+            ui.div(
+                ui.input_action_button("save_analysis", "💾 Save Analysis",
+                    disabled=True, class_="btn-success btn-sm"),
+                ui.output_text("save_status"),
+                style="display:flex; align-items:center; gap:0.75rem;",
+            ),
+            # right: save preset
+            ui.div(
+                ui.tags.label("Save current analyses as default", class_="form-label"),
+                ui.input_text("preset_name", label="", placeholder="name"),
+                ui.input_action_button("save_preset_btn", "Save",
+                    disabled=True, class_="btn-sm btn-outline-secondary"),
+                class_="save-bar-right",
+            ),
             class_="save-bar",
         ),
     )

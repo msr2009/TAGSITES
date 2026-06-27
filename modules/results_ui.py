@@ -9,14 +9,32 @@ def results_ui():
         ui.tags.link(rel="stylesheet", href="tagsites.css"),
         ui.tags.script(src="tagsites.js"),
 
-        ui.h2("Results"),
-
-        # file upload — auto-plots on selection
+        # ── Collapsible JSON upload card ──────────────────────────────────────
         ui.div(
-            ui.input_file("json_file_input", "Upload results JSON", accept=[".json"]),
-            class_="ts-controls-row",
+            ui.div(
+                ui.div(
+                    ui.span("Upload results JSON"),
+                    ui.output_ui("json_card_warning"),
+                    class_="card-header d-flex justify-content-between align-items-center",
+                    style="cursor:pointer;",
+                    **{"data-bs-toggle": "collapse",
+                       "data-bs-target": "#ts-json-body",
+                       "aria-expanded": "true"},
+                ),
+                ui.div(
+                    ui.div(
+                        ui.input_file("json_file_input", None, accept=[".json"]),
+                        class_="card-body py-2",
+                    ),
+                    id="ts-json-body",
+                    class_="collapse show",
+                ),
+                class_="card",
+            ),
+            class_="mb-2",
         ),
-        ui.hr(),
+
+        ui.h4("Analysis Results"),
 
         # ── Main content: plot (left) + structure (right) ─────────────────────
         ui.layout_columns(
@@ -64,12 +82,15 @@ def results_ui():
             col_widths=(7, 5),
         ),
 
-        # ── Chosen tag sites: chips | Add highlighted | Clear ─────────────────
+        # ── Chosen tag sites: chips | Add highlighted | Add suggested | Clear ──
         ui.div(
             ui.output_ui("chosen_sites_display"),
             ui.input_action_button("add_highlighted_button",
                                    "Add highlighted",
                                    class_="btn btn-success btn-sm ts-sites-btn"),
+            ui.input_action_button("add_suggested_button",
+                                   "Add suggested",
+                                   class_="btn btn-outline-success btn-sm ts-sites-btn"),
             ui.input_action_button("clear_highlights_button",
                                    "Clear",
                                    class_="btn btn-secondary btn-sm ts-sites-btn"),
