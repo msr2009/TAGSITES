@@ -9,6 +9,7 @@ from utils.results import (
     residue_colors_for_track,
     residue_colors_gradient,
     residue_colors_for_annotations,
+    residue_colors_for_phobius,
     _guess_analysis_type,
 )
 from config import RESULTS_TYPE_DICT, DOMAIN_SOURCE_COLORS
@@ -33,6 +34,12 @@ def _build_colors_and_legend(track, task_name, scheme, aa_df, range_df, seq_len,
         if range_df is None or not seq_len:
             return None, None
         colors, items = residue_colors_for_annotations(range_df, seq_len)
+        return colors, {"type": "categorical", "items": items}
+
+    if track == "__phobius__":
+        if range_df is None or not seq_len:
+            return None, None
+        colors, items = residue_colors_for_phobius(range_df, seq_len)
         return colors, {"type": "categorical", "items": items}
 
     # ── Continuous track coloring ────────────────────────────────────────────────
@@ -96,7 +103,10 @@ def results_server(input, output, session, shared_json, shared_sites):
                 else:
                     choices[col] = col
         if range_df is not None and not range_df.empty:
-            choices["__domains__"] = "Domains"
+            if not range_df[range_df["source"].isin({"Pfam", "modification"})].empty:
+                choices["__domains__"] = "Domains"
+            if not range_df[range_df["source"] == "Phobius"].empty:
+                choices["__phobius__"] = "Phobius"
         color_by_choices.set(choices)
         ui.update_select("color_by", choices=choices, selected="(none)")
 

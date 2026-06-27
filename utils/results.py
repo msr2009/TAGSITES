@@ -12,6 +12,23 @@ from numpy import linspace
 from config import ANALYSIS_COLORS, DOMAIN_SOURCE_COLORS
 
 
+# keyword → short label mapping for Phobius region descriptions from EBI InterProScan5
+_PHOBIUS_KEYWORDS = [
+    ("cytoplasm",              "Cytoplasmic"),
+    ("extracellular region",   "Extracellular"),
+    ("embedded in the membrane", "Transmembrane"),
+]
+
+
+def _translate_phobius_desc(desc):
+    """Map verbose Phobius region description to a short topology label."""
+    d = desc.lower()
+    for keyword, label in _PHOBIUS_KEYWORDS:
+        if keyword in d:
+            return label
+    return desc
+
+
 def load_data_from_json(json_in, type_dict):
     """Load per-task result TSVs referenced in the run JSON.
 
@@ -103,6 +120,11 @@ def load_data_from_json(json_in, type_dict):
         else:
             print(f"Unknown analysis type '{analysis}' for task '{task}'. Skipping.")
             continue
+
+    # translate verbose Phobius descriptions to short topology labels
+    if not dat.empty:
+        mask = dat["source"] == "Phobius"
+        dat.loc[mask, "description"] = dat.loc[mask, "description"].map(_translate_phobius_desc)
 
     return df, dat, alns
 
@@ -361,8 +383,11 @@ _ANNOTATION_PALETTE = [
     "#006064", "#880e4f", "#f9a825", "#1a237e", "#004d40",
 ]
 
-# Sources shown in the feature panel (same filter applied to plot and structure)
+# Sources shown in the 2D feature panel
 _FEATURE_SOURCES = {"Pfam", "Phobius", "modification"}
+
+# Sources painted in the __domains__ structure colorscheme (Phobius has its own scheme)
+_DOMAIN_STRUCT_SOURCES = {"Pfam", "modification"}
 
 # paint priority: last painted wins; modifications end up on top
 _FEATURE_PAINT_ORDER = ["Pfam", "Phobius", "modification"]
@@ -388,16 +413,18 @@ def _annotation_color_map(range_df):
 
 
 def residue_colors_for_annotations(range_df, seq_len):
-    """Unique color per visible annotation (source + description) for the structure viewer.
+    """Unique color per Pfam/modification annotation for the __domains__ structure scheme.
 
-    Mirrors exactly the annotations drawn in the feature panel.
+    Phobius is intentionally excluded here — it has its own __phobius__ colorscheme.
     Returns (per_residue_colors, legend_items).
     """
     color_map = _annotation_color_map(range_df)
     colors = ["#e8e8e8"] * seq_len
 
-    # paint in priority order so modifications land on top
+    # paint only domain-struct sources; modifications land on top
     for source in _FEATURE_PAINT_ORDER:
+        if source not in _DOMAIN_STRUCT_SOURCES:
+            continue
         for _, row in range_df[range_df["source"] == source].iterrows():
             key = (str(row["source"]), str(row["description"]))
             color = color_map.get(key)
@@ -410,6 +437,30 @@ def residue_colors_for_annotations(range_df, seq_len):
     legend_items = [
         {"color": color, "label": f"{desc} ({src})"}
         for (src, desc), color in color_map.items()
+        if src in _DOMAIN_STRUCT_SOURCES
+    ]
+    return colors, legend_items
+
+
+def residue_colors_for_phobius(range_df, seq_len):
+    """Color structure by Phobius topology region using the shared annotation palette.
+
+    Returns (per_residue_colors, legend_items).
+    """
+    color_map = _annotation_color_map(range_df)
+    colors = ["#e8e8e8"] * seq_len
+    for _, row in range_df[range_df["source"] == "Phobius"].iterrows():
+        key = ("Phobius", str(row["description"]))
+        color = color_map.get(key)
+        if color is None:
+            continue
+        start, stop = int(row["start"]), int(row["stop"])
+        for pos in range(start - 1, min(stop, seq_len)):
+            colors[pos] = color
+    legend_items = [
+        {"color": color, "label": desc}
+        for (src, desc), color in color_map.items()
+        if src == "Phobius"
     ]
     return colors, legend_items
 
