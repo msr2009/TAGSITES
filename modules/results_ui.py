@@ -11,28 +11,31 @@ def results_ui():
 
         ui.h2("Results"),
 
-        # file upload + load button
-        ui.layout_columns(
-            ui.input_file("json_file_input", "Upload a JSON file for results",
-                          accept=[".json"]),
+        # file upload + plot button — compact inline row
+        ui.div(
+            ui.input_file("json_file_input", "Upload results JSON", accept=[".json"]),
             ui.input_action_button("plot_results_button", "Plot Results",
-                                   class_="btn-primary", style="margin-top:24px"),
-            col_widths=(9, 3),
+                                   class_="btn-primary"),
+            class_="ts-controls-row",
         ),
         ui.hr(),
 
         # ── Main content: plot (left) + structure (right) ─────────────────────
         ui.layout_columns(
-            # left column: native canvas plot (line tracks + feature panel + sequence strip)
+            # left column: toolbar + native canvas plot
             ui.div(
+                # zoom / pan / reset toolbar
+                ui.div(
+                    ui.tags.button("⊕ Zoom", onclick="tsSetMode('zoom')",
+                                   class_="btn btn-sm ts-mode-btn ts-mode-active"),
+                    ui.tags.button("✥ Pan",  onclick="tsSetMode('pan')",
+                                   class_="btn btn-sm ts-mode-btn"),
+                    ui.tags.button("⟳ Reset", onclick="tsResetZoom()",
+                                   class_="btn btn-sm btn-outline-secondary"),
+                    class_="ts-plot-toolbar",
+                ),
                 ui.div(
                     ui.tags.canvas(id="ts_plot_div"),
-                    ui.div(
-                        ui.input_action_button("add_highlighted_button",
-                                               "Add highlighted",
-                                               class_="btn btn-success btn-sm"),
-                        id="ts-plot-add-btn",
-                    ),
                     id="ts-plot-wrap",
                 ),
                 class_="ts-main-left",
@@ -73,9 +76,12 @@ def results_ui():
             col_widths=(8, 4),
         ),
 
-        # ── Chosen tag sites — scrollable chip row with clear button ────────────
+        # ── Chosen tag sites: chips | Add highlighted | Clear ─────────────────
         ui.div(
             ui.output_ui("chosen_sites_display"),
+            ui.input_action_button("add_highlighted_button",
+                                   "Add highlighted",
+                                   class_="btn btn-success btn-sm ts-sites-btn"),
             ui.input_action_button("clear_highlights_button",
                                    "Clear",
                                    class_="btn btn-secondary btn-sm ts-sites-btn"),

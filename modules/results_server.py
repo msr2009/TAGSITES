@@ -33,30 +33,8 @@ def results_server(input, output, session, shared_json, shared_sites):
 
     # ── Load results ────────────────────────────────────────────────────────────
 
-    @reactive.effect
-    @reactive.event(input.plot_results_button)
-    async def load_results():
-        """Load analysis results from disk when the user clicks Plot Results."""
-        json_content = {}
-        try:
-            if shared_json.get():
-                with open(shared_json.get(), "r") as f:
-                    json_content = json.load(f)
-            elif input.json_file_input():
-                with open(input.json_file_input()[0]["datapath"], "r") as f:
-                    json_content = json.load(f)
-            else:
-                ui.notification_show("No JSON file loaded.", type="warning", duration=4)
-                return
-        except FileNotFoundError:
-            ui.notification_show("JSON file not found. Has the analysis been saved?",
-                                 type="error", duration=6)
-            return
-        except json.JSONDecodeError:
-            ui.notification_show("Could not parse JSON file — file may be malformed.",
-                                 type="error", duration=6)
-            return
-
+    async def _do_load(json_content):
+        """Parse a loaded JSON dict and push all results to the UI."""
         aa_df, range_df, alns = load_data_from_json(json_content, RESULTS_TYPE_DICT)
         meta = load_run_metadata(json_content)
         aa_data.set(aa_df)
@@ -81,16 +59,48 @@ def results_server(input, output, session, shared_json, shared_sites):
         color_by_choices.set(choices)
         ui.update_select("color_by", choices=choices, selected="(none)")
 
-        # send plot data + sequence to the native canvas renderer
         await _send_plot(aa_df, range_df, meta, json_content["global"]["run_name"])
-
-        # send PDB to 3D viewer if available
         if meta.get("pdb_path"):
             await _send_struct(meta["pdb_path"])
-
-        # reset selection state on new load
         pending_sites.set(set())
         shared_sites.set([])
+
+    @reactive.effect
+    @reactive.event(input.plot_results_button)
+    async def load_results():
+        """Load results on button click (uploaded file or shared pipeline JSON)."""
+        try:
+            if shared_json.get():
+                with open(shared_json.get()) as f:
+                    json_content = json.load(f)
+            elif input.json_file_input():
+                with open(input.json_file_input()[0]["datapath"]) as f:
+                    json_content = json.load(f)
+            else:
+                ui.notification_show("No JSON file loaded.", type="warning", duration=4)
+                return
+        except FileNotFoundError:
+            ui.notification_show("JSON file not found. Has the analysis been saved?",
+                                 type="error", duration=6)
+            return
+        except json.JSONDecodeError:
+            ui.notification_show("Could not parse JSON file — file may be malformed.",
+                                 type="error", duration=6)
+            return
+        await _do_load(json_content)
+
+    @reactive.effect
+    async def auto_load_results():
+        """Auto-plot results whenever the pipeline writes a new shared JSON path."""
+        path = shared_json.get()
+        if not path:
+            return
+        try:
+            with open(path) as f:
+                json_content = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return
+        await _do_load(json_content)
 
     def _input_names():
         """Build the dict of namespaced Shiny input IDs to send to JS."""
@@ -207,7 +217,8 @@ def results_server(input, output, session, shared_json, shared_sites):
     @reactive.effect
     @reactive.event(input.clear_highlights_button)
     def on_clear():
-        """Clear all pending highlights without committing."""
+        """Clear all committed and pending tag sites."""
+        shared_sites.set([])
         pending_sites.set(set())
 
     @reactive.effect

@@ -45,6 +45,7 @@
   var currentRange = null;
   var dragState    = null;  // {startX, lastX, mode, startR0, startR1}
   var wasDrag      = false;
+  var dragMode     = "zoom";  // "zoom" or "pan" — toggled by toolbar buttons
 
   /* ── Layout constants (CSS px, drawn in DPR-scaled ctx) ───────────────────── */
 
@@ -614,7 +615,7 @@
       dragState = {
         startX:  cx,
         lastX:   cx,
-        mode:    (e.shiftKey || e.button === 1) ? "pan" : "zoom",
+        mode:    (e.shiftKey || e.button === 1) ? "pan" : dragMode,
         startR0: r[0],
         startR1: r[1],
       };
@@ -807,6 +808,19 @@
 
   /* ── Exposed globals ─────────────────────────────────────────────────────────── */
 
+  window.tsSetMode = function (mode) {
+    dragMode = mode;
+    document.querySelectorAll(".ts-mode-btn").forEach(function (btn) {
+      var isTarget = (btn.getAttribute("onclick") || "").indexOf("'" + mode + "'") !== -1;
+      btn.classList.toggle("ts-mode-active", isTarget);
+    });
+  };
+
+  window.tsResetZoom = function () {
+    currentRange = null;
+    render();
+  };
+
   window.tsSetColorBy = function (btn, value, inputId) {
     document.querySelectorAll(".ts-colorby-btn").forEach(function (b) {
       b.classList.remove("ts-colorby-active");
@@ -860,6 +874,12 @@
     committedSet.clear();
     perResidueColors = [];
     currentRange     = null;
+    dragMode         = "zoom";
+    // reset toolbar active state to zoom
+    document.querySelectorAll(".ts-mode-btn").forEach(function (btn) {
+      btn.classList.toggle("ts-mode-active",
+        (btn.getAttribute("onclick") || "").indexOf("'zoom'") !== -1);
+    });
 
     // attach interactions exactly once per canvas element
     var canvas = document.getElementById("ts_plot_div");
