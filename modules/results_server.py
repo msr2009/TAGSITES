@@ -316,12 +316,36 @@ def results_server(input, output, session, shared_json, shared_sites):
     # ── Outputs ──────────────────────────────────────────────────────────────────
 
     @render.ui
-    def json_card_warning():
-        """Show a warning badge in the upload card header when no data is loaded."""
-        if run_name.get() is not None:
-            return ui.span()
-        return ui.span("⚠ no current JSON",
-                       style="color:#dc3545; font-size:0.8em; font-style:italic;")
+    def json_upload_card():
+        """Render the JSON upload card; collapsed and warning-free when data is loaded."""
+        has_json = run_name.get() is not None
+        warning = ui.span() if has_json else ui.span(
+            "⚠ no current JSON",
+            style="color:#dc3545; font-size:0.8em; font-style:italic;",
+        )
+        return ui.div(
+            ui.div(
+                ui.div(
+                    ui.span("Upload results JSON"),
+                    warning,
+                    class_="card-header d-flex justify-content-between align-items-center",
+                    style="cursor:pointer;",
+                    **{"data-bs-toggle": "collapse",
+                       "data-bs-target": "#ts-json-body",
+                       "aria-expanded": "false" if has_json else "true"},
+                ),
+                ui.div(
+                    ui.div(
+                        ui.input_file("json_file_input", None, accept=[".json"]),
+                        class_="card-body py-2",
+                    ),
+                    id="ts-json-body",
+                    class_="collapse" if has_json else "collapse show",
+                ),
+                class_="card",
+            ),
+            class_="mb-2",
+        )
 
     @render.ui
     def color_buttons_ui():

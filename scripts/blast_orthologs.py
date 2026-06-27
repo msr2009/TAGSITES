@@ -115,10 +115,15 @@ def main(fasta_in, email, workingdir, name, output,
 
     input_match = ""
     fasta_str_list = []
+    total_hits = sum(len(v) for v in blast_hits.values())
+    fetched = 0
+    _report(reporter, f"fetching {total_hits} sequences from UniProt…", stage="dbfetch")
     for s in blast_hits:
         for h in blast_hits[s]:
             if align_full_seqs:
-                # fetch full sequence from UniProt via EBI dbfetch
+                fetched += 1
+                _report(reporter, f"dbfetch {fetched}/{total_hits}: {h['acc']}",
+                        stage="dbfetch")
                 try:
                     acc_fasta_bytes = ebi_rest.dbfetch("uniprotkb", h["acc"], "fasta", "raw")
                     acc_fasta = acc_fasta_bytes.decode("utf-8")

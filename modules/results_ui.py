@@ -9,30 +9,7 @@ def results_ui():
         ui.tags.link(rel="stylesheet", href="tagsites.css"),
         ui.tags.script(src="tagsites.js"),
 
-        # ── Collapsible JSON upload card ──────────────────────────────────────
-        ui.div(
-            ui.div(
-                ui.div(
-                    ui.span("Upload results JSON"),
-                    ui.output_ui("json_card_warning"),
-                    class_="card-header d-flex justify-content-between align-items-center",
-                    style="cursor:pointer;",
-                    **{"data-bs-toggle": "collapse",
-                       "data-bs-target": "#ts-json-body",
-                       "aria-expanded": "true"},
-                ),
-                ui.div(
-                    ui.div(
-                        ui.input_file("json_file_input", None, accept=[".json"]),
-                        class_="card-body py-2",
-                    ),
-                    id="ts-json-body",
-                    class_="collapse show",
-                ),
-                class_="card",
-            ),
-            class_="mb-2",
-        ),
+        ui.output_ui("json_upload_card"),
 
         ui.h4("Analysis Results"),
 

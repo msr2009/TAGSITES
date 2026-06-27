@@ -1046,4 +1046,16 @@
   Shiny.addCustomMessageHandler("tagsites_set_bg", function (msg) {
     setViewerBackground(msg.bg);
   });
+
+  // Update task log textareas in-place so scroll position and user-resize are preserved.
+  Shiny.addCustomMessageHandler("tagsites_update_logs", function (msg) {
+    (msg.updates || []).forEach(function (u) {
+      var el = document.getElementById(u.id);
+      if (!el) return;
+      // only auto-scroll if the user hasn't scrolled up
+      var atBottom = el.scrollHeight - el.scrollTop <= el.clientHeight + 4;
+      el.value = u.log;
+      if (atBottom) el.scrollTop = el.scrollHeight;
+    });
+  });
 })();

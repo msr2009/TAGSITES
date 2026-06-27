@@ -62,6 +62,7 @@ def _build_body(task, global_block, entry):
             readonly=True,
             class_="task-log",
             rows=6,
+            id=f"task-log-{task['id']}",
         )
     )
     return ui.div(*children)
@@ -297,25 +298,28 @@ def progress_server(input, output, session, shared_json):
         )
 
     @reactive.effect
-    def _update_status_badges():
-        """Surgically update each panel title + body without re-rendering the accordion."""
+    async def _update_status_badges():
+        """Update accordion titles + push log text in-place (no body re-render)."""
         tasks  = task_list.get()
-        gb     = global_block.get()
         status = _current_status()   # provides the 2 s invalidation while running
+        log_updates = []
         for t in tasks:
             tid   = t["id"]
             label = tid.rsplit("_", 1)[0]
             entry = status.get(tid, {})
             state = status_label(entry)
             stage = entry.get("stage", "")
+            # update title only — omitting body preserves textarea scroll/size
             ui.update_accordion_panel(
                 _ACCORDION_ID, tid,
-                _build_body(t, gb, entry),
                 title=ui.span(label,
                               ui.tags.span(t["analysis"], class_="task-type-badge"),
                               _status_badge(state),
                               _stage_chip(stage)),
             )
+            log_updates.append({"id": f"task-log-{tid}", "log": entry.get("log", "")})
+        # push all log updates to JS in one message
+        await session.send_custom_message("tagsites_update_logs", {"updates": log_updates})
 
     # ── download completed results ─────────────────────────────────────────────
 
