@@ -43,13 +43,15 @@ def genewise_required(tasks):
 
 def searchAFDB_required(tasks, global_args):
     """Return AFDB search args string if there's a plddt task with no pdb path, else None."""
+    # existing_AF_model.py accepts: fasta/input_file, email, working_dir, run_name,
+    # taxid, evalue, percent_id — exclude everything else
+    _AFDB_EXCLUDE = {"pdb", "output", "existing_AF2", "scripts_folder",
+                     "selected_sites", "genomic_file", "taxid_file"}
     for key, v in tasks.items():
         if v["type"] == "plddt" and v["args"].get("pdb", "") == "":
-            # merge global so build_task_args_string sees input_file, email, etc.
             merged = {**global_args, **v["args"]}
-            # prefer species_taxid for the AFDB lookup taxid
             merged.setdefault("taxid", merged.get("species_taxid", 1))
-            return build_task_args_string(merged, EXCLUDE=["pdb", "output", "existing_AF2"])
+            return build_task_args_string(merged, EXCLUDE=list(_AFDB_EXCLUDE))
     return None
 
 

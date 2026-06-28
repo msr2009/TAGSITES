@@ -412,7 +412,7 @@ def setup_server(input, output, session, shared_json):
         _snapshot()
         new_tasks = []
         for tid, entry in data.items():
-            ttype  = entry["type"]
+            ttype  = entry.get("type") or entry.get("analysis", "")  # accept old "analysis" key
             hidden = task_hidden(ttype)
             # use saved args as params, supplement tooltips + choices from registry
             params  = {p: v for p, v in entry["args"].items() if p not in hidden and p != "output"}
