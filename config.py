@@ -38,7 +38,7 @@ GLOBAL_TOOLTIPS = INPUT_JSON.get("global_tooltips", {})
 # analysis result types — add new analysis types here
 RESULTS_TYPE_DICT = {
     "CONTINUOUS": ["blast", "plddt", "scores"],
-    "RANGE": ["domains", "modifications"]
+    "RANGE": ["domains", "modifications", "isoforms"]
 }
 
 # three-color palettes per analysis type — cycled when multiple tracks of same type exist
@@ -54,4 +54,11 @@ DOMAIN_SOURCE_COLORS = {
     "Phobius":      "#9467bd",   # purple
     "Pfam":         "#17becf",   # teal
     "modification": "#d62728",   # red
+}
+
+# isoform classification colors (constitutive → green, intermediate → amber, unique → red)
+ISOFORM_CLASS_COLORS = {
+    "constitutive":  "#00c020",   # bright green
+    "intermediate":  "#7bafd4",   # muted blue
+    "unique":        "#e81010",   # bright red
 }

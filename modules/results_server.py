@@ -11,6 +11,7 @@ from utils.results import (
     residue_colors_gradient,
     residue_colors_for_annotations,
     residue_colors_for_phobius,
+    residue_colors_for_isoforms,
     residue_colors_jet,
     _guess_analysis_type,
 )
@@ -42,6 +43,12 @@ def _build_colors_and_legend(track, task_name, scheme, aa_df, range_df, seq_len,
         if range_df is None or not seq_len:
             return None, None
         colors, items = residue_colors_for_phobius(range_df, seq_len)
+        return colors, {"type": "categorical", "items": items}
+
+    if track == "__isoforms__":
+        if range_df is None or not seq_len:
+            return None, None
+        colors, items = residue_colors_for_isoforms(range_df, seq_len)
         return colors, {"type": "categorical", "items": items}
 
     # ── Continuous track coloring ────────────────────────────────────────────────
@@ -112,6 +119,8 @@ def results_server(input, output, session, shared_json, shared_sites):
                 choices["__domains__"] = "Domains"
             if not range_df[range_df["source"] == "Phobius"].empty:
                 choices["__phobius__"] = "Phobius"
+            if not range_df[range_df["source"] == "isoforms"].empty:
+                choices["__isoforms__"] = "Isoforms"
         color_by_choices.set(choices)
         ui.update_select("color_by", choices=choices, selected="(none)")
 
@@ -382,11 +391,16 @@ def results_server(input, output, session, shared_json, shared_sites):
         if not choices:
             return ui.div()
         color_by_input_id = session.ns("color_by")
+        _isoforms_tooltip = (
+            "Isoform regions inferred from same-organism BLAST hits (UniProt isoforms). "
+            "Segments reflect protein sequence coverage, not genomic exon boundaries."
+        )
         buttons = [
             ui.tags.button(
                 label,
                 onclick=f"tsSetColorBy(this, '{val}', '{color_by_input_id}')",
                 class_="btn btn-sm ts-colorby-btn" + (" ts-colorby-active" if val == "(none)" else ""),
+                title=_isoforms_tooltip if val == "__isoforms__" else None,
             )
             for val, label in choices.items()
         ]

@@ -9,7 +9,7 @@ from plotly.subplots import make_subplots
 from Bio import SeqIO
 from numpy import linspace
 
-from config import ANALYSIS_COLORS, DOMAIN_SOURCE_COLORS
+from config import ANALYSIS_COLORS, DOMAIN_SOURCE_COLORS, ISOFORM_CLASS_COLORS
 
 
 # keyword → short label mapping for Phobius region descriptions from EBI InterProScan5
@@ -66,6 +66,7 @@ def load_data_from_json(json_in, type_dict):
     range_cols = ["source", "start", "stop", "description"]
     dat = pd.DataFrame(columns=range_cols)
     alns = []  # list of (aln_path, task_name, params_dict)
+    isoforms_loaded = False  # only load isoforms from the first blast task that has them
 
     # accept dict, JSON string, or file path
     j = {}
@@ -119,7 +120,7 @@ def load_data_from_json(json_in, type_dict):
                             print(f"Error loading SASA for task '{task}': {e}")
                     else:
                         print(f"SASA file not found for task '{task}': {sasa_path}")
-                # blast tasks also produce an alignment file
+                # blast tasks also produce companion files
                 if analysis == "blast":
                     aln_path = output_path.replace(".jsd", ".aln")
                     # collect user-visible params for the alignment pane
@@ -131,6 +132,18 @@ def load_data_from_json(json_in, type_dict):
                         and v not in ("", None)
                     }
                     alns.append((aln_path, task, params))
+                    # pick up isoform segments from the first blast task that has them;
+                    # skip subsequent tasks to avoid overlapping segments from different organisms
+                    if not isoforms_loaded:
+                        iso_path = output_path.replace(".jsd", ".isoforms.tsv")
+                        if os.path.exists(iso_path) and os.path.getsize(iso_path) > 0:
+                            try:
+                                iso_df = pd.read_csv(iso_path, sep="\t",
+                                                     names=["source", "start", "stop", "description"])
+                                dat = pd.concat([dat, iso_df], ignore_index=True)
+                                isoforms_loaded = True
+                            except Exception as e:
+                                print(f"Error loading isoform data for task '{task}': {e}")
             except Exception as e:
                 print(f"Error loading continuous data for task '{task}': {e}")
                 continue
@@ -523,13 +536,53 @@ def residue_colors_jet(seq_len):
     return [_jet_hex(i / (seq_len - 1)) for i in range(seq_len)]
 
 
+def _isoform_class_key(description):
+    """Extract 'constitutive', 'intermediate', or 'unique' from a description string."""
+    desc_lower = description.lower()
+    if desc_lower.startswith("constitutive"):
+        return "constitutive"
+    if desc_lower.startswith("unique"):
+        return "unique"
+    return "intermediate"
+
+
+def residue_colors_for_isoforms(range_df, seq_len):
+    """Color structure by isoform class using the 3-class discrete color scheme.
+
+    Returns (per_residue_colors, legend_items).
+    """
+    colors = ["#e8e8e8"] * seq_len
+    iso_rows = range_df[range_df["source"] == "isoforms"]
+    for _, row in iso_rows.iterrows():
+        key = _isoform_class_key(str(row["description"]))
+        color = ISOFORM_CLASS_COLORS.get(key, "#888888")
+        start, stop = int(row["start"]), int(row["stop"])
+        for pos in range(start - 1, min(stop, seq_len)):
+            colors[pos] = color
+    # build legend from classes actually present
+    seen_classes = []
+    seen_set = set()
+    for _, row in iso_rows.iterrows():
+        k = _isoform_class_key(str(row["description"]))
+        if k not in seen_set:
+            seen_set.add(k)
+            seen_classes.append(k)
+    legend_order = ["constitutive", "intermediate", "unique"]
+    legend_items = [
+        {"color": ISOFORM_CLASS_COLORS[k], "label": k.capitalize()}
+        for k in legend_order if k in seen_set
+    ]
+    return colors, legend_items
+
+
 def build_plot_payload(aa_df, range_df, title="Results"):
     """Serialize plot data for the native canvas renderer (tagsites_set_plot message).
 
     Returns a dict with lineTracks, rangeFeatures, and title, ready for JSON serialization.
     NaN values in aa_df are converted to None (→ null in JSON).
     """
-    y_positions = {"Phobius": 2, "Pfam": 4, "modification": 6}
+    # isoforms row sits lowest (nearest the sequence strip); others stack above
+    y_positions = {"isoforms": 1, "Phobius": 3, "Pfam": 5, "modification": 7}
 
     line_tracks = []
     data_max = -float("inf")
@@ -550,13 +603,19 @@ def build_plot_payload(aa_df, range_df, title="Results"):
             src = row["source"]
             if src not in y_positions:
                 continue
-            key = (str(src), str(row["description"]))
+            # isoforms use the 3-class discrete palette; others use the annotation palette
+            if src == "isoforms":
+                key = _isoform_class_key(str(row["description"]))
+                color = ISOFORM_CLASS_COLORS.get(key, "#888888")
+            else:
+                key = (str(src), str(row["description"]))
+                color = color_map.get(key, "#888888")
             range_features.append({
                 "source": src,
                 "start": int(row["start"]),
                 "stop": int(row["stop"]),
                 "desc": str(row["description"]),
-                "color": color_map.get(key, "#888888"),
+                "color": color,
                 "yRow": y_positions[src],
             })
 

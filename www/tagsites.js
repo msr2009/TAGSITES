@@ -348,7 +348,7 @@
 
   /* ── Feature panel (row 2: range annotations) ──────────────────────────────── */
 
-  var FEAT_ROWS = ["Phobius", "Pfam", "modification"];
+  var FEAT_ROWS = ["isoforms", "Phobius", "Pfam", "modification"];
 
   function drawFeaturePanel(ctx, inf, layout) {
     var top = layout.featTop, h = layout.featH;
@@ -386,7 +386,7 @@
       ctx.moveTo(LEFT_GUTTER, py);
       ctx.lineTo(LEFT_GUTTER + inf.dataW, py);
       ctx.stroke();
-      ctx.fillText(name, LEFT_GUTTER - 3, py);
+      ctx.fillText(name.charAt(0).toUpperCase() + name.slice(1), LEFT_GUTTER - 3, py);
     });
 
     var r     = getXRange();

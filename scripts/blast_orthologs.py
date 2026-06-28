@@ -15,6 +15,7 @@ from site_selection_util import read_fasta
 sys.path.insert(0, str(Path(__file__).parent))
 import ebi_rest
 from progress import report as _report, resolve_reporter, poll_adapter
+from derive_isoforms import derive_isoform_segments
 
 
 def hit_to_dict(j):
@@ -81,6 +82,20 @@ def main(fasta_in, email, workingdir, name, output,
                 stage="blast", level="error")
         return
     query_species = blast_output["hits"][0]["hit_os"]
+
+    # derive isoform coverage segments from same-organism hits while the full JSON is in memory
+    _report(reporter, "Detecting isoforms from same-organism hits…", stage="isoforms")
+    iso_segs = derive_isoform_segments(blast_output)
+    isoform_path = f"{out_prefix}.isoforms.tsv"
+    with open(isoform_path, "w") as _f:
+        for _start, _stop, _desc in iso_segs:
+            _f.write(f"isoforms\t{_start}\t{_stop}\t{_desc}\n")
+    if iso_segs:
+        _report(reporter, f"Found {len(iso_segs)} isoform segment(s) across "
+                f"{iso_segs[-1][1]} residues.", stage="isoforms")
+    else:
+        _report(reporter, "No additional isoforms detected (single-isoform gene).",
+                stage="isoforms")
 
     blast_hits = {query_species: []}
     for h in blast_output["hits"]:
