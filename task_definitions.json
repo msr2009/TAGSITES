@@ -1,0 +1,98 @@
+{
+	"global_defaults": {
+		"scripts_folder": "./scripts/"
+	},
+
+	"global_tooltips": {
+		"email":         "EBI requires an email address for remote jobs",
+		"input_file":    "Protein sequence as FASTA (.fa/.fasta) or an AlphaFold PDB (.pdb). PDB input auto-extracts the sequence and pre-fills the pLDDT analysis.",
+		"input_genomic": "FASTA of genomic region containing gene (include at least 500bp up- and downstream)",
+		"run_name":      "Short identifier used as the prefix for all output files",
+		"working_dir":   "Directory for output. Autocompleted from Analysis name and editable"
+	},
+
+	"tasks": {
+		"blast": {
+			"script":        "blast_orthologs.py",
+			"result_type":   "continuous",
+			"output_suffix": ".jsd",
+			"colors":        ["#2e7d32", "#00838f", "#8bc34a"],
+			"selectable":    true,
+			"companions": {
+				"alignment": ".aln",
+				"isoforms":  ".isoforms.tsv"
+			},
+			"params": {
+				"taxid":     { "default": "",          "tooltip": "UniProt taxonomic ID(s) to restrict the BLAST search (comma-separated list, e.g. 6239 for C. elegans). Leave blank to search all species." },
+				"taxid_file":{ "default": "",          "tooltip": "File containing one taxid per line — alternative to entering them manually" },
+				"evalue":    { "default": "1e-10",     "choices": ["", "1e-200", "1e-100", "1e-50", "1e-10", "1e-5", "1e-1", "1.0"], "tooltip": "E-value threshold: only BLAST hits better than this cutoff are kept" },
+				"max_hits":  { "default": "",          "tooltip": "Maximum number of BLAST hits to retrieve (default 100)" },
+				"db":        { "default": "uniprotkb", "choices": ["uniprotkb", "uniprotkb_swissprot", "uniprotkb_trembl"], "tooltip": "UniProt database to search: uniprotkb (all), swissprot (human-curated, smaller), trembl (computationally annotated, largest)" },
+				"length":    { "default": "",          "tooltip": "Minimum hit length as a fraction of your query length — filters out partial matches (0 = no filter)" }
+			}
+		},
+
+		"plddt": {
+			"script":        "extract_from_pdb.py",
+			"result_type":   "continuous",
+			"output_suffix": ".txt",
+			"colors":        ["#1565c0", "#6a1b9a", "#ad1457"],
+			"selectable":    true,
+			"companions": {
+				"sasa": ".sasa.txt"
+			},
+			"params": {
+				"pdb":         { "default": "",     "hidden": true, "tooltip": "Path to a local AlphaFold PDB file. Leave blank to search the AlphaFold Database automatically." },
+				"existing_AF2":{ "default": 1,      "hidden": true, "tooltip": "1 = search AlphaFold DB for an existing prediction; 0 = use the PDB you supplied" },
+				"evalue":      { "default": "1e-10","choices": ["", "1e-200", "1e-100", "1e-50", "1e-10", "1e-5", "1e-3", "1e-1", "1.0"], "tooltip": "E-value cutoff for the BLAST search used to find the matching AlphaFold model" },
+				"percent_id":  { "default": "",     "tooltip": "Minimum % sequence identity required to accept an AlphaFold model as a match" }
+			}
+		},
+
+		"modifications": {
+			"script":        "regex_sites.py",
+			"result_type":   "range",
+			"output_suffix": ".txt",
+			"selectable":    true,
+			"params": {
+				"sites_file": { "default": "./tables/modification_sites.txt", "tooltip": "File of regex patterns defining PTM sites (phosphorylation, ubiquitination, etc.) — defaults to the bundled table" }
+			}
+		},
+
+		"domains": {
+			"script":        "call_interpro.py",
+			"result_type":   "range",
+			"output_suffix": ".txt",
+			"selectable":    true,
+			"params": {}
+		},
+
+		"scores": {
+			"script":        "calculate_protein_scores.py",
+			"result_type":   "continuous",
+			"output_suffix": ".tsv",
+			"colors":        ["#e65100", "#b71c1c", "#795548"],
+			"selectable":    true,
+			"params": {
+				"scores_file": { "default": "", "tooltip": "TSV file of per-amino-acid property scores (e.g., hydrophobicity) — defaults to the bundled Kyle-Doolittle table" },
+				"window":      { "default": 1,  "tooltip": "Sliding window size in residues for averaging the property score (1 = no smoothing)" }
+			}
+		},
+
+		"reagents": {
+			"script":        "design_tag_reagents.py",
+			"result_type":   "none",
+			"output_suffix": ".tsv",
+			"selectable":    false,
+			"params": {
+				"genomic_fasta": { "default": "",    "tooltip": "FASTA of the genomic region to search (orientation need not be known; run_genewise.py tests both strands automatically)" },
+				"genewise":      { "default": "",    "hidden": true, "tooltip": "path to a pre-computed Genewise .out.txt file (leave empty to run Genewise automatically via the EBI REST API)" },
+				"n_guides":      { "default": 5,     "tooltip": "maximum guide RNAs to report per insertion site" },
+				"arm_length":    { "default": 1000,  "tooltip": "homology arm length in bp on each side of insertion" },
+				"PAM":           { "default": "NGG", "tooltip": "IUPAC PAM sequence (e.g. NGG for SpCas9)" },
+				"guide_length":  { "default": 20,    "tooltip": "guide spacer length in nucleotides" },
+				"cut_offset":    { "default": 3,     "tooltip": "bases upstream of PAM where the DSB occurs (SpCas9=3)" }
+			}
+		}
+	}
+}
