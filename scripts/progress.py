@@ -10,16 +10,18 @@ Lines without a leading '[' are passed through verbatim (library noise, tracebac
 """
 
 import sys
+from datetime import datetime
 
 
 def _format_line(message, stage, level):
-    """Build the '[stage] message' string from components."""
+    """Build the 'HH:MM:SS [stage] message' string from components."""
+    ts = datetime.now().strftime("%H:%M:%S")
     prefix = f"[{stage}] " if stage else ""
     if level == "warning":
-        return f"{prefix}WARNING: {message}"
+        return f"{ts} {prefix}WARNING: {message}"
     if level == "error":
-        return f"{prefix}ERROR: {message}"
-    return f"{prefix}{message}"
+        return f"{ts} {prefix}ERROR: {message}"
+    return f"{ts} {prefix}{message}"
 
 
 def report(reporter, message, stage="", level="info"):
@@ -60,8 +62,11 @@ def poll_adapter(reporter):
 
 
 def parse_line(line):
-    """Parse '[stage] message' → (stage, message, level); untagged lines → ('', line, 'info')."""
+    """Parse 'HH:MM:SS [stage] message' → (stage, message, level); untagged → ('', line, 'info')."""
     line = line.rstrip("\n")
+    # strip optional leading timestamp (HH:MM:SS )
+    if len(line) > 9 and line[2] == ":" and line[5] == ":" and line[8] == " ":
+        line = line[9:]
     if not line.startswith("["):
         return "", line, "info"
     close = line.find("]")

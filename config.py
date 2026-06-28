@@ -29,7 +29,7 @@ TASK_PARAMETERS = INPUT_JSON["analyses"]
 AVAILABLE_TASKS = list(INPUT_JSON["analyses"].keys())
 # reagents is auto-injected at save time when a genomic FASTA is present; not user-selectable
 SELECTABLE_TASKS = [t for t in AVAILABLE_TASKS if t != "reagents"]
-EXCLUDE_ARGS = ["fasta", "input", "output", "pdb"]
+EXCLUDE_ARGS = ["fasta", "input", "output", "pdb", "existing_AF2"]
 GLOBAL_TOOLTIPS = INPUT_JSON.get("global_tooltips", {})
 
 # analysis result types — add new analysis types here

@@ -136,10 +136,14 @@ def progress_server(input, output, session, shared_json):
 
     @reactive.effect
     def _sync_rerun_queue():
-        """Build the set of task IDs whose re-run button has been clicked since last Run."""
+        """Auto-launch any task whose re-run button was just clicked.
+
+        If a run is already in progress the clicked tasks are queued instead
+        (same as before) so they can be included in the next manual Run.
+        """
         _baseline_tick.get()      # re-evaluate after each Run resets the baseline
         tasks = task_list.get()   # re-evaluate when the task list changes
-        queued = set()
+        newly_clicked = set()
         for t in tasks:
             tid = t["id"]
             try:
@@ -147,17 +151,22 @@ def progress_server(input, output, session, shared_json):
             except Exception:
                 clicks = 0
             if clicks > _click_baseline.get(tid, 0):
-                queued.add(tid)
-        rerun_queue.set(frozenset(queued))
+                newly_clicked.add(tid)
+        rerun_queue.set(frozenset(newly_clicked))
+        # auto-launch immediately; fall back to queue when a run is in progress
+        if newly_clicked and run_all_tasks.status() != "running":
+            _do_launch(frozenset(newly_clicked))
 
     # ── run-button state ───────────────────────────────────────────────────────
 
     @reactive.effect
     def _toggle_run():
-        """Enable Run when JSON is loaded and no tasks are currently running."""
+        """Enable Run/Re-run All when JSON is loaded and no tasks are currently running."""
         has_json   = bool(shared_json.get())
         is_running = run_all_tasks.status() == "running"
-        ui.update_action_button("run_analysis", disabled=not has_json or is_running)
+        disabled   = not has_json or is_running
+        ui.update_action_button("run_analysis", disabled=disabled)
+        ui.update_action_button("rerun_all",    disabled=disabled)
 
     # ── run header ─────────────────────────────────────────────────────────────
 
@@ -249,19 +258,13 @@ def progress_server(input, output, session, shared_json):
         ])
         return "done"
 
-    @reactive.effect
-    @reactive.event(input.run_analysis)
-    def _launch():
-        """Launch all tasks; any task queued for re-run bypasses the is_complete guard."""
-        rerun_set = frozenset(rerun_queue.get())
+    def _do_launch(rerun_set):
+        """Shared launch logic: stamp queued tasks, advance baseline, invoke runner."""
         wd, rn = working_dir.get(), run_name.get()
-        # stamp queued tasks "queued" in the status file before clearing rerun_queue,
-        # so the badge stays orange rather than briefly flashing the previous result
         if wd and rn:
             for t in task_list.get():
                 if t["id"] in rerun_set:
                     _run_status.update_task(wd, rn, t["id"], status="queued", log="", stage="")
-        # advance baseline so rerun_queue empties immediately after launch
         for t in task_list.get():
             try:
                 _click_baseline[t["id"]] = input[f"rerun_{t['id']}"]() or 0
@@ -269,6 +272,18 @@ def progress_server(input, output, session, shared_json):
                 pass
         _baseline_tick.set(_baseline_tick.get() + 1)
         run_all_tasks.invoke(shared_json.get(), wd, rn, rerun_set)
+
+    @reactive.effect
+    @reactive.event(input.run_analysis)
+    def _launch():
+        """Launch all tasks; any task queued for re-run bypasses the is_complete guard."""
+        _do_launch(frozenset(rerun_queue.get()))
+
+    @reactive.effect
+    @reactive.event(input.rerun_all)
+    def _launch_all():
+        """Re-run every task unconditionally."""
+        _do_launch(frozenset(t["id"] for t in task_list.get()))
 
     # ── live status polling ────────────────────────────────────────────────────
 

@@ -4,7 +4,7 @@ from pathlib import Path
 
 from shiny import ui, module
 
-from config import INPUT_JSON, SELECTABLE_TASKS, GLOBAL_TOOLTIPS
+from config import INPUT_JSON, SELECTABLE_TASKS, GLOBAL_TOOLTIPS, DEFAULT_SPECIES
 
 _PARAMS_DIR = Path(__file__).parent.parent / "params"
 
@@ -124,6 +124,14 @@ _STYLE = """
 _t = GLOBAL_TOOLTIPS
 
 
+def _organism_choices():
+    """Build {value: label} for the organism preset dropdown."""
+    choices = {"": "— select organism —"}
+    for name, taxid in DEFAULT_SPECIES.items():
+        choices[name] = f"{name} ({taxid})" if taxid else name
+    return choices
+
+
 @module.ui
 def setup_ui():
     return ui.page_fluid(
@@ -144,7 +152,7 @@ def setup_ui():
                         placeholder="required for EBI submissions", width="100%"),
                     ui.input_text("run_name",
                         label_with_tip("Analysis name", _t.get("run_name", "")),
-                        placeholder="e.g. SNB1", width="100%"),
+                        placeholder="e.g., your-favorite-gene-tag", width="100%"),
                     # Row 2: output directory (full width of the container)
                     ui.input_text("working_dir",
                         label_with_tip("Output directory", _t.get("working_dir", "")),
@@ -160,6 +168,20 @@ def setup_ui():
                                            _t.get("input_genomic", "")),
                             accept=[".fasta", ".fa"], width="100%"),
                         style="margin-top: 0.75rem;",
+                    ),
+                    ui.div(
+                        ui.input_select(
+                            "organism",
+                            label_with_tip("Organism",
+                                "Sets the taxid for the AlphaFold DB lookup and pre-fills "
+                                "conservation BLAST. Use 'Other (search…)' to find any species."),
+                            choices=_organism_choices(),
+                            selected="",
+                            width="100%",
+                        ),
+                        ui.output_ui("organism_search_ui"),
+                        ui.output_ui("lineage_ui"),
+                        style="margin-top: 0.5rem;",
                     ),
                     class_="inputs-inner",
                 ),

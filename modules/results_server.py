@@ -1,5 +1,5 @@
 from shiny import reactive, ui, render, module
-import json, os
+import base64, json, os
 from modules.json_card import json_upload_card as _json_upload_card
 
 from utils.results import (
@@ -438,14 +438,14 @@ def results_server(input, output, session, shared_json, shared_sites):
 
     @render.ui
     def alignments_container():
-        """Render blast alignment SVGs as collapsible accordion panes."""
+        """Render blast alignment PNGs as collapsible accordion panes."""
         alns = aln_meta.get()
         if not alns:
             return ui.div()
 
         panels = []
         for aln_path, task_name, params in alns:
-            svg_path = aln_path.removesuffix("aln") + "svg"
+            png_path = aln_path.removesuffix(".aln") + ".png"
 
             param_rows = [
                 ui.tags.tr(ui.tags.td(k), ui.tags.td(str(v)))
@@ -456,17 +456,22 @@ def results_server(input, output, session, shared_json, shared_sites):
                 class_="ts-aln-params",
             ) if param_rows else ui.div()
 
-            if os.path.exists(svg_path):
-                with open(svg_path) as f:
-                    svg_content = ui.HTML(f.read())
+            if os.path.exists(png_path):
+                with open(png_path, "rb") as f:
+                    b64 = base64.b64encode(f.read()).decode("ascii")
+                img = ui.tags.img(
+                    src=f"data:image/png;base64,{b64}",
+                    style="height:auto; display:block;",
+                )
                 body = ui.div(
                     param_table,
-                    ui.div(svg_content, class_="ts-aln-svg-wrap"),
+                    ui.div(img, class_="ts-aln-svg-wrap",
+                           style="overflow-x:auto; overflow-y:hidden;"),
                 )
             else:
                 body = ui.div(
                     param_table,
-                    ui.p(f"Alignment image not found: {os.path.basename(svg_path)}",
+                    ui.p(f"Alignment image not found: {os.path.basename(png_path)}",
                          style="color:#c00;"),
                 )
 

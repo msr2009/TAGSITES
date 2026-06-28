@@ -110,6 +110,8 @@ def progress_ui():
         ui.div(
             ui.input_action_button("run_analysis", "▶ Run Analysis",
                                    disabled=True, class_="btn-primary btn-sm"),
+            ui.input_action_button("rerun_all", "↻ Re-run All",
+                                   disabled=True, class_="btn-outline-warning btn-sm"),
             ui.download_button("download_results", "⬇ Download Results",
                                class_="btn-secondary btn-sm"),
             class_="save-bar",

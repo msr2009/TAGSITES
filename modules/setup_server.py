@@ -6,12 +6,13 @@ setup_logic.py, writes the run JSON, and publishes its path via shared_json.
 
 import json
 import os
+import requests
 import shutil
 from pathlib import Path
 
 from shiny import module, reactive, render, ui
 
-from config import DEFAULT_JSON, EXCLUDE_ARGS, GLOBAL_TOOLTIPS, TASK_PARAMETERS
+from config import DEFAULT_JSON, DEFAULT_SPECIES, EXCLUDE_ARGS, GLOBAL_TOOLTIPS, TASK_PARAMETERS
 from modules.setup_ui import label_with_tip, TASK_DESCRIPTIONS
 from modules.setup_logic import (
     build_defaults_entry,
@@ -21,7 +22,7 @@ from modules.setup_logic import (
     build_task_entry,
     make_task,
 )
-from scripts.site_selection_util import get_sequence, save_fasta
+from scripts.site_selection_util import get_sequence, save_fasta, extract_bfactors_from_pdb
 
 _ROOT = Path(__file__).parent.parent
 _PARAMS_DIR = _ROOT / "params"
@@ -72,6 +73,175 @@ def setup_server(input, output, session, shared_json):
 
     tasks      = reactive.Value([])   # list of in-memory task dicts
     task_snap  = reactive.Value({})   # {task_id: {param: value}} — preserved across re-renders
+
+    organism_taxid   = reactive.Value("")   # resolved taxid string from organism selection
+    _pdb_plddt_valid = reactive.Value(True) # False when uploaded PDB lacks valid pLDDT B-factors
+    _search_hits     = reactive.Value([])   # [(name, taxid_str)] from UniProt taxonomy search
+
+    # ── organism selection ────────────────────────────────────────────────────
+
+    @reactive.effect
+    @reactive.event(input.organism)
+    def _organism_changed():
+        """Resolve taxid from preset dropdown; pre-fill existing blast task widgets."""
+        name = input.organism()
+        if not name or name not in DEFAULT_SPECIES:
+            return
+        taxid = DEFAULT_SPECIES[name]
+        if taxid is None:   # "Other (search...)" sentinel — wait for search result
+            _search_hits.set([])
+            return
+        organism_taxid.set(str(taxid))
+
+    @render.ui
+    def organism_search_ui():
+        """Show a search row only when 'Other (search…)' is selected."""
+        if input.organism() != "Other (search...)":
+            return None
+        hits = _search_hits()
+        result_widget = None
+        if hits:
+            choices = {"": "— select —",
+                       **{str(taxid): f"{name} ({taxid})" for name, taxid in hits}}
+            result_widget = ui.div(
+                ui.input_select("organism_search_result", "", choices=choices),
+                style="margin-top: 0.2rem;",
+            )
+        return ui.div(
+            ui.div(
+                ui.input_text("organism_search_text", "",
+                              placeholder="Type species name…"),
+                ui.input_action_button("organism_search_btn", "Search",
+                                       class_="btn-sm btn-outline-secondary"),
+                style="display:flex; gap:0.4rem; align-items:flex-end;",
+            ),
+            *([result_widget] if result_widget else []),
+            style="margin-top: 0.2rem;",
+        )
+
+    @reactive.effect
+    @reactive.event(input.organism_search_btn)
+    def _organism_search():
+        """Query UniProt taxonomy API and populate the result select."""
+        query = input.organism_search_text().strip() if "organism_search_text" in input else ""
+        if not query:
+            return
+        try:
+            resp = requests.get(
+                "https://rest.uniprot.org/taxonomy/search",
+                params={"query": query, "format": "json", "size": 5},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            results = resp.json().get("results", [])
+            hits = [(r["scientificName"], r["taxonId"])
+                    for r in results if "taxonId" in r]
+            _search_hits.set(hits)
+        except Exception as e:
+            ui.notification_show(f"Taxonomy search failed: {e}", type="error", duration=5)
+
+    @reactive.effect
+    def _organism_search_result_changed():
+        """Set taxid when user picks from search results."""
+        if "organism_search_result" not in input:
+            return
+        val = input.organism_search_result()
+        if not val:
+            return
+        organism_taxid.set(val)
+
+    # ── taxonomic lineage ─────────────────────────────────────────────────────
+
+    # ranks worth showing as BLAST scope options (clades and "no rank" filtered out)
+    _BLAST_RANKS = {
+        "domain", "superkingdom", "kingdom", "subkingdom",
+        "phylum", "subphylum", "class", "subclass",
+        "order", "suborder", "infraorder", "superfamily",
+        "family", "subfamily", "genus", "species",
+    }
+
+    _lineage = reactive.Value([])  # [{"rank": str, "name": str, "taxid": str}, ...]
+
+    @reactive.effect
+    def _fetch_lineage():
+        """Fetch taxonomic lineage from UniProt whenever the resolved taxid changes."""
+        tid = organism_taxid()
+        if not tid:
+            _lineage.set([])
+            return
+        try:
+            resp = requests.get(
+                f"https://rest.uniprot.org/taxonomy/{tid}",
+                params={"format": "json"},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            entries = [
+                {"rank": e["rank"], "name": e["scientificName"], "taxid": str(e["taxonId"])}
+                for e in data.get("lineage", [])
+                if e.get("rank") in _BLAST_RANKS
+            ]
+            # append the organism itself
+            entries.append({
+                "rank": data.get("rank", "species"),
+                "name": data.get("scientificName", ""),
+                "taxid": tid,
+            })
+            _lineage.set(entries)
+        except Exception as e:
+            ui.notification_show(f"Lineage fetch failed: {e}", type="warning", duration=4)
+            _lineage.set([])
+
+    @render.ui
+    def lineage_ui():
+        """Display taxonomic lineage as a reference table (rank, name, taxid)."""
+        entries = _lineage()
+        if not entries:
+            return None
+        rows = [
+            ui.tags.tr(
+                ui.tags.td(e["rank"],   style="padding:1px 6px; color:#6c757d;"),
+                ui.tags.td(ui.tags.em(e["name"]), style="padding:1px 6px;"),
+                ui.tags.td(e["taxid"],  style="padding:1px 8px; font-family:monospace;"),
+            )
+            for e in entries
+        ]
+        return ui.div(
+            ui.tags.p("Use taxids to limit BLAST searches to specific taxa:",
+                      style="font-size:0.78rem; color:#495057; margin:0.4rem 0 0.15rem;"),
+            ui.tags.table(
+                ui.tags.tbody(*rows),
+                style="font-size:0.75rem; border-collapse:collapse;",
+            ),
+        )
+
+    # ── PDB pLDDT validity check ──────────────────────────────────────────────
+
+    @reactive.effect
+    @reactive.event(input.input_file)
+    def _check_input_file():
+        """Warn if the uploaded PDB has no valid AlphaFold pLDDT B-factors."""
+        files = input.input_file()
+        if not files:
+            return
+        if not files[0]["name"].lower().endswith(".pdb"):
+            _pdb_plddt_valid.set(True)
+            return
+        try:
+            bfs = extract_bfactors_from_pdb(files[0]["datapath"])
+            valid = bool(bfs) and all(0 <= v <= 100 for v in bfs) and (max(bfs) - min(bfs)) > 5
+        except Exception:
+            valid = False
+        _pdb_plddt_valid.set(valid)
+        if not valid:
+            ui.notification_show(
+                "The uploaded PDB does not appear to contain AlphaFold pLDDT scores "
+                "(B-factors outside 0–100 or uniform). "
+                "The AlphaFold Database will be searched for a matching structure.",
+                type="warning",
+                duration=10,
+            )
 
     # ── preset refresh (called after saving a new preset) ────────────────────
 
@@ -381,9 +551,12 @@ def setup_server(input, output, session, shared_json):
         task_entries = []
         for task in tasks():
             args = _collect_args(task)
-            # plddt: auto-set existing_AF2 based on whether a PDB was supplied
             if task["name"] == "plddt":
-                args["existing_AF2"] = 0 if pdb_path else 1
+                # use the supplied PDB only when it contains valid pLDDT B-factors
+                use_supplied_pdb = bool(pdb_path) and _pdb_plddt_valid()
+                args["existing_AF2"] = 0 if use_supplied_pdb else 1
+                # always inject the resolved taxid so AFDB lookup can filter by organism
+                args["taxid"] = organism_taxid()
             out_suffix = TASK_PARAMETERS[task["name"]]["args"].get("output", "")
             task_entries.append(
                 build_task_entry(task["id"], task["name"], args, global_block,

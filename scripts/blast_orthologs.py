@@ -7,7 +7,7 @@ Matt Rich, 9/2024 / updated 2026 — EBI REST calls via ebi_rest.py
 import json
 import os
 import sys
-
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from site_selection_util import read_fasta
 
@@ -135,39 +135,62 @@ def main(fasta_in, email, workingdir, name, output,
     input_match = ""
     fasta_str_list = []
     total_hits = sum(len(v) for v in blast_hits.values())
-    fetched = 0
-    _report(reporter, f"fetching {total_hits} sequences from UniProt…", stage="dbfetch")
-    for s in blast_hits:
-        for h in blast_hits[s]:
-            if align_full_seqs:
-                fetched += 1
-                _report(reporter, f"dbfetch {fetched}/{total_hits}: {h['acc']}",
-                        stage="dbfetch")
-                try:
-                    acc_fasta_bytes = ebi_rest.dbfetch("uniprotkb", h["acc"], "fasta", "raw")
-                    acc_fasta = acc_fasta_bytes.decode("utf-8")
-                except Exception as e:
-                    _report(reporter, f"dbfetch failed for {h['acc']}: {e}; skipping",
+    # flat ordered list of (species, hit) preserving blast_hits iteration order
+    ordered_hits = [(s, h) for s in blast_hits for h in blast_hits[s]]
+
+    if not align_full_seqs:
+        # sequences come directly from the BLAST result — no network call needed
+        for _, h in ordered_hits:
+            fasta_str_list.append(">{}\n{}\n".format(h["acc"].split()[0], h["hitseq"]))
+    else:
+        accs = [h["acc"] for _, h in ordered_hits]
+        _WORKERS = 10
+        _report(reporter,
+                f"fetching {total_hits} sequences from UniProt "
+                f"({min(_WORKERS, total_hits)} concurrent requests)…",
+                stage="dbfetch")
+
+        def _fetch_one(acc):
+            """Fetch one UniProt FASTA; return (acc, header_word, seq_str) or (acc, None, None)."""
+            try:
+                raw = ebi_rest.dbfetch("uniprotkb", acc, "fasta", "raw").decode("utf-8")
+                name = raw.split("\n")[0].split()[0]
+                seq  = "".join(ln for ln in raw.split("\n") if not ln.startswith(">"))
+                return acc, name, seq
+            except Exception as e:
+                return acc, None, str(e)
+
+        fasta_dict = {}   # acc → (header_word, seq_str)
+        with ThreadPoolExecutor(max_workers=_WORKERS) as pool:
+            futures = {pool.submit(_fetch_one, acc): acc for acc in accs}
+            done = 0
+            for future in as_completed(futures):
+                done += 1
+                acc, name, result = future.result()
+                if name is None:
+                    _report(reporter, f"dbfetch failed for {acc}: {result}; skipping",
                             stage="dbfetch", level="warning")
+                else:
+                    fasta_dict[acc] = (name, result)
+                if done % 10 == 0 or done == total_hits:
+                    _report(reporter, f"dbfetch {done}/{total_hits}", stage="dbfetch")
+
+        for _, h in ordered_hits:
+            acc = h["acc"]
+            if acc not in fasta_dict:
+                continue
+            acc_fasta_name, acc_fasta_seq = fasta_dict[acc]
+
+            if acc_fasta_seq == seq:
+                _report(reporter, f"found match to input: {acc_fasta_name}", stage="dbfetch")
+                input_match = acc_fasta_name[1:]
+
+            hit_len = float(len(acc_fasta_seq))
+            if length_percent != 0:
+                if hit_len / seq_len < length_percent or hit_len / seq_len > 1 / length_percent:
                     continue
 
-                acc_fasta_name = acc_fasta.split("\n")[0].split()[0]
-                acc_fasta_seq = "".join(acc_fasta.split("\n")[1:])
-
-                if acc_fasta_seq == seq:
-                    _report(reporter, f"found match to input: {acc_fasta.split(chr(10))[0]}",
-                            stage="dbfetch")
-                    input_match = acc_fasta_name[1:]
-
-                # filter by total length
-                hit_len = float(len("".join(acc_fasta.split("\n")[1:])))
-                if length_percent != 0:
-                    if hit_len / seq_len < length_percent or hit_len / seq_len > 1 / length_percent:
-                        continue
-
-                fasta_str_list.append(acc_fasta_name + "\n" + acc_fasta_seq.rstrip("\n") + "\n")
-            else:
-                fasta_str_list.append(">{}\n{}\n".format(h["acc"].split()[0], h["hitseq"]))
+            fasta_str_list.append(acc_fasta_name + "\n" + acc_fasta_seq.rstrip("\n") + "\n")
 
     # if no exact match to input, insert our query sequence at the front
     if input_match == "":
@@ -226,7 +249,7 @@ def main(fasta_in, email, workingdir, name, output,
     # import in-process (no subprocess needed; build_heatmap_images.py is a local script)
     try:
         import build_heatmap_images
-        build_heatmap_images.plot_alignment_matrix_matplotlib(aln_path, "svg", "")
+        build_heatmap_images.plot_alignment_matrix_matplotlib(aln_path)
         _report(reporter, "Alignment image saved.", stage="align_img")
     except Exception as e:
         _report(reporter, f"alignment image generation failed: {e}", stage="align_img", level="warning")
