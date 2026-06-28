@@ -223,9 +223,8 @@ def disrupt_pam(seq, pam, pam_fwd_start, strand, frame_lookup):
 
     Ladder (applied in order, returns on first success):
       1. One synonymous codon change that disrupts the PAM (coding only).
-      2. Two synonymous codon changes that together disrupt the PAM (coding).
-      3. Two base changes anywhere in the PAM region that disrupt the PAM
-         while preserving the local GC content (non-coding fallback).
+      2. Any single base change within the PAM: intronic positions preferred
+         (no amino acid change), then coding positions (non-synonymous).
 
     Parameters
     ----------
@@ -238,7 +237,7 @@ def disrupt_pam(seq, pam, pam_fwd_start, strand, frame_lookup):
     Returns
     -------
     (mutated_seq, description, method) on success, or None if impossible.
-    method is one of 'syn_1', 'syn_2', 'gc_preserve', or None.
+    method is one of 'syn_1', 'mut_1', or None.
     """
     pam_len = len(pam)
     pam_positions = list(range(pam_fwd_start, pam_fwd_start + pam_len))
@@ -267,11 +266,9 @@ def disrupt_pam(seq, pam, pam_fwd_start, strand, frame_lookup):
         for alt in SYN_CODONS.get(aa, []):
             if alt == orig_codon:
                 continue
-            # Build change dict: substitute the codon bases that overlap the PAM
-            changes = {}
-            for k, pos in enumerate(range(cs, cs + 3)):
-                if orig_codon[k] != alt[k]:
-                    changes[pos] = alt[k]
+            # substitute only the codon bases that differ
+            changes = {cs + k: alt[k] for k in range(3)
+                       if orig_codon[k] != alt[k]}
             if not changes:
                 continue
             new_seq = _apply(changes)
@@ -279,84 +276,24 @@ def disrupt_pam(seq, pam, pam_fwd_start, strand, frame_lookup):
                 desc = '{}>{} at genomic pos {}'.format(orig_codon, alt, cs)
                 return (new_seq, desc, 'syn_1')
 
-    # ── Step 2: two synonymous codon changes (coding only) ────────────────────
-    codon_items = list(codons_in_pam.items())
-    for i in range(len(codon_items)):
-        cs1, info1 = codon_items[i]
-        for alt1 in SYN_CODONS.get(info1['aa'], []):
-            if alt1 == info1['codon']:
+    # ── Step 2: any single base change within the PAM ────────────────────────
+    # Prefer intronic positions (no coding consequence) over coding positions.
+    ordered = sorted(pam_positions, key=lambda p: 0 if p not in frame_lookup else 1)
+    for pos in ordered:
+        orig = seq[pos].upper()
+        for base in BASES:
+            if base == orig:
                 continue
-            changes1 = {cs1 + k: alt1[k] for k in range(3)
-                        if alt1[k] != info1['codon'][k]}
-            for j in range(i, len(codon_items)):
-                cs2, info2 = codon_items[j]
-                start2 = 0 if j != i else 0  # allow same codon, different alt
-                for alt2 in SYN_CODONS.get(info2['aa'], []):
-                    if alt2 == info2['codon']:
-                        continue
-                    if j == i and alt2 == alt1:
-                        continue
-                    changes2 = {cs2 + k: alt2[k] for k in range(3)
-                                if alt2[k] != info2['codon'][k]}
-                    merged = {**changes1, **changes2}
-                    if not merged:
-                        continue
-                    new_seq = _apply(merged)
-                    if _pam_disrupted(new_seq, pam, pam_fwd_start, pam_len, strand):
-                        desc = (
-                            '{}>{} at {}; {}>{} at {}'.format(
-                                info1['codon'], alt1, cs1,
-                                info2['codon'], alt2, cs2)
-                        )
-                        return (new_seq, desc, 'syn_2')
-
-    # ── Step 3: GC-preserving 2-mutation in PAM region (non-coding fallback) ──
-    orig_pam_seq = seq[pam_fwd_start:pam_fwd_start + pam_len].upper()
-    orig_gc = gc_count(orig_pam_seq)
-
-    # Try all pairs of (position, new_base) within the PAM region
-    for i in range(pam_len):
-        pos_i = pam_fwd_start + i
-        orig_i = orig_pam_seq[i]
-        for base_i in BASES:
-            if base_i == orig_i:
-                continue
-            delta_i = gc_count(base_i) - gc_count(orig_i)
-            for j in range(i + 1, pam_len):
-                pos_j = pam_fwd_start + j
-                orig_j = orig_pam_seq[j]
-                for base_j in BASES:
-                    if base_j == orig_j:
-                        continue
-                    delta_j = gc_count(base_j) - gc_count(orig_j)
-                    if delta_i + delta_j != 0:
-                        continue  # would change GC content
-                    changes = {pos_i: base_i, pos_j: base_j}
-                    new_seq = _apply(changes)
-                    if _pam_disrupted(new_seq, pam, pam_fwd_start, pam_len, strand):
-                        desc = (
-                            'non-coding GC-preserving: pos {} {}>{}, pos {} {}>{}'
-                            .format(pos_i, orig_i, base_i, pos_j, orig_j, base_j)
-                        )
-                        return (new_seq, desc, 'gc_preserve')
-
-    # ── Also try single-base non-coding changes if 2-change search fails ──────
-    # (handles cases where a single change happens to preserve GC)
-    for i in range(pam_len):
-        pos_i = pam_fwd_start + i
-        orig_i = orig_pam_seq[i]
-        for base_i in BASES:
-            if base_i == orig_i:
-                continue
-            if gc_count(base_i) != gc_count(orig_i):
-                continue  # GC change
-            changes = {pos_i: base_i}
-            new_seq = _apply(changes)
+            new_seq = _apply({pos: base})
             if _pam_disrupted(new_seq, pam, pam_fwd_start, pam_len, strand):
-                desc = (
-                    'non-coding GC-preserving: pos {} {}>{}'
-                    .format(pos_i, orig_i, base_i)
-                )
-                return (new_seq, desc, 'gc_preserve')
+                info = frame_lookup.get(pos)
+                if info and not info['split']:
+                    alt_codon = list(info['codon'])
+                    alt_codon[info['pos_in_codon']] = base
+                    desc = 'pos {} {}>{} (non-synonymous: {}>{})'.format(
+                        pos, orig, base, info['codon'], ''.join(alt_codon))
+                else:
+                    desc = 'pos {} {}>{}'.format(pos, orig, base)
+                return (new_seq, desc, 'mut_1')
 
     return None  # no solution found

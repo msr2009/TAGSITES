@@ -19,11 +19,12 @@ from shiny import module, reactive, render, ui
 # ensure scripts/ is importable from the app context
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 import run_status as _run_status
-from task_runners import TASK_RUNNERS
+from task_runners import TASK_RUNNERS, afdb_presearch
 from progress import make_status_reporter, report as _progress_report
 
 from modules.progress_logic import display_params, parse_run, status_label
 from modules.setup_ui import label_with_tip
+from modules.json_card import json_upload_card as _json_upload_card
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -53,7 +54,7 @@ def _param_grid(args, global_block, analysis=None):
 
 
 def _build_body(task, global_block, entry):
-    """Build the full accordion panel body: param grid + log textarea."""
+    """Build the full accordion panel body: param grid + log textarea + re-run button."""
     children = [_param_grid(task["args"], global_block, analysis=task.get("analysis"))]
     log = entry.get("log", "")
     children.append(
@@ -63,6 +64,12 @@ def _build_body(task, global_block, entry):
             class_="task-log",
             rows=6,
             id=f"task-log-{task['id']}",
+        )
+    )
+    children.append(
+        ui.input_action_button(
+            f"rerun_{task['id']}", "↻ Re-run",
+            class_="btn-outline-warning btn-sm mt-2",
         )
     )
     return ui.div(*children)
@@ -78,6 +85,11 @@ def progress_server(input, output, session, shared_json):
     working_dir  = reactive.Value("")
     run_name     = reactive.Value(None)
     task_list    = reactive.Value([])   # [{"id","analysis","args","output"}, ...]
+
+    # re-run queue: tracks which tasks the user has asked to re-run
+    rerun_queue    = reactive.Value(frozenset())  # reactive mirror of _click_baseline
+    _click_baseline = {}   # {tid: click_count captured at last Run} — plain dict, not reactive
+    _baseline_tick  = reactive.Value(0)           # bumped on each Run to trigger re-sync
 
     # ── parse JSON whenever the shared path changes ────────────────────────────
 
@@ -120,6 +132,24 @@ def progress_server(input, output, session, shared_json):
         if info:
             shared_json.set(info[0]["datapath"])
 
+    # ── re-run queue: track per-task re-run button clicks ────────────────────
+
+    @reactive.effect
+    def _sync_rerun_queue():
+        """Build the set of task IDs whose re-run button has been clicked since last Run."""
+        _baseline_tick.get()      # re-evaluate after each Run resets the baseline
+        tasks = task_list.get()   # re-evaluate when the task list changes
+        queued = set()
+        for t in tasks:
+            tid = t["id"]
+            try:
+                clicks = input[f"rerun_{tid}"]() or 0
+            except Exception:
+                clicks = 0
+            if clicks > _click_baseline.get(tid, 0):
+                queued.add(tid)
+        rerun_queue.set(frozenset(queued))
+
     # ── run-button state ───────────────────────────────────────────────────────
 
     @reactive.effect
@@ -134,33 +164,9 @@ def progress_server(input, output, session, shared_json):
     @render.ui
     def json_upload_card():
         """Render the JSON upload card; collapsed and warning-free when a run is loaded."""
-        has_json = run_name.get() is not None
-        warning = ui.span() if has_json else ui.span(
-            "⚠ no current JSON",
-            style="color:#dc3545; font-size:0.8em; font-style:italic;",
-        )
-        return ui.div(
-            ui.div(
-                ui.div(
-                    ui.span("Upload run JSON"),
-                    warning,
-                    class_="card-header d-flex justify-content-between align-items-center",
-                    style="cursor:pointer;",
-                    **{"data-bs-toggle": "collapse",
-                       "data-bs-target": "#ts-prog-json-body",
-                       "aria-expanded": "false" if has_json else "true"},
-                ),
-                ui.div(
-                    ui.div(
-                        ui.input_file("upload_json", None, accept=[".json"]),
-                        class_="card-body py-2",
-                    ),
-                    id="ts-prog-json-body",
-                    class_="collapse" if has_json else "collapse show",
-                ),
-                class_="card",
-            ),
-            class_="mb-2",
+        return _json_upload_card(
+            "upload_json", "ts-prog-json-body", "Upload run JSON",
+            run_name.get() is not None,
         )
 
     @render.ui
@@ -180,11 +186,12 @@ def progress_server(input, output, session, shared_json):
     # ── concurrent task execution ──────────────────────────────────────────────
 
     @reactive.extended_task
-    async def run_all_tasks(json_path, wd, rn):
+    async def run_all_tasks(json_path, wd, rn, rerun_set):
         """Run all analysis tasks concurrently in a thread pool.
 
         Each task writes its status to the status file as it progresses
         so the polling UI can show live per-task updates.
+        rerun_set is a frozenset of task IDs to re-run even if already complete.
         """
         with open(json_path) as f:
             j = json.load(f)
@@ -203,9 +210,9 @@ def progress_server(input, output, session, shared_json):
                                         log=f"ERROR: Unknown analysis type '{analysis}'")
                 return
 
-            # skip tasks already completed (resume logic)
+            # skip if already complete and not explicitly queued for re-run
             entry = _run_status.load_status(wd, rn).get(tid, {})
-            if _run_status.is_complete(entry, output):
+            if _run_status.is_complete(entry, output) and tid not in rerun_set:
                 return
 
             log = []
@@ -223,6 +230,20 @@ def progress_server(input, output, session, shared_json):
                                         log="\n".join(log), stage="failed")
 
         loop = asyncio.get_running_loop()
+
+        # AFDB pre-step: must finish before any task starts so all analyses share
+        # the same reference sequence (AF sequence replaces user .fa if a model is found)
+        plddt_task = next(
+            (t for t in tasks if t["analysis"] == "plddt" and not t["args"].get("pdb")),
+            None,
+        )
+        if plddt_task:
+            afdb_log = []
+            _run_status.update_task(wd, rn, plddt_task["id"],
+                                    status="running", stage="afdb_lookup")
+            afdb_reporter = make_status_reporter(wd, rn, plddt_task["id"], afdb_log)
+            await loop.run_in_executor(None, lambda: afdb_presearch(tasks, report=afdb_reporter))
+
         await asyncio.gather(*[
             loop.run_in_executor(None, _run_one, t) for t in tasks
         ])
@@ -231,8 +252,23 @@ def progress_server(input, output, session, shared_json):
     @reactive.effect
     @reactive.event(input.run_analysis)
     def _launch():
-        """Launch all tasks when the user clicks Run."""
-        run_all_tasks.invoke(shared_json.get(), working_dir.get(), run_name.get())
+        """Launch all tasks; any task queued for re-run bypasses the is_complete guard."""
+        rerun_set = frozenset(rerun_queue.get())
+        wd, rn = working_dir.get(), run_name.get()
+        # stamp queued tasks "queued" in the status file before clearing rerun_queue,
+        # so the badge stays orange rather than briefly flashing the previous result
+        if wd and rn:
+            for t in task_list.get():
+                if t["id"] in rerun_set:
+                    _run_status.update_task(wd, rn, t["id"], status="queued", log="", stage="")
+        # advance baseline so rerun_queue empties immediately after launch
+        for t in task_list.get():
+            try:
+                _click_baseline[t["id"]] = input[f"rerun_{t['id']}"]() or 0
+            except Exception:
+                pass
+        _baseline_tick.set(_baseline_tick.get() + 1)
+        run_all_tasks.invoke(shared_json.get(), wd, rn, rerun_set)
 
     # ── live status polling ────────────────────────────────────────────────────
 
@@ -302,12 +338,14 @@ def progress_server(input, output, session, shared_json):
         """Update accordion titles + push log text in-place (no body re-render)."""
         tasks  = task_list.get()
         status = _current_status()   # provides the 2 s invalidation while running
+        queued = rerun_queue.get()   # tasks the user has queued for re-run
         log_updates = []
         for t in tasks:
             tid   = t["id"]
             label = tid.rsplit("_", 1)[0]
             entry = status.get(tid, {})
-            state = status_label(entry)
+            # show "queued" badge when task is pending re-run; otherwise real status
+            state = "queued" if tid in queued else status_label(entry)
             stage = entry.get("stage", "")
             # update title only — omitting body preserves textarea scroll/size
             ui.update_accordion_panel(

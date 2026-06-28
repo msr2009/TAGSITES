@@ -51,6 +51,64 @@ def _bool(v, default=False):
     return bool(v) if v is not None else default
 
 
+# ── AFDB pre-step ────────────────────────────────────────────────────────────
+
+def afdb_presearch(tasks, report=None):
+    """Run AFDB lookup before tasks start and swap the reference .fa for all tasks.
+
+    Finds the plddt task whose pdb arg is empty, runs the AFDB search, and if a
+    model is found: saves the user's .fa aside, puts the AF-derived .fa in its
+    place (so all tasks share the same reference sequence), and updates the plddt
+    task's pdb arg in-place.  Other task args need no update because their
+    input_file paths already point to the canonical .fa path.
+
+    Returns True if the swap happened, False if no AFDB lookup was needed or the
+    lookup returned no hit.
+    """
+    import existing_AF_model
+
+    plddt_task = next(
+        (t for t in tasks if t["analysis"] == "plddt" and not t["args"].get("pdb")),
+        None,
+    )
+    if plddt_task is None:
+        return False
+
+    args = plddt_task["args"]
+    wd   = _str(args.get("working_dir"))
+    name = _str(args.get("run_name"))
+
+    result = existing_AF_model.search_AFDB(
+        fasta_in      = _str(args.get("input_file") or args.get("fasta")),
+        email         = _str(args.get("email")),
+        workingdir    = wd,
+        name          = name,
+        taxid         = _str(args.get("taxid") or args.get("species_taxid") or "1"),
+        evalue        = _float(args.get("evalue"), 1e-10),
+        percentid     = _float(args.get("percent_id"), 99),
+        clients_folder= str(_SCRIPTS) + "/",
+        report        = report,
+    )
+
+    if result == 1:
+        return False  # no hit; plddt will fail on its own, others use user's .fa
+
+    # swap .fa files so all tasks use the AF sequence as reference
+    orig_fa = os.path.join(wd, name + ".fa")
+    user_fa = os.path.join(wd, "user_" + name + ".fa")
+    af_fa   = os.path.join(wd, name + ".AF.fa")
+    af_pdb  = os.path.join(wd, name + ".AF.pdb")
+
+    if os.path.exists(orig_fa):
+        os.rename(orig_fa, user_fa)
+    if os.path.exists(af_fa):
+        os.rename(af_fa, orig_fa)
+
+    # point the plddt task at the downloaded PDB
+    plddt_task["args"]["pdb"] = af_pdb
+    return True
+
+
 # ── analysis runners ─────────────────────────────────────────────────────────
 
 def run_blast(args, report=None):
@@ -75,30 +133,14 @@ def run_blast(args, report=None):
 
 
 def run_plddt(args, report=None):
-    """Run the pLDDT pipeline: AFDB search if needed, then extract_from_pdb.main()."""
+    """Run extract_from_pdb.main(). AFDB lookup is handled by afdb_presearch() before tasks start."""
     import extract_from_pdb
-    import existing_AF_model
-    import run_status as _run_status
 
     pdb_path = _str(args.get("pdb"))
     output   = _str(args.get("output"))
 
-    # run AFDB lookup if no local PDB was provided
     if not pdb_path:
-        result = existing_AF_model.search_AFDB(
-            fasta_in      = _str(args.get("input_file") or args.get("fasta")),
-            email         = _str(args.get("email")),
-            workingdir    = _str(args.get("working_dir")),
-            name          = _str(args.get("run_name")),
-            taxid         = _str(args.get("taxid") or args.get("species_taxid"), "1"),
-            evalue        = _float(args.get("evalue"), 1e-10),
-            percentid     = _float(args.get("percent_id"), 99),
-            clients_folder= str(_SCRIPTS) + "/",
-            report        = report,
-        )
-        if result == 1:
-            raise RuntimeError("AFDB lookup found no matching structure.")
-        pdb_path = result
+        raise RuntimeError("No PDB path set for pLDDT — AFDB lookup may have failed or no PDB was provided.")
 
     extract_from_pdb.main(pdb_path, output)
 

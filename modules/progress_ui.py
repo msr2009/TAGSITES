@@ -37,6 +37,7 @@ _STYLE = """
     .status-running { background: #fd7e14; animation: pulse 1.2s ease-in-out infinite; }
     .status-success { background: #28a745; }
     .status-failed  { background: #dc3545; }
+    .status-queued  { background: #d97706; }
     @keyframes pulse {
         0%, 100% { opacity: 1; }
         50%       { opacity: 0.6; }

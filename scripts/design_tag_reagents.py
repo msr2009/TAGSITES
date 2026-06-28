@@ -11,8 +11,8 @@ Pipeline:
   4. For each (residue × guide) pair within arm_length of the cut:
        - Build left and right homology arms centered on the insertion site
        - Mutate the arm containing the PAM to abrogate re-cutting
-       - Mutation ladder: (a) 1 synonymous codon change, (b) 2 synonymous
-         codon changes, (c) 2 GC-preserving non-coding changes
+       - Mutation ladder: (a) 1 synonymous codon change, (b) 1 minimal base
+         change within the PAM (intronic preferred, then non-synonymous)
 
 Output TSV (one row per residue × guide):
   residue_index     1-based protein residue number
@@ -29,10 +29,10 @@ Output TSV (one row per residue × guide):
   cut_pos           0-based DSB position in fwd coords
   distance          |cut_pos - insert_pos| (bp)
   pam_in_arm        'left' / 'right' / 'both' / 'none'
-  recut_block_method  'syn_1' / 'syn_2' / 'gc_preserve' / 'insertion' / 'none'
+  recut_block_method  'syn_1' / 'mut_1' / 'insertion' / 'none'
   mutation_desc     human-readable description of the PAM mutation
-  left_arm          left homology arm sequence (mutated if PAM is there)
-  right_arm         right homology arm sequence (mutated if PAM is there)
+  left_arm          left homology arm: exonic bases uppercase, intronic lowercase
+  right_arm         right homology arm: exonic bases uppercase, intronic lowercase
 
 Matt Rich, 2025
 """
@@ -46,6 +46,14 @@ from crispr_util import find_guides, build_frame_lookup, disrupt_pam
 from parse_genewise import parse_genewise, enumerate_insertion_sites, \
     parse_genewise_score, cds_coverage
 from progress import report as _report, resolve_reporter
+
+
+def _case_arm(arm_seq, arm_start, frame_lookup):
+    """Return arm_seq with exonic (coding) positions uppercase, intronic lowercase."""
+    return ''.join(
+        ch.upper() if (arm_start + i) in frame_lookup else ch.lower()
+        for i, ch in enumerate(arm_seq)
+    )
 
 
 # ── Core logic ────────────────────────────────────────────────────────────────
@@ -158,17 +166,17 @@ def design_reagents(
             else:
                 pam_arm = 'none'
 
-            # Check whether the tag insertion itself disrupts re-cutting
-            # (insertion lies between cut and PAM → the new donor junction
-            #  breaks the protospacer-PAM continuity)
+            # Check whether the tag insertion itself disrupts re-cutting.
+            # Any insertion within the 15 bp protospacer seed region immediately
+            # 5' of the PAM (on the guide strand) prevents Cas9 from re-binding.
+            # PAM mutations are only needed when the insert falls outside this window.
+            _SEED = 15
             if g['strand'] == '+':
-                # PAM is 3′ of cut on + strand; insertion between cut and PAM disrupts
-                insertion_blocks = (insert_pos >= cut_pos and
-                                    insert_pos <= pam_fwd_start)
+                # seed region = 15 bp 5' of PAM + PAM itself (fwd coords)
+                insertion_blocks = (pam_fwd_start - _SEED <= insert_pos < pam_end)
             else:
-                # PAM is 5′ of cut on − strand (in fwd coords, PAM is left of cut)
-                insertion_blocks = (insert_pos <= cut_pos and
-                                    insert_pos >= pam_end)
+                # seed region = PAM + 15 bp 3' of PAM (= 15 bp 5' on − strand)
+                insertion_blocks = (pam_fwd_start <= insert_pos < pam_end + _SEED)
 
             # Attempt PAM disruption
             recut_method  = 'none'
@@ -178,7 +186,7 @@ def design_reagents(
 
             if insertion_blocks:
                 recut_method  = 'insertion'
-                mutation_desc = 'tag insertion disrupts protospacer-PAM continuity'
+                mutation_desc = 'insert within {} bp seed region of PAM; re-cutting impossible'.format(_SEED)
 
             elif pam_arm in ('left', 'right', 'both') and pam_arm != 'none':
                 # disrupt_pam works on the full genomic sequence and returns a
@@ -193,6 +201,10 @@ def design_reagents(
                     mutation_desc = desc
                 else:
                     mutation_desc = 'PAM disruption not possible with available synonymous changes'
+
+            # encode exonic vs intronic in arm case (uppercase = coding, lowercase = intronic)
+            left_arm  = _case_arm(left_arm, left_start, frame_lookup)
+            right_arm = _case_arm(right_arm, insert_pos, frame_lookup)
 
             rows.append({
                 'residue_index':       int(site['residue_index']),

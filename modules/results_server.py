@@ -1,5 +1,6 @@
 from shiny import reactive, ui, render, module
 import json, os
+from modules.json_card import json_upload_card as _json_upload_card
 
 from utils.results import (
     load_data_from_json,
@@ -77,6 +78,9 @@ def results_server(input, output, session, shared_json, shared_sites):
     # ── Color-by choices (drives the button row above the structure) ────────────
     color_by_choices = reactive.Value({})  # val → label dict, populated on load
 
+    # canonical on-disk path (not the Shiny upload temp path) — used for saves
+    json_path = reactive.Value(None)
+
     # ── Selection state ─────────────────────────────────────────────────────────
     pending_sites = reactive.Value(set())  # amber — highlighted but not committed
 
@@ -119,18 +123,33 @@ def results_server(input, output, session, shared_json, shared_sites):
                                           {"colors": jet_colors, "legend": {"type": "rainbow"}})
         if meta.get("pdb_path"):
             await _send_struct(meta["pdb_path"])
+        # record the canonical on-disk path so _save_sites can write back
+        wd = json_content["global"].get("working_dir", "")
+        rn_str = json_content["global"].get("run_name", "")
+        canon = os.path.join(wd, rn_str + ".json") if wd and rn_str else None
+        json_path.set(canon)
+
+        # restore previously saved site selection (or start fresh)
+        saved = json_content["global"].get("selected_sites", [])
         pending_sites.set(set())
-        shared_sites.set([])
+        shared_sites.set(sorted(int(s) for s in saved))
 
     @reactive.effect
     @reactive.event(input.json_file_input)
-    async def load_results():
-        """Auto-plot when the user selects an uploaded JSON file."""
-        if not input.json_file_input():
+    def load_results():
+        """Propagate a Results-tab JSON upload to shared state.
+
+        Validates the file first, then sets shared_json so that auto_load_results
+        (and the Progress / Reagents tabs) all react to the same path — same path
+        as when JSON is loaded through any other tab.
+        """
+        info = input.json_file_input()
+        if not info:
             return
+        path = info[0]["datapath"]
         try:
-            with open(input.json_file_input()[0]["datapath"]) as f:
-                json_content = json.load(f)
+            with open(path) as f:
+                json.load(f)
         except FileNotFoundError:
             ui.notification_show("Uploaded file not found.", type="error", duration=6)
             return
@@ -138,7 +157,7 @@ def results_server(input, output, session, shared_json, shared_sites):
             ui.notification_show("Could not parse JSON — file may be malformed.",
                                  type="error", duration=6)
             return
-        await _do_load(json_content)
+        shared_json.set(path)
 
     @reactive.effect
     async def auto_load_results():
@@ -152,6 +171,22 @@ def results_server(input, output, session, shared_json, shared_sites):
         except (FileNotFoundError, json.JSONDecodeError):
             return
         await _do_load(json_content)
+
+    @reactive.effect
+    def _save_sites():
+        """Write selected_sites back to the run JSON whenever they change."""
+        sites = shared_sites.get()
+        path  = json_path.get()
+        if not path or not os.path.exists(path):
+            return
+        try:
+            with open(path) as f:
+                j = json.load(f)
+            j.setdefault("global", {})["selected_sites"] = sites
+            with open(path, "w") as f:
+                json.dump(j, f, indent=2)
+        except Exception:
+            pass
 
     def _input_names():
         """Build the dict of namespaced Shiny input IDs to send to JS."""
@@ -335,33 +370,9 @@ def results_server(input, output, session, shared_json, shared_sites):
     @render.ui
     def json_upload_card():
         """Render the JSON upload card; collapsed and warning-free when data is loaded."""
-        has_json = run_name.get() is not None
-        warning = ui.span() if has_json else ui.span(
-            "⚠ no current JSON",
-            style="color:#dc3545; font-size:0.8em; font-style:italic;",
-        )
-        return ui.div(
-            ui.div(
-                ui.div(
-                    ui.span("Upload results JSON"),
-                    warning,
-                    class_="card-header d-flex justify-content-between align-items-center",
-                    style="cursor:pointer;",
-                    **{"data-bs-toggle": "collapse",
-                       "data-bs-target": "#ts-json-body",
-                       "aria-expanded": "false" if has_json else "true"},
-                ),
-                ui.div(
-                    ui.div(
-                        ui.input_file("json_file_input", None, accept=[".json"]),
-                        class_="card-body py-2",
-                    ),
-                    id="ts-json-body",
-                    class_="collapse" if has_json else "collapse show",
-                ),
-                class_="card",
-            ),
-            class_="mb-2",
+        return _json_upload_card(
+            "json_file_input", "ts-json-body", "Upload results JSON",
+            run_name.get() is not None,
         )
 
     @render.ui
