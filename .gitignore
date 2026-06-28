@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# macOS
+.DS_Store
+
+# Run output directories (user data, not app code)
+USERDATA/
+LON2/
+SRC1/
+UNC5/
+UNC5_fa/
+UNC5_pdb/
+TESTING_OUTPUT/
+foo/
+
+# Saved parameter presets (user-specific, not defaults)
+params/*.json
+!params/worm_default.json

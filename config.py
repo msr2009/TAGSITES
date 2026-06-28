@@ -4,9 +4,6 @@ import json
 # project root is the directory containing this file
 _ROOT = Path(__file__).parent
 
-# file containing flattened list of uniprot species and taxids
-UNIPROT_SPECIES = str(_ROOT / "uniprot_species.flat.txt")
-
 # edit the filename below for your defaults
 DEFAULT_JSON = str(_ROOT / "default_json.json")
 

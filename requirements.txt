@@ -1,0 +1,12 @@
+biopython
+pandas
+numpy
+scipy
+scikit-learn
+matplotlib
+plotly
+requests
+shiny
+shinywidgets
+xmltramp2
+ridgeplot

@@ -32,7 +32,7 @@ _TAGS_PATH = Path(__file__).parent.parent / "tables" / "tags.tsv"
 _TAGS = load_tags(_TAGS_PATH) if _TAGS_PATH.exists() else {}
 
 # Arm-length defaults by repair type
-_ARM_DEFAULTS = {"ha": 500, "ssodn": 60, "amplicon": 35, "plasmid": 700}
+_ARM_DEFAULTS = {"ha": 1000, "ssodn": 50, "amplicon": 50, "plasmid": 500}
 
 
 def _safe_id(s):
@@ -64,7 +64,7 @@ def reagents_server(input, output, session, shared_json, shared_sites):
     # ── reactive state ────────────────────────────────────────────────────────
     run_name         = reactive.Value(None)   # str or None
     working_dir      = reactive.Value("")
-    stored_arm_len   = reactive.Value(500)    # arm_length used when TSV was generated
+    stored_arm_len   = reactive.Value(1000)   # arm_length used when TSV was generated
     reagents_df      = reactive.Value(None)   # full TSV as DataFrame or None
     selected_guides  = reactive.Value({})     # {residue_index (int): set(guide_id)}
     _template_seq    = reactive.Value("")     # PCR template, persists across repair-type switches
@@ -125,7 +125,7 @@ def reagents_server(input, output, session, shared_json, shared_sites):
 
         # read reagent args to discover stored arm length and TSV path
         reagent_args = j.get("REAGENTS_reagents", {}).get("args", {})
-        s_arm = int(reagent_args.get("arm_length", 500))
+        s_arm = int(reagent_args.get("arm_length", 1000))
         stored_arm_len.set(s_arm)
 
         tsv_path = reagent_args.get("output", "")
@@ -296,7 +296,10 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                                      left_wt=left_wt, right_wt=right_wt)
             except Exception as e:
                 left, right, diag = "", "", str(e)
-            result[gid] = {"left": left, "right": right, "diagram": diag}
+            result[gid] = {
+                "left": left, "right": right, "diagram": diag,
+                "left_bp": len(left), "right_bp": len(right), "arm_len": arm_len,
+            }
         return result
 
     # ── Outputs ───────────────────────────────────────────────────────────────
@@ -546,6 +549,21 @@ def reagents_server(input, output, session, shared_json, shared_sites):
             else:
                 diagram_content = ui.div("Diagram unavailable — check arm length.", class_="ts-error")
 
+            # warn when an arm was clipped at the sequence boundary
+            _req = cached.get("arm_len", 0)
+            _short = []
+            if _req and cached.get("left_bp", _req) < _req:
+                _short.append("5′ ({} bp)".format(cached["left_bp"]))
+            if _req and cached.get("right_bp", _req) < _req:
+                _short.append("3′ ({} bp)".format(cached["right_bp"]))
+            arm_clip_warning = (
+                ui.div(
+                    "⚠ Short arm at sequence boundary: {} arm(s) truncated "
+                    "(requested {} bp).".format(" and ".join(_short), _req),
+                    class_="ts-warn",
+                ) if _short else ui.span()
+            )
+
             meta_cells = []
             for label, val in [
                 ("Spacer", str(row["spacer"])),
@@ -565,6 +583,7 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                     ui.span("{} bp from cut to insert".format(dist), class_="dist-badge"),
                     class_="guide-header",
                 ),
+                arm_clip_warning,
                 diagram_content,
                 ui.div(*meta_cells, class_="param-grid mt-2"),
                 class_="guide-panel{}".format(" guide-best" if best else ""),

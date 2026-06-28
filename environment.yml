@@ -15,7 +15,6 @@ dependencies:
   - requests
   - shiny
   - shinywidgets
-  - clustalo        # aligner binary (from bioconda)
   - xmltramp2       # required by EBI REST clients
   - pytest
   - pip:

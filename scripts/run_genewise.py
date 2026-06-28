@@ -41,7 +41,6 @@ Matt Rich, 2025
 import os
 import re
 import shutil
-import subprocess
 import sys
 
 from Bio import SeqIO
@@ -53,6 +52,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from crispr_util import reverse_complement
 from parse_genewise import parse_genewise_score, cds_coverage, parse_genewise
 from progress import report as _report, resolve_reporter
+import ebi_rest
 
 # Score / coverage thresholds
 LOW_SCORE_WARN   = 50.0   # bits – below this a warning is printed
@@ -62,49 +62,34 @@ LOW_COVER_WARN   = 0.50   # fraction of protein length covered by CDS
 # ── EBI client wrapper ────────────────────────────────────────────────────────
 
 def run_genewise_client(protein_fa, genomic_fa, email, outfile_prefix, report=None):
-    """
-    Run the EBI Genewise REST client and return the path to the .out.txt result.
+    """Submit protein+DNA FASTAs to EBI Genewise REST API; write .out.txt and return its path."""
+    reporter = resolve_reporter(report)
 
-    The client (scripts/genewise.py) writes files named
-    <outfile_prefix>.<identifier>.<suffix>.  With --outformat out the relevant
-    output is <outfile_prefix>.out.txt.
+    with open(protein_fa) as fh:
+        asequence = fh.read()
+    with open(genomic_fa) as fh:
+        bsequence = fh.read()
 
-    Parameters
-    ----------
-    protein_fa      : str  path to protein FASTA
-    genomic_fa      : str  path to genomic DNA FASTA
-    email           : str  registered EBI e-mail address
-    outfile_prefix  : str  prefix for result files (passed as --outfile)
+    params = {
+        "email":     email,
+        "asequence": asequence,
+        "bsequence": bsequence,
+        "outformat": "out",
+    }
 
-    Returns
-    -------
-    str  path to the .out.txt file written by the client
-    """
-    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'genewise.py')
-    cmd = (
-        'python {script} '
-        '--email {email} '
-        '--asequence {prot} '
-        '--bsequence {dna} '
-        '--outfile {out} '
-        '--outformat out'
-    ).format(
-        script=script,
-        email=email,
-        prot=protein_fa,
-        dna=genomic_fa,
-        out=outfile_prefix,
-    )
-    _report(resolve_reporter(report), 'Running: {}'.format(cmd), stage='genewise_run')
-    ret = subprocess.call(cmd, shell=True)
-    if ret != 0:
-        raise RuntimeError('Genewise client exited with status {}'.format(ret))
+    def _cb(job_id, status):
+        _report(reporter, f"Genewise job {job_id}: {status}", stage='genewise_run')
 
-    expected = '{}.out.txt'.format(outfile_prefix)
+    _report(reporter, f"Submitting Genewise job for {os.path.basename(protein_fa)}", stage='genewise_run')
+    job_id = ebi_rest.run_job(ebi_rest.GENEWISE, params, poll_cb=_cb)
+
+    result_bytes = ebi_rest.fetch_result(ebi_rest.GENEWISE, job_id, "out")
+    expected = f"{outfile_prefix}.out.txt"
+    with open(expected, "wb") as fh:
+        fh.write(result_bytes)
+
     if not os.path.exists(expected):
-        raise FileNotFoundError(
-            'Expected Genewise output not found: {}'.format(expected)
-        )
+        raise FileNotFoundError(f"Expected Genewise output not found: {expected}")
     return expected
 
 

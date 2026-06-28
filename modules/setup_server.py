@@ -126,7 +126,7 @@ def setup_server(input, output, session, shared_json):
         """Derive working_dir from run_name when the user types a name."""
         if not input.run_name():
             return
-        base = INPUT_JSON["global"].get("working_dir") or os.getcwd()
+        base = INPUT_JSON["global"].get("working_dir") or "data"
         ui.update_text("working_dir", value=f"{base}/{input.run_name()}/")
 
     # ── save-status hint ──────────────────────────────────────────────────────

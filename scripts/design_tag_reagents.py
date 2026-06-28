@@ -62,7 +62,7 @@ def design_reagents(
     genewise_out,
     genomic_fasta,
     n_guides=5,
-    arm_length=500,
+    arm_length=1000,
     pam='NGG',
     guide_length=20,
     cut_offset=3,
@@ -232,7 +232,7 @@ def design_reagents(
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
-def main(genewise, genomic_fasta, output, n_guides=5, arm_length=500,
+def main(genewise, genomic_fasta, output, n_guides=5, arm_length=1000,
          pam='NGG', guide_length=20, cut_offset=3, report=None):
     """Entry point for in-process calls from task_runners."""
     df = design_reagents(

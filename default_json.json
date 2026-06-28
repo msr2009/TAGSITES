@@ -1,6 +1,6 @@
 {
 	"global": {
-		"email": "msr2009@gmail.com",
+		"email": "",
 		"working_dir": "",
 		"run_name": "",
 		"input_file": "",
@@ -107,7 +107,7 @@
 				"genomic_fasta": "",
 				"genewise": "",
 				"n_guides": 5,
-				"arm_length": 500,
+				"arm_length": 1000,
 				"PAM": "NGG",
 				"guide_length": 20,
 				"cut_offset": 3,
