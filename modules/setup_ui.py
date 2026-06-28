@@ -4,7 +4,7 @@ from pathlib import Path
 
 from shiny import ui, module
 
-from config import INPUT_JSON, SELECTABLE_TASKS, GLOBAL_TOOLTIPS, DEFAULT_SPECIES
+from config import SELECTABLE_TASKS, GLOBAL_TOOLTIPS, DEFAULT_SPECIES
 
 _PARAMS_DIR = Path(__file__).parent.parent / "params"
 
@@ -148,7 +148,7 @@ def setup_ui():
                 ui.div(
                     ui.input_text("email",
                         label_with_tip("Email", _t.get("email", "")),
-                        value=INPUT_JSON["global"]["email"],
+                        value="",
                         placeholder="required for EBI submissions", width="100%"),
                     ui.input_text("run_name",
                         label_with_tip("Analysis name", _t.get("run_name", "")),

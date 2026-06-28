@@ -12,7 +12,11 @@ from pathlib import Path
 
 from shiny import module, reactive, render, ui
 
-from config import DEFAULT_JSON, DEFAULT_SPECIES, EXCLUDE_ARGS, GLOBAL_TOOLTIPS, TASK_PARAMETERS
+from config import (
+    DEFAULT_SPECIES, GLOBAL_TOOLTIPS, TASK_PARAMETERS,
+    task_hidden, task_defaults, task_choices, task_tooltips, task_output_suffix,
+    GLOBAL_DEFAULTS,
+)
 from modules.setup_ui import label_with_tip, TASK_DESCRIPTIONS
 from modules.setup_logic import (
     build_defaults_entry,
@@ -36,30 +40,32 @@ def _table_choices(ext="*.tsv"):
 
 # ── widget builders ───────────────────────────────────────────────────────────
 
-def _make_param_widget(widget_id, param, value, tip):
+def _make_param_widget(widget_id, param, value, tip, choices=None):
     """Return one input widget for a task parameter."""
     lbl = label_with_tip(param.replace("_", " "), tip)
     if param == "scores_file":
-        choices = _table_choices("*.tsv")
-        selected = value if value in choices else next(iter(choices), "")
-        return ui.input_select(widget_id, label=lbl, choices=choices, selected=selected)
-    if isinstance(value, list):
-        return ui.input_select(widget_id, label=lbl,
-                               choices=value, selected=value[0], size=1)
+        file_choices = _table_choices("*.tsv")
+        selected = value if value in file_choices else next(iter(file_choices), "")
+        return ui.input_select(widget_id, label=lbl, choices=file_choices, selected=selected)
+    if choices:
+        selected = value if value in choices else choices[0]
+        return ui.input_select(widget_id, label=lbl, choices=choices, selected=selected, size=1)
     return ui.input_text(widget_id, label=lbl, value=str(value) if value != "" else "")
 
 
 def _build_param_inputs(task, task_values_snap):
     """Build the list of param widgets for one task card."""
-    tips = task.get("tooltips", {})
+    tips       = task.get("tooltips", {})
+    all_choices = task.get("choices", {})
+    hidden     = task_hidden(task["name"])
     widgets = []
     for p, default in task["params"].items():
-        if p in EXCLUDE_ARGS:
+        if p in hidden:
             continue
         widget_id = f"{task['id']}_{p}"
         # use the snapshotted value if present (preserves edits across re-renders)
         current = task_values_snap.get(task["id"], {}).get(p, default)
-        widgets.append(_make_param_widget(widget_id, p, current, tips.get(p, "")))
+        widgets.append(_make_param_widget(widget_id, p, current, tips.get(p, ""), all_choices.get(p)))
     return widgets
 
 
@@ -67,9 +73,6 @@ def _build_param_inputs(task, task_values_snap):
 
 @module.server
 def setup_server(input, output, session, shared_json):
-
-    # reload defaults fresh per session — avoids cross-session mutation
-    INPUT_JSON = json.load(open(DEFAULT_JSON))
 
     tasks      = reactive.Value([])   # list of in-memory task dicts
     task_snap  = reactive.Value({})   # {task_id: {param: value}} — preserved across re-renders
@@ -296,7 +299,7 @@ def setup_server(input, output, session, shared_json):
         """Derive working_dir from run_name when the user types a name."""
         if not input.run_name():
             return
-        base = INPUT_JSON["global"].get("working_dir") or "data"
+        base = GLOBAL_DEFAULTS.get("working_dir") or "data"
         ui.update_text("working_dir", value=f"{base}/{input.run_name()}/")
 
     # ── save-status hint ──────────────────────────────────────────────────────
@@ -321,9 +324,10 @@ def setup_server(input, output, session, shared_json):
         """Read all current param inputs into task_snap (copy-and-set for reactivity)."""
         snap = {}
         for t in tasks():
+            hidden = task_hidden(t["name"])
             snap[t["id"]] = {}
             for p in t["params"]:
-                if p in EXCLUDE_ARGS:
+                if p in hidden:
                     continue
                 wid = f"{t['id']}_{p}"
                 if wid in input:
@@ -331,16 +335,15 @@ def setup_server(input, output, session, shared_json):
         task_snap.set(snap)
 
     def _collect_args(task):
-        """Read input values for all params in a task, falling back to config defaults."""
-        base = TASK_PARAMETERS[task["name"]]["args"]
+        """Read input values for all params in a task, falling back to registry defaults."""
         args = {}
-        for p, default in base.items():
+        for p, pcfg in TASK_PARAMETERS[task["name"]]["params"].items():
             wid = f"{task['id']}_{p}"
-            # is_set() returns False for params excluded from the UI (no widget exists)
+            # is_set() is False for hidden params (no widget) — fall back to default
             if input[wid].is_set():
                 args[p] = input[wid]()
             else:
-                args[p] = default
+                args[p] = pcfg["default"]
         return args
 
     # ── task CRUD ─────────────────────────────────────────────────────────────
@@ -379,11 +382,11 @@ def setup_server(input, output, session, shared_json):
         if not ttype or not label:
             return
         _snapshot()
-        cfg = TASK_PARAMETERS[ttype]
-        # filter excluded args from the in-memory params (they'll still be written at save time)
-        params = {p: v for p, v in cfg["args"].items() if p not in EXCLUDE_ARGS}
-        tips   = {p: v for p, v in cfg.get("tooltips", {}).items() if p not in EXCLUDE_ARGS}
-        task = make_task(ttype, label, params, tips)
+        hidden = task_hidden(ttype)
+        params  = {p: v for p, v in task_defaults(ttype).items() if p not in hidden}
+        tips    = task_tooltips(ttype)
+        choices = task_choices(ttype)
+        task = make_task(ttype, label, params, tips, choices)
         task["start_open"] = True   # newly added tasks open by default
         tasks.set(tasks() + [task])
         _register_remove(task["id"])
@@ -409,13 +412,14 @@ def setup_server(input, output, session, shared_json):
         _snapshot()
         new_tasks = []
         for tid, entry in data.items():
-            ttype = entry["analysis"]
-            cfg = TASK_PARAMETERS.get(ttype, {})
-            # use saved args as params, supplement tooltips from config
-            params = {p: v for p, v in entry["args"].items() if p not in EXCLUDE_ARGS}
-            tips   = {p: v for p, v in cfg.get("tooltips", {}).items() if p not in EXCLUDE_ARGS}
+            ttype  = entry["type"]
+            hidden = task_hidden(ttype)
+            # use saved args as params, supplement tooltips + choices from registry
+            params  = {p: v for p, v in entry["args"].items() if p not in hidden and p != "output"}
+            tips    = task_tooltips(ttype)
+            choices = task_choices(ttype)
             task = {"id": tid, "name": ttype, "params": params, "tooltips": tips,
-                    "start_open": False}   # preloaded tasks start collapsed
+                    "choices": choices, "start_open": False}   # preloaded tasks start collapsed
             new_tasks.append(task)
             _register_remove(tid)
             if ttype == "scores":
@@ -434,8 +438,8 @@ def setup_server(input, output, session, shared_json):
         wd, rn = input.working_dir(), input.run_name()
         for task in tasks():
             args = _collect_args(task)
-            out_suffix = TASK_PARAMETERS[task["name"]]["args"].get("output", "")
-            result.update(build_defaults_entry(task["id"], task["name"], args, out_suffix, wd, rn))
+            result.update(build_defaults_entry(task["id"], task["name"], args,
+                                               task_output_suffix(task["name"]), wd, rn))
         path = _PARAMS_DIR / f"{name}.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w") as f:
@@ -538,7 +542,6 @@ def setup_server(input, output, session, shared_json):
 
         # build the global block
         global_block = build_global_block(
-            base_global  = INPUT_JSON["global"],
             email        = email,
             run_name     = rn,
             working_dir  = wd,
@@ -557,22 +560,20 @@ def setup_server(input, output, session, shared_json):
                 args["existing_AF2"] = 0 if use_supplied_pdb else 1
                 # always inject the resolved taxid so AFDB lookup can filter by organism
                 args["taxid"] = organism_taxid()
-            out_suffix = TASK_PARAMETERS[task["name"]]["args"].get("output", "")
             task_entries.append(
-                build_task_entry(task["id"], task["name"], args, global_block,
-                                 out_suffix, wd, rn)
+                build_task_entry(task["id"], task["name"], args,
+                                 task_output_suffix(task["name"]), wd, rn)
             )
 
         # build reagents entry or warn
         reagents_entry = None
         if genomic_path:
             reagents_entry = build_reagents_entry(
-                defaults_cfg = TASK_PARAMETERS["reagents"]["args"],
+                defaults     = task_defaults("reagents"),
                 genomic_path = genomic_path,
-                email        = email,
+                out_suffix   = task_output_suffix("reagents"),
                 working_dir  = wd,
                 run_name     = rn,
-                input_file   = input_file,
             )
         else:
             ui.notification_show(
@@ -583,7 +584,6 @@ def setup_server(input, output, session, shared_json):
             )
 
         run_json = build_run_json(
-            scripts        = INPUT_JSON["scripts"],
             global_block   = global_block,
             task_entries   = task_entries,
             reagents_entry = reagents_entry,

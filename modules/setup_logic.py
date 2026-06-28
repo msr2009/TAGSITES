@@ -5,70 +5,71 @@ independently testable without running the app.
 """
 
 
-def make_task(task_type, label, params_cfg, tooltips_cfg):
+def make_task(task_type, label, params_cfg, tooltips_cfg, choices_cfg=None):
     """Build an in-memory task dict from user selection + config defaults."""
     return {
-        "id": f"{label}_{task_type}",
-        "name": task_type,
-        "params": dict(params_cfg),
+        "id":       f"{label}_{task_type}",
+        "name":     task_type,
+        "params":   dict(params_cfg),    # {param: current_value} — visible params only
         "tooltips": dict(tooltips_cfg),
+        "choices":  dict(choices_cfg or {}),  # {param: [options]} for dropdown params
     }
 
 
-def build_global_block(base_global, email, run_name, working_dir,
-                       input_file, pdb="", genomic_file=""):
+def build_global_block(email, run_name, working_dir, input_file,
+                       pdb="", genomic_file="", scripts_folder="./scripts/"):
     """Assemble the 'global' block that goes into the run JSON."""
-    g = dict(base_global)
-    g["email"] = email
-    g["run_name"] = run_name
-    g["working_dir"] = working_dir
-    g["input_file"] = input_file
-    g["pdb"] = pdb
+    g = {
+        "email":       email,
+        "run_name":    run_name,
+        "working_dir": working_dir,
+        "input_file":  input_file,
+        "pdb":         pdb,
+        "scripts_folder": scripts_folder,
+        "selected_sites": [],
+    }
     # only include genomic_file when a genomic FASTA was uploaded
     if genomic_file:
         g["genomic_file"] = genomic_file
     return g
 
 
-def build_task_entry(task_id, task_name, collected_args, global_block, out_suffix, working_dir, run_name):
-    """Merge task args over global block and return a single-task JSON entry.
+def build_task_entry(task_id, task_name, collected_args, out_suffix, working_dir, run_name):
+    """Build a single task JSON entry — task args only, no global keys.
 
-    Global block keys override task args (matching original write_task_json behavior),
-    so shared fields like email/working_dir/input_file always come from the run context.
-    Output path is always rewritten from working_dir + run_name + task_id + suffix.
+    Global fields (email, working_dir, etc.) are stored once in the run JSON's
+    global block and merged at run time, not copied into every task.
     """
-    args = {**collected_args, **global_block}
+    args = dict(collected_args)
     args["output"] = f"{working_dir}{run_name}.{task_id}{out_suffix}"
-    return {task_id: {"analysis": task_name, "args": args}}
+    return {task_id: {"type": task_name, "args": args}}
 
 
 def build_defaults_entry(task_id, task_name, collected_args, out_suffix, working_dir, run_name):
     """Build one entry for a saved-defaults file — task args only, no global block."""
     args = dict(collected_args)
     args["output"] = f"{working_dir}{run_name}.{task_id}{out_suffix}"
-    return {task_id: {"analysis": task_name, "args": args}}
+    return {task_id: {"type": task_name, "args": args}}
 
 
-def build_reagents_entry(defaults_cfg, genomic_path, email, working_dir, run_name, input_file):
-    """Build the auto-injected REAGENTS_reagents entry for CRISPR precompute."""
-    args = dict(defaults_cfg)
+def build_reagents_entry(defaults, genomic_path, out_suffix, working_dir, run_name):
+    """Build the auto-injected REAGENTS_reagents entry for CRISPR precompute.
+
+    Global fields are omitted — they're merged at run time from the global block.
+    """
+    args = dict(defaults)
     args["genomic_fasta"] = genomic_path
-    args["genewise"] = ""           # runner calls Genewise automatically
-    args["email"] = email
-    args["working_dir"] = working_dir
-    args["run_name"] = run_name
-    args["input_file"] = input_file
-    out_suffix = defaults_cfg.get("output", ".tsv")
+    args["genewise"] = ""          # runner calls Genewise automatically
     args["output"] = f"{working_dir}{run_name}.reagents{out_suffix}"
-    return {"analysis": "reagents", "args": args}
+    return {"type": "reagents", "args": args}
 
 
-def build_run_json(scripts, global_block, task_entries, reagents_entry=None):
+def build_run_json(global_block, task_entries, reagents_entry=None):
     """Assemble the full top-level run JSON dict from its parts."""
-    result = {"scripts": scripts, "global": global_block}
+    tasks = {}
     for entry in task_entries:
-        result.update(entry)
+        tasks.update(entry)
     # only include reagents when a genomic FASTA was uploaded
     if reagents_entry is not None:
-        result["REAGENTS_reagents"] = reagents_entry
-    return result
+        tasks["REAGENTS_reagents"] = reagents_entry
+    return {"global": global_block, "tasks": tasks}
