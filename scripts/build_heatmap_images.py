@@ -1,140 +1,132 @@
 """
-build_alignment_images.py
-
-takes fasta alignment file (output of clustal) and 
-creates matplotlib heatmap for alignment.
-
-this is an alternative to using plotly to make an interactive heatmap, 
-which runs really slow in the tag sites app.
-
+build_heatmap_images.py — ClustalX-style alignment heatmap renderer.
+Output is PNG at 96 DPI with per-cell amino acid letter annotations.
 Matt Rich, 11/2025
 """
 
 import matplotlib
 matplotlib.use("agg")  # non-interactive backend; required when called from worker threads
+import numpy as np
 from Bio import SeqIO
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
 
 
-# Define a basic ClustalX-style color scheme for amino acids
+# ClustalX-style color scheme for amino acids
 CLUSTALX_COLOR_SCHEME = {
-        'A': 'green',  'I': 'green',  'L': 'green',  'M': 'green',  'V': 'green',  # Hydrophobic
-        'F': 'orange', 'Y': 'orange', 'W': 'orange',  # Aromatic
-        'H': 'blue',   'K': 'blue',   'R': 'blue',  # Positively charged
-        'D': 'red',    'E': 'red',    # Negatively charged
-        'S': 'magenta', 'T': 'magenta',  # Polar, uncharged
-        'N': 'cyan',   'Q': 'cyan',    # Polar, uncharged
-        'G': 'yellow', 'P': 'yellow', 'C': 'yellow', # Special cases
-        "-": 'white', 'X': 'white' # Gap
+    'A': 'green',  'I': 'green',  'L': 'green',  'M': 'green',  'V': 'green',
+    'F': 'orange', 'Y': 'orange', 'W': 'orange',
+    'H': 'blue',   'K': 'blue',   'R': 'blue',
+    'D': 'red',    'E': 'red',
+    'S': 'magenta', 'T': 'magenta',
+    'N': 'cyan',   'Q': 'cyan',
+    'G': 'yellow', 'P': 'yellow', 'C': 'yellow',
+    '-': 'white',  'X': 'white',
 }
 
-AA_VAL_MAP = { 'A': 0, 'I': 7,  'L': 9,  'M': 10,  'V': 17,  # Hydrophobic
-        'F': 4, 'Y': 19, 'W': 18,  # Aromatic
-        'H': 6, 'K': 8, 'R': 14,  # Positively charged
-        'D': 2, 'E': 3,    # Negatively charged
-        'S': 15, 'T': 16,  # Polar, uncharged
-        'N': 11,   'Q': 13,    # Polar, uncharged
-        'G': 5, 'P': 12, 'C': 1, # Special cases
-        '-': 20, 'X': 21 # Gap
+AA_VAL_MAP = {
+    'A': 0,  'I': 7,  'L': 9,  'M': 10, 'V': 17,
+    'F': 4,  'Y': 19, 'W': 18,
+    'H': 6,  'K': 8,  'R': 14,
+    'D': 2,  'E': 3,
+    'S': 15, 'T': 16,
+    'N': 11, 'Q': 13,
+    'G': 5,  'P': 12, 'C': 1,
+    '-': 20, 'X': 21,
 }
 
-AA_NUM_MAP = { v:k for k,v in AA_VAL_MAP.items() } 
-
+AA_NUM_MAP   = {v: k for k, v in AA_VAL_MAP.items()}
 CLUSTAL_CMAP = ListedColormap([CLUSTALX_COLOR_SCHEME[AA_NUM_MAP[x]] for x in sorted(AA_NUM_MAP.keys())])
 
+
 def parse_fasta_alignment(fasta_file):
-	sequences = []
-	headers = []
-	
-	with open(fasta_file, 'r') as handle:
-		for record in SeqIO.parse(handle, "fasta"):
-				sequences.append(list(record.seq))
-				headers.append(record.id)
-	return headers, sequences
+    """Return (headers, sequences) from a FASTA alignment file."""
+    headers, sequences = [], []
+    with open(fasta_file) as fh:
+        for record in SeqIO.parse(fh, "fasta"):
+            headers.append(record.id)
+            sequences.append(list(record.seq))
+    return headers, sequences
 
-#function to convert seq matrix and aa:color mapping dict
-#we need to do this this way because we're using a heatmap 
-#to plot the alignment
-def color_seq_for_heatmap_bydict(seq_mat, color_mapping, nan_color="white"):
-    seq_mat_colors = []
-    for seq in seq_mat:
-        seq_colors = []
-        for res in seq:
-            seq_colors.append(color_mapping[res])
-        seq_mat_colors.append(seq_colors)
 
-    return seq_mat_colors
+def _seqs_to_color_array(sequences):
+    """Convert sequence list-of-lists to an int8 numpy array for imshow."""
+    # build ASCII → int lookup once; missing chars default to 21 (gap)
+    lookup = np.full(128, 21, dtype=np.int8)
+    for aa, val in AA_VAL_MAP.items():
+        lookup[ord(aa)] = val
+    flat = np.frombuffer(
+        "".join("".join(seq) for seq in sequences).encode("ascii"),
+        dtype=np.uint8,
+    )
+    return lookup[flat].reshape(len(sequences), len(sequences[0]))
 
-#function to make mapping for x ticks based on subject sequence
-def x_ticks_by_subject(fasta_file, increment=10):
-    headers, sequences = parse_fasta_alignment(fasta_file)
+
+def x_ticks_by_subject(sequences, increment=20):
+    """Build (tick_positions, tick_labels) from the first sequence, skipping gaps."""
     seq = sequences[0]
-
-    ticks_loc = []
-    tick_labs = []
-    ticks_counter = 0
-    for i in range(len(seq)):
-        if seq[i] != "-":
-            ticks_counter += 1
-
-        if ticks_counter % increment == 0 and ticks_counter != 0:
-            ticks_loc.append(i)
-            tick_labs.append(ticks_counter)
-
-    return (ticks_loc, tick_labs)
-
-def plot_alignment_matrix_matplotlib(fasta_file, outfmt, outfile):
-    #import fasta
-	headers, sequences = parse_fasta_alignment(fasta_file)
-
-	#update output filename
-	if outfile == "":
-		outfile = fasta_file.removesuffix("aln")+outfmt
-	print(outfile)
+    ticks_loc, tick_labs, counter = [], [], 0
+    for i, res in enumerate(seq):
+        if res != "-":
+            counter += 1
+            if counter % increment == 0:
+                ticks_loc.append(i)
+                tick_labs.append(counter)
+    return ticks_loc, tick_labs
 
 
-	#convert sequences into numbers ("A"=0..."-"=20, etc)
-	dat_colors = color_seq_for_heatmap_bydict(sequences, AA_VAL_MAP)
-	num_sequences = len(sequences)
-	alignment_length = len(sequences[0])
+def plot_alignment_matrix_matplotlib(fasta_file, outfmt=None, outfile=""):
+    """Render a ClustalX-style alignment heatmap; always writes PNG at 300 DPI."""
+    headers, sequences = parse_fasta_alignment(fasta_file)
 
-	#fig size based on length and number of seqs
-	fig, ax = plt.subplots(figsize=(alignment_length/8, num_sequences))
+    outfile = outfile or fasta_file.removesuffix(".aln") + ".png"
+    # ensure .png extension regardless of outfmt arg
+    if not outfile.endswith(".png"):
+        outfile = outfile.rsplit(".", 1)[0] + ".png"
 
-	fs = 6 #fontsize
+    dat_colors = _seqs_to_color_array(sequences)
+    num_seqs   = len(sequences)
+    aln_len    = len(sequences[0])
 
-	ax.imshow(dat_colors, cmap=CLUSTAL_CMAP, aspect="equal")
-	ax.set_yticks(range(len(headers)), labels=headers, fontsize=fs)
-	
-	#set x-ticks based on position in first (top) sequence
-	xticks = x_ticks_by_subject(fasta_file, 20)
-	ax.set_xticks(xticks[0], xticks[1])
+    # target ~14 px per cell at screen DPI (96) → 14/96 ≈ 0.146 inches per cell
+    _DPI      = 96
+    _CELL_W   = 14 / _DPI   # inches per column
+    _CELL_H   = 18 / _DPI   # inches per row (taller than wide for readability)
+    fig_w = max(aln_len * _CELL_W, 4)
+    fig_h = max(num_seqs * _CELL_H, 1)
+    fs    = 7
 
-	ax.set_title(" ".join(fasta_file.removesuffix(".aln").split(".")))
-	ax.set_xlabel("position (aa)")
-    
-	#annotate text for each aa
-	for i in range(len(sequences)):
-		for j in range(len(sequences[i])):
-			text = ax.text(j, i, sequences[i][j], ha="center", va="center", color="k", fontsize=fs)
-    
-	plt.tight_layout()
-	plt.savefig(outfile, bbox_inches="tight")
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+
+    ax.imshow(dat_colors, cmap=CLUSTAL_CMAP, aspect="equal", vmin=0, vmax=len(AA_NUM_MAP) - 1)
+    ax.set_yticks(range(num_seqs), labels=headers, fontsize=fs)
+
+    ticks_loc, tick_labs = x_ticks_by_subject(sequences, increment=20)
+    ax.set_xticks(ticks_loc, tick_labs, fontsize=fs)
+
+    ax.set_title(" ".join(fasta_file.removesuffix(".aln").split(".")))
+    ax.set_xlabel("position (aa)")
+
+    for i in range(num_seqs):
+        for j in range(aln_len):
+            ax.text(j, i, sequences[i][j],
+                    ha="center", va="center", color="k", fontsize=fs)
+
+    plt.tight_layout()
+    plt.savefig(outfile, bbox_inches="tight", dpi=_DPI)
+    plt.close(fig)
+    return outfile
 
 
 if __name__ == "__main__":
-	
-	from argparse import ArgumentParser
+    from argparse import ArgumentParser
 
-	parser = ArgumentParser()
-	parser.add_argument('-a', '--aln', action = 'store', type = str, dest = 'ALN', 
-		help = "fasta file containing alignment", required=True)
-	parser.add_argument('-f', '--format', action = 'store', type = str, dest = 'FMT', 
-		help = "format for saving figure (svg)", default="svg")
-	parser.add_argument('-o', '--output', action = 'store', type = str, dest = 'OUT', 
-		help = "output file name. overrides automatic output naming.", default="")
-	args = parser.parse_args()
-	
-	plot_alignment_matrix_matplotlib(args.ALN, args.FMT, args.OUT)	
+    parser = ArgumentParser()
+    parser.add_argument("-a", "--aln", dest="ALN", required=True,
+                        help="FASTA alignment file")
+    parser.add_argument("-o", "--output", dest="OUT", default="",
+                        help="output PNG path (default: <aln>.png)")
+    args = parser.parse_args()
 
+    out = plot_alignment_matrix_matplotlib(args.ALN, outfile=args.OUT)
+    print(out)
