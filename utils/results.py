@@ -9,7 +9,8 @@ from plotly.subplots import make_subplots
 from Bio import SeqIO
 from numpy import linspace
 
-from config import ANALYSIS_COLORS, DOMAIN_SOURCE_COLORS, ISOFORM_CLASS_COLORS
+from config import ANALYSIS_COLORS, DOMAIN_SOURCE_COLORS, ISOFORM_CLASS_COLORS, GLOBAL_KEYS
+from scripts.task_registry import companion_path
 
 
 # keyword → short label mapping for Phobius region descriptions from EBI InterProScan5
@@ -82,12 +83,9 @@ def load_data_from_json(json_in, type_dict):
             except (ValueError, FileNotFoundError):
                 raise IOError(f"Cannot read JSON from: {json_in}")
 
-    for task in j:
-        if task in ["scripts", "global"]:
-            continue
-
-        analysis = j[task]["analysis"]
-        output_path = j[task]["args"].get("output", "")
+    for task, v in j.get("tasks", {}).items():
+        analysis    = v.get("type", "")
+        output_path = v.get("args", {}).get("output", "")
 
         # skip tasks whose output files haven't been written yet
         if not output_path or not os.path.exists(output_path):
@@ -106,7 +104,7 @@ def load_data_from_json(json_in, type_dict):
                 df = pd.merge(df, tmp_df, how="outer", on="pos")
                 # pLDDT tasks also produce a companion SASA file
                 if analysis == "plddt":
-                    sasa_path = output_path.replace("plddt.txt", "sasa.txt")
+                    sasa_path = companion_path(output_path, "plddt", "sasa")
                     if os.path.exists(sasa_path):
                         try:
                             sasa_df = pd.read_csv(sasa_path, sep="\t", header=None,
@@ -122,20 +120,16 @@ def load_data_from_json(json_in, type_dict):
                         print(f"SASA file not found for task '{task}': {sasa_path}")
                 # blast tasks also produce companion files
                 if analysis == "blast":
-                    aln_path = output_path.replace(".jsd", ".aln")
+                    aln_path = companion_path(output_path, "blast", "alignment")
                     # collect user-visible params for the alignment pane
-                    params = {
-                        k: v for k, v in j[task]["args"].items()
-                        if k not in ("output", "email", "working_dir", "run_name",
-                                     "input_file", "pdb", "scripts_folder",
-                                     "genomic_file", "fasta")
-                        and v not in ("", None)
-                    }
+                    _skip = GLOBAL_KEYS | {"output", "fasta"}
+                    params = {k: val for k, val in v.get("args", {}).items()
+                              if k not in _skip and val not in ("", None)}
                     alns.append((aln_path, task, params))
                     # pick up isoform segments from the first blast task that has them;
                     # skip subsequent tasks to avoid overlapping segments from different organisms
                     if not isoforms_loaded:
-                        iso_path = output_path.replace(".jsd", ".isoforms.tsv")
+                        iso_path = companion_path(output_path, "blast", "isoforms")
                         if os.path.exists(iso_path) and os.path.getsize(iso_path) > 0:
                             try:
                                 iso_df = pd.read_csv(iso_path, sep="\t",

@@ -4,11 +4,7 @@ No Shiny imports; all functions accept/return plain Python dicts and are
 independently testable without running the app.
 """
 
-from config import EXCLUDE_ARGS
-
-# keys that are part of the global block and not meaningful per-job params
-_GLOBAL_KEYS = {"email", "working_dir", "run_name", "input_file", "pdb",
-                "scripts_folder", "genomic_file"}
+from config import GLOBAL_KEYS, task_hidden
 
 # effective defaults applied by the runners when a param is blank — shown in
 # the progress pane so users see the value that will actually be used
@@ -22,18 +18,18 @@ def parse_run(run_json):
     """Split a run JSON dict into (global_block, [task_entry, ...]).
 
     Each task entry is a dict with keys: id, analysis, args, output.
-    The 'scripts' and 'global' top-level keys are consumed; everything else
-    is treated as a task.
+    Global fields are merged into each task's args so runners and other
+    consumers keep working unchanged.
     """
     global_block = run_json.get("global", {})
     tasks = []
-    for k, v in run_json.items():
-        if k in ("scripts", "global"):
-            continue
+    for k, v in run_json.get("tasks", {}).items():
+        # merge global into args at read time — not stored per-task in the file
+        merged_args = {**global_block, **v.get("args", {})}
         tasks.append({
             "id":       k,
-            "analysis": v.get("analysis", ""),
-            "args":     v.get("args", {}),
+            "analysis": v.get("type", ""),
+            "args":     merged_args,
             "output":   v.get("args", {}).get("output", ""),
         })
     return global_block, tasks
@@ -42,12 +38,12 @@ def parse_run(run_json):
 def display_params(args, global_block, analysis=None):
     """Return an ordered dict of per-job params suitable for display.
 
-    Drops: keys in the global block (shared / not job-specific), keys in
-    EXCLUDE_ARGS (internal pipeline flags), and 'output' (internal path).
-    Substitutes runner defaults for any param that is blank so the displayed
-    value matches what will actually be used at runtime.
+    Drops: global keys (shared / not job-specific), hidden params for the
+    analysis type, and 'output' (internal path). Substitutes runner defaults
+    for any param that is blank so the displayed value matches runtime behavior.
     """
-    skip = set(global_block.keys()) | set(EXCLUDE_ARGS) | {"output"}
+    hidden = task_hidden(analysis) if analysis else set()
+    skip = GLOBAL_KEYS | hidden | {"output"}
     defaults = _RUNNER_DEFAULTS.get(analysis, {})
     result = {}
     for k, v in args.items():
