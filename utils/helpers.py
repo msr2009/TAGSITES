@@ -14,9 +14,4 @@ def load_taxonomic_mapping(file_path):
         taxonomic_mapping = dict(zip(df["official"], df["taxid"]))
         return taxonomic_mapping
 
-#function to update a shared dictionary 
-def update_shared_dict(shared_dict, key, value):
-	shared_copy = shared_dict.get().copy()
-	shared_copy[key] = value
-	shared_dict.set(shared_copy)
 
