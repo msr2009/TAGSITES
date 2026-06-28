@@ -17,6 +17,7 @@ _SCRIPTS = Path(__file__).parent
 sys.path.insert(0, str(_SCRIPTS))
 import run_status
 import progress
+from task_registry import task_script, task_hidden, GLOBAL_KEYS
 
 
 def _stderr_reader(proc, task_id, working_dir, run_name):
@@ -32,37 +33,41 @@ def _stderr_reader(proc, task_id, working_dir, run_name):
                                stage=stage, log="\n".join(log_lines))
 
 
-def genewise_required(j, global_args, task_scripts, scripts_folder, interpreter):
-    """Detect a 'reagents' task that still needs Genewise (empty 'genewise' arg).
-
-    Runs run_genewise.py synchronously for both strand orientations,
-    picks the winner, then rewrites the JSON with resolved paths.
-    """
-    for key in j:
-        if j[key]["analysis"] == "reagents":
-            if j[key]["args"].get("genewise", "") == "":
-                return key
+def genewise_required(tasks):
+    """Return the key of a 'reagents' task that still needs Genewise, or None."""
+    for key, v in tasks.items():
+        if v["type"] == "reagents" and v["args"].get("genewise", "") == "":
+            return key
     return None
 
 
-def searchAFDB_required(j):
-    """Return AFDB search args if there's a plddt task with no pdb path."""
-    for key in j:
-        if j[key]["analysis"] == "plddt":
-            if j[key]["args"]["pdb"] == "":
-                try:
-                    j[key]["args"]["taxid"] = j[key]["args"]["species_taxid"]
-                except KeyError:
-                    j[key]["args"]["taxid"] = 1
-                return build_task_args_string(j[key]["args"], ["pdb", "output", "existing_AF2"])
+def searchAFDB_required(tasks, global_args):
+    """Return AFDB search args string if there's a plddt task with no pdb path, else None."""
+    for key, v in tasks.items():
+        if v["type"] == "plddt" and v["args"].get("pdb", "") == "":
+            # merge global so build_task_args_string sees input_file, email, etc.
+            merged = {**global_args, **v["args"]}
+            # prefer species_taxid for the AFDB lookup taxid
+            merged.setdefault("taxid", merged.get("species_taxid", 1))
+            return build_task_args_string(merged, EXCLUDE=["pdb", "output", "existing_AF2"])
     return None
 
 
-def build_task_args_string(targs, EXCLUDE=[]):
-    """Build a CLI argument string from a task args dict."""
+def build_task_args_string(targs, EXCLUDE=None):
+    """Build a CLI argument string from a merged args dict, skipping empty and excluded keys."""
+    if EXCLUDE is None:
+        EXCLUDE = []
     return "".join(
-        [f" --{arg} {targs[arg]}" for arg in targs if targs[arg] != "" and arg not in EXCLUDE]
+        f" --{arg} {targs[arg]}"
+        for arg in targs
+        if targs[arg] != "" and arg not in EXCLUDE
     )
+
+
+def _write_json(path, global_args, tasks):
+    """Persist the current run state back to disk."""
+    with open(path, "w") as f:
+        json.dump({"global": global_args, "tasks": tasks}, f, indent=4)
 
 
 def main(json_input_file, force=False):
@@ -74,9 +79,8 @@ def main(json_input_file, force=False):
     except json.decoder.JSONDecodeError:
         raise IOError("Incorrectly formatted JSON file!")
 
-    task_scripts = json_in.pop("scripts", None)
-    global_args  = json_in.pop("global", None)
-    # json_in is now just task entries
+    global_args = json_in["global"]
+    tasks       = json_in["tasks"]
 
     # use absolute path to scripts/ so this script is runnable from any cwd
     scripts_folder = str(_SCRIPTS) + "/"
@@ -91,9 +95,9 @@ def main(json_input_file, force=False):
     ###############################################
     # PRE-STEP: Genewise (for reagents tasks)
     ###############################################
-    reagents_task_key = genewise_required(json_in, global_args, task_scripts, scripts_folder, interpreter)
+    reagents_task_key = genewise_required(tasks)
     if reagents_task_key is not None:
-        task_args   = json_in[reagents_task_key]["args"]
+        task_args   = tasks[reagents_task_key]["args"]
         genomic_fa  = task_args.get("genomic_fasta", "")
         gw_out_prefix = os.path.join(working_dir, run_name + "_genewise")
         gw_out_file   = gw_out_prefix + ".genewise.out.txt"
@@ -101,8 +105,8 @@ def main(json_input_file, force=False):
         # skip genewise pre-step if output already exists
         if not force and os.path.exists(gw_out_file):
             print(f"Skipping Genewise pre-step: {gw_out_file} already exists")
-            json_in[reagents_task_key]["args"]["genewise"]      = gw_out_file
-            json_in[reagents_task_key]["args"]["genomic_fasta"] = gw_out_prefix + ".genewise_genomic.fa"
+            tasks[reagents_task_key]["args"]["genewise"]      = gw_out_file
+            tasks[reagents_task_key]["args"]["genomic_fasta"] = gw_out_prefix + ".genewise_genomic.fa"
         elif not genomic_fa:
             print("ERROR: reagents task has empty 'genewise' and 'genomic_fasta' — cannot run Genewise.",
                   file=sys.stderr)
@@ -117,12 +121,9 @@ def main(json_input_file, force=False):
             print("RUNNING GENEWISE (both orientations)\n\n" + gw_call)
             ret = subprocess.call(gw_call, shell=True)
             if ret == 0:
-                json_in[reagents_task_key]["args"]["genewise"]      = gw_out_file
-                json_in[reagents_task_key]["args"]["genomic_fasta"] = gw_out_prefix + ".genewise_genomic.fa"
-                # persist resolved paths
-                new_json = {**json_in, "global": global_args, "scripts": task_scripts}
-                with open(json_input_file, "w") as f:
-                    json.dump(new_json, f, indent=4)
+                tasks[reagents_task_key]["args"]["genewise"]      = gw_out_file
+                tasks[reagents_task_key]["args"]["genomic_fasta"] = gw_out_prefix + ".genewise_genomic.fa"
+                _write_json(json_input_file, global_args, tasks)
             else:
                 print(f"WARNING: run_genewise.py exited {ret}; reagents task may fail.",
                       file=sys.stderr)
@@ -130,7 +131,7 @@ def main(json_input_file, force=False):
     ###############################################
     # PRE-STEP: AFDB search (for plddt tasks)
     ###############################################
-    search_afdb = searchAFDB_required(json_in)
+    search_afdb = searchAFDB_required(tasks, global_args)
     if search_afdb is not None:
         af2_pdb = os.path.join(working_dir, run_name + ".AF.pdb")
         if not force and os.path.exists(af2_pdb):
@@ -141,7 +142,7 @@ def main(json_input_file, force=False):
             af_proc = subprocess.call(af2_search_call, shell=True)
 
             if af_proc != 1:
-                # AFDB found a model — rename files and update task args
+                # AFDB found a model — rename files and update plddt task args
                 orig_fa = os.path.join(working_dir, run_name + ".fa")
                 user_fa = os.path.join(working_dir, "user_" + run_name + ".fa")
                 af_fa   = os.path.join(working_dir, run_name + ".AF.fa")
@@ -150,45 +151,51 @@ def main(json_input_file, force=False):
                 if os.path.exists(af_fa):
                     os.rename(af_fa, orig_fa)
 
-                for task in json_in:
-                    json_in[task]["old_args"] = {}
-                    json_in[task]["old_args"]["user_input_file"] = "user" + json_in[task]["args"]["input_file"]
-                    if json_in[task]["analysis"] == "plddt":
-                        json_in[task]["args"]["existing_AF2"] = 0
-                        json_in[task]["args"]["pdb"] = af2_pdb
+                # record original input_file in global before overwriting
+                global_args["user_input_file"] = global_args.get("input_file", "")
+                global_args["input_file"] = orig_fa
+
+                for key, v in tasks.items():
+                    if v["type"] == "plddt":
+                        v["args"]["existing_AF2"] = 0
+                        v["args"]["pdb"] = af2_pdb
 
                 orig_json_path = os.path.join(working_dir, run_name + ".json")
                 user_json_path = os.path.join(working_dir, "user_" + run_name + ".json")
                 if os.path.exists(orig_json_path):
                     os.rename(orig_json_path, user_json_path)
-                new_json = {**json_in, "global": global_args, "scripts": task_scripts}
-                with open(json_input_file, "w") as f:
-                    json.dump(new_json, f, indent=4)
+                _write_json(json_input_file, global_args, tasks)
 
     ###############################################
     # MAIN TASK LOOP — re-read JSON (may have been rewritten above)
     ###############################################
     with open(json_input_file) as f:
         json_in = json.load(f)
+    global_args = json_in["global"]
+    tasks       = json_in["tasks"]
+
+    # build the EXCLUDE list: global keys + hidden params from registry + output
+    hidden_params = {p for ttype in tasks.values()
+                       for p in task_hidden(ttype["type"])}
+    EXCLUDE_CLI = list(GLOBAL_KEYS | hidden_params | {"output"})
 
     task_commands = []
-    for task in json_in:
-        if task in ("scripts", "global"):
-            continue
-
-        output_path = json_in[task]["args"].get("output", "")
-        task_entry  = status.get(task, {})
+    for task_id, v in tasks.items():
+        output_path = v["args"].get("output", "")
+        task_entry  = status.get(task_id, {})
 
         if not force and run_status.is_complete(task_entry, output_path):
-            print(f"Skipping {task}: already complete ({output_path})")
+            print(f"Skipping {task_id}: already complete ({output_path})")
             continue
 
-        script    = f"{interpreter} {scripts_folder}" + json_in["scripts"][json_in[task]["analysis"]]
-        arguments = build_task_args_string(json_in[task]["args"])
-        task_commands.append((task, script + arguments, output_path))
+        # merge global into args before building the CLI string
+        merged_args = {**global_args, **v["args"]}
+        script      = f"{interpreter} {scripts_folder}" + task_script(v["type"])
+        arguments   = build_task_args_string(merged_args, EXCLUDE=EXCLUDE_CLI)
+        task_commands.append((task_id, script + arguments, output_path))
 
         # mark as pending before launch so a crash shows "pending" not stale "success"
-        run_status.update_task(working_dir, run_name, task,
+        run_status.update_task(working_dir, run_name, task_id,
                                status="pending", output=output_path, job_id="", message="")
 
     if not task_commands:
