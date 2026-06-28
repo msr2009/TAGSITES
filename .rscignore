@@ -1,0 +1,25 @@
+# Test suite
+tests/
+
+# Dev / docs
+CLAUDE.md
+environment.yml
+
+# User data output directories
+data/
+USERDATA/
+
+# Flat species file (no longer used)
+uniprot_species.flat.txt
+
+# Utility scripts not used at runtime
+scripts/uniprot_species/
+scripts/dpy-5.guides
+scripts/build_heatmap_images.py
+scripts/local_AF2_prediction.py
+scripts/design_guides_across_region.py
+scripts/get_species_taxonomy.py
+
+# CLI-only pipeline runners (app uses task_runners.py instead)
+scripts/run_tag_sites.py
+scripts/run_tag_sites_from_json.py
