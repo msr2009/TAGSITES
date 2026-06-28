@@ -207,15 +207,27 @@ def main(fasta_in, email, workingdir, name, output,
         aln_bytes = ebi_rest.fetch_result(ebi_rest.CLUSTALO, clustalo_job_id, "aln-fasta")
         with open(aln_path, "wb") as f:
             f.write(aln_bytes)
+        _report(reporter, f"Alignment written → {aln_path}", stage="align")
 
     ###########################
     # RENDER ALIGNMENT IMAGE
     ###########################
 
+    # count sequences for progress context before the slow render step
+    try:
+        _aln_seqs = sum(1 for ln in open(aln_path) if ln.startswith(">"))
+        _aln_len  = next((len(ln.rstrip()) for ln in open(aln_path) if not ln.startswith(">")), 0)
+        _report(reporter,
+                f"Rendering alignment image ({_aln_seqs} sequences × {_aln_len} positions)…",
+                stage="align_img")
+    except Exception:
+        _report(reporter, "Rendering alignment image…", stage="align_img")
+
     # import in-process (no subprocess needed; build_heatmap_images.py is a local script)
     try:
         import build_heatmap_images
         build_heatmap_images.plot_alignment_matrix_matplotlib(aln_path, "svg", "")
+        _report(reporter, "Alignment image saved.", stage="align_img")
     except Exception as e:
         _report(reporter, f"alignment image generation failed: {e}", stage="align_img", level="warning")
 

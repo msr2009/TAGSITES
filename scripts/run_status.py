@@ -40,6 +40,7 @@ def load_status(working_dir, run_name):
 def save_status(working_dir, run_name, status_dict):
     """Write the full status dict atomically (tmp → rename) to avoid partial reads."""
     path = status_path(working_dir, run_name)
+    os.makedirs(working_dir, exist_ok=True)
     tmp = path + ".tmp"
     with open(tmp, "w") as f:
         json.dump(status_dict, f, indent=2)

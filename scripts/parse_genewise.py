@@ -163,13 +163,20 @@ def enumerate_insertion_sites(cds_df, dna):
         is_last_exon = (exon_i == n_exons - 1)
 
         for x in range(start + frame_prime, stop + 3, 3):
-            residue_idx += 1
             codon_start = x - 3
 
             # A codon is split if it crosses either the 5′ or 3′ exon boundary:
             #   5′ split: codon starts before the exon (codon_start < exon start)
+            #     → "completing split": the previous exon left a partial codon; this
+            #       is the valid exonic insertion site for that split codon boundary.
             #   3′ split: last codon base (x-1) is past the last exon base (stop)
-            is_split = (codon_start < start) or (x - 1 > stop)
+            #     → "originating split": the codon extends into the intron; skip it.
+            #       The next exon's completing split is the valid insertion site.
+            if x - 1 > stop:
+                continue   # intronic insertion; next exon handles this boundary
+
+            residue_idx += 1
+            is_split = codon_start < start
 
             if is_split:
                 aa = 'X'

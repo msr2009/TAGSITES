@@ -74,7 +74,7 @@ def run_genewise_client(protein_fa, genomic_fa, email, outfile_prefix, report=No
         "email":     email,
         "asequence": asequence,
         "bsequence": bsequence,
-        "outformat": "out",
+        "gff":       "true",  # embed GFF section in output; required by parse_genewise
     }
 
     def _cb(job_id, status):
