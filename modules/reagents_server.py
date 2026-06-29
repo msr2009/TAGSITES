@@ -399,6 +399,9 @@ def reagents_server(input, output, session, shared_json, shared_sites):
             ]
             return ui.div(*children)
 
+        # TODO: implement plasmid donor design
+        # UI radio button is in reagents_ui.py repair_type choices — the "plasmid" key.
+        # This branch should render a plasmid backbone selector and generate a donor map.
         if repair == "plasmid":
             df = sites_df()
             c3_count = 0

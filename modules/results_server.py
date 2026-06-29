@@ -341,10 +341,13 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
         sites = sorted(set(shared_sites.get()) | {seq_len})
         shared_sites.set(sites)
 
+    # TODO: implement suggested-site algorithm (score-based auto-selection)
+    # Button is disabled in results_ui.py until this is ready.
+    # When implementing: enable the button, fill this handler with the selection logic,
+    # and update the button class from btn-secondary back to btn-outline-success.
     @reactive.effect
     @reactive.event(input.add_suggested_button)
     def on_add_suggested():
-        """Placeholder — suggested site logic to be implemented."""
         pass
 
     @reactive.effect

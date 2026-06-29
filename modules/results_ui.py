@@ -71,9 +71,13 @@ def results_ui():
             ui.input_action_button("add_cterm_button",
                                    "Add C-term",
                                    class_="btn btn-outline-danger btn-sm ts-sites-btn"),
+            # TODO: implement suggested-site algorithm (score-based auto-selection)
+            # When ready: remove disabled/title attrs and wire up on_add_suggested() in results_server.py
             ui.input_action_button("add_suggested_button",
                                    "Add suggested",
-                                   class_="btn btn-outline-success btn-sm ts-sites-btn"),
+                                   class_="btn btn-secondary btn-sm ts-sites-btn",
+                                   disabled=True,
+                                   title="Not yet implemented"),
             ui.input_action_button("clear_highlights_button",
                                    "Clear",
                                    class_="btn btn-secondary btn-sm ts-sites-btn"),
