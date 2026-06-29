@@ -5,6 +5,7 @@ from pathlib import Path
 from shiny import ui, module
 
 from config import SELECTABLE_TASKS, GLOBAL_TOOLTIPS, DEFAULT_SPECIES
+from modules.ui_helpers import compact_file_input, COMPACT_FILE_CSS
 
 _PARAMS_DIR = Path(__file__).parent.parent / "params"
 
@@ -79,7 +80,7 @@ _STYLE = """
     /* save bar */
     .save-bar {
         position: sticky; bottom: 0; background: #fff;
-        border-top: 2px solid #dee2e6; padding: 0.5rem 1rem;
+        border-top: 2px solid #adb5bd; padding: 0.5rem 1rem;
         margin-top: 0.5rem; z-index: 100;
         display: flex; align-items: center; gap: 0.75rem;
         justify-content: space-between;
@@ -112,13 +113,59 @@ _STYLE = """
     .preset-pair .selectize-wrapper { flex: 1; min-width: 0; max-width: 200px; }
     .preset-pair .selectize-wrapper .shiny-input-container { margin-bottom: 0 !important; }
 
-    /* file inputs: shrink the Browse button to match other controls */
-    .shiny-input-file .btn { font-size: 0.8rem !important; padding: 0.2rem 0.5rem !important; }
-    .shiny-input-file .form-control { font-size: 0.8rem; }
-
     /* inputs panel: keep everything in a constrained block */
     .inputs-inner { max-width: 600px; }
     .inputs-inner .shiny-input-container { margin-bottom: 0.35rem !important; }
+
+    /* divider between file-upload and UniProt search */
+    .or-divider {
+        display: flex; align-items: center; gap: 0.5rem;
+        margin: 0.6rem 0; color: #adb5bd; font-size: 0.78rem;
+    }
+    .or-divider::before, .or-divider::after {
+        content: ""; flex: 1; border-top: 1px solid #adb5bd;
+    }
+
+    /* uniprot search row */
+    .uniprot-search-row {
+        display: flex; gap: 0.4rem; align-items: flex-end; margin-bottom: 0.35rem;
+    }
+    .uniprot-search-row .shiny-input-container { margin-bottom: 0 !important; flex: 1; }
+
+    /* uniprot result filters row */
+    .uniprot-filter-row {
+        display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;
+        margin-bottom: 0.3rem;
+    }
+    .uniprot-filter-row .shiny-input-container {
+        margin-bottom: 0 !important; font-size: 0.78rem;
+    }
+    .uniprot-filter-row .form-check-label { font-size: 0.78rem; }
+
+    /* seq-source status line */
+    .seq-source-status {
+        font-size: 0.78rem; color: #495057; margin: 0.3rem 0 0.1rem;
+        padding: 0.2rem 0.4rem; background: #f8f9fa;
+        border-left: 3px solid #6c757d; border-radius: 0 3px 3px 0;
+    }
+
+    /* UniProt badges used in accordion panel headers */
+    .uc-afdb-yes {
+        font-size: 0.7rem; background: #d4edda; color: #155724;
+        border-radius: 3px; padding: 1px 5px; white-space: nowrap;
+    }
+    .uc-afdb-no {
+        font-size: 0.7rem; background: #e9ecef; color: #6c757d;
+        border-radius: 3px; padding: 1px 5px; white-space: nowrap;
+    }
+    .uc-isoform-badge {
+        font-size: 0.7rem; background: #cce5ff; color: #004085;
+        border-radius: 3px; padding: 1px 5px; white-space: nowrap;
+    }
+    .uc-canonical-badge {
+        font-size: 0.7rem; background: #e9ecef; color: #495057;
+        border-radius: 3px; padding: 1px 5px; white-space: nowrap;
+    }
 """
 
 _t = GLOBAL_TOOLTIPS
@@ -136,14 +183,14 @@ def _organism_choices():
 def setup_ui():
     return ui.page_fluid(
 
-        ui.tags.style(_STYLE),
+        ui.tags.style(_STYLE + COMPACT_FILE_CSS),
 
         ui.accordion(
 
-            # ── Panel 1: Inputs ───────────────────────────────────────────────
+            # ── Panel 1: Global parameters ────────────────────────────────────
             ui.accordion_panel(
-                "1 · Inputs",
-                ui.p("Configure your run and upload your sequence(s).", class_="section-hint"),
+                "1 · Global parameters",
+                ui.p("Run identity, output location, and target organism.", class_="section-hint"),
 
                 ui.div(
                     ui.input_text("email",
@@ -153,22 +200,9 @@ def setup_ui():
                     ui.input_text("run_name",
                         label_with_tip("Analysis name", _t.get("run_name", "")),
                         placeholder="e.g., your-favorite-gene-tag", width="100%"),
-                    # Row 2: output directory (full width of the container)
                     ui.input_text("working_dir",
                         label_with_tip("Output directory", _t.get("working_dir", "")),
                         placeholder="auto-filled", width="100%"),
-                    # Row 3: file uploads (stacked full-width)
-                    ui.div(
-                        ui.input_file("input_file",
-                            label_with_tip("Protein sequence (.fa, .fasta, or .pdb)",
-                                           _t.get("input_file", "")),
-                            accept=[".fa", ".fasta", ".pdb"], width="100%"),
-                        ui.input_file("input_genomic",
-                            label_with_tip("Genomic region FASTA (required for reagent design)",
-                                           _t.get("input_genomic", "")),
-                            accept=[".fasta", ".fa"], width="100%"),
-                        style="margin-top: 0.75rem;",
-                    ),
                     ui.div(
                         ui.input_select(
                             "organism",
@@ -185,12 +219,71 @@ def setup_ui():
                     ),
                     class_="inputs-inner",
                 ),
-                value="inputs",
+                value="global",
             ),
 
-            # ── Panel 2: Analyses ─────────────────────────────────────────────
+            # ── Panel 2: Sequence input ───────────────────────────────────────
             ui.accordion_panel(
-                "2 · Analyses",
+                "2 · Sequence input",
+                ui.p("Upload a protein sequence file, or search UniProt by gene name / accession.",
+                     class_="section-hint"),
+
+                ui.div(
+                    # UniProt search (first)
+                    ui.tags.label("Search UniProt by gene name or accession",
+                                  class_="form-label"),
+                    ui.div(
+                        ui.input_text("uniprot_query", label="",
+                            placeholder="e.g.  TP53  or  P04637",
+                            width="100%"),
+                        ui.input_action_button("uniprot_search_btn", "Search",
+                            class_="btn-sm btn-outline-secondary"),
+                        class_="uniprot-search-row",
+                    ),
+                    # result filters — applied at display time
+                    ui.div(
+                        ui.input_checkbox("uniprot_afdb_only",
+                            "Has AFDB structure", value=True),
+                        class_="uniprot-filter-row",
+                    ),
+                    # hit cards rendered dynamically
+                    ui.output_ui("uniprot_results_ui"),
+
+                    # — or — divider between UniProt search and file upload
+                    ui.div(ui.span("— or upload —"), class_="or-divider"),
+
+                    # protein file upload
+                    compact_file_input("input_file",
+                        label_with_tip("Protein sequence (.fa, .fasta, or .pdb)",
+                                       _t.get("input_file", "")),
+                        accept=[".fa", ".fasta", ".pdb"]),
+
+                    # which source will be used at save time
+                    ui.div(ui.output_text("seq_source_status"), class_="seq-source-status"),
+
+                    # divider between protein and genomic inputs
+                    ui.tags.hr(style="margin: 0.75rem 0; border-color: #adb5bd;"),
+                    ui.tags.p(
+                        "Genomic sequence",
+                        ui.tags.span(" (required for reagent design)",
+                                     style="font-weight:400; color:#6c757d;"),
+                        class_="form-label",
+                        style="margin-bottom: 0.2rem;",
+                    ),
+
+                    # genomic FASTA
+                    compact_file_input("input_genomic",
+                        label_with_tip("Genomic region FASTA", _t.get("input_genomic", "")),
+                        accept=[".fasta", ".fa"]),
+
+                    class_="inputs-inner",
+                ),
+                value="sequence",
+            ),
+
+            # ── Panel 3: Analyses ─────────────────────────────────────────────
+            ui.accordion_panel(
+                "3 · Analyses",
                 ui.p("Build the set of analyses to run.", class_="section-hint"),
 
                 # preset load row
@@ -242,7 +335,7 @@ def setup_ui():
                 value="analyses",
             ),
 
-            open=["inputs", "analyses"],
+            open=["global", "sequence", "analyses"],
             multiple=True,
         ),
 

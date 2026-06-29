@@ -8,6 +8,7 @@ import json
 import os
 import requests
 import shutil
+import sys
 from pathlib import Path
 
 from shiny import module, reactive, render, ui
@@ -18,6 +19,7 @@ from config import (
     GLOBAL_DEFAULTS,
 )
 from modules.setup_ui import label_with_tip, TASK_DESCRIPTIONS
+from modules.ui_helpers import compact_file_input
 from modules.setup_logic import (
     build_defaults_entry,
     build_global_block,
@@ -27,6 +29,10 @@ from modules.setup_logic import (
     make_task,
 )
 from scripts.site_selection_util import get_sequence, save_fasta, extract_bfactors_from_pdb
+
+# ebi_rest lives in scripts/; make it importable regardless of working dir
+sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
+import ebi_rest
 
 _ROOT = Path(__file__).parent.parent
 _PARAMS_DIR = _ROOT / "params"
@@ -69,6 +75,83 @@ def _build_param_inputs(task, task_values_snap):
     return widgets
 
 
+def _format_fasta(hit):
+    """Return a FASTA-formatted string for a UniProt hit (60 chars per line)."""
+    acc  = hit["accession"]
+    gene = hit["gene"]
+    org  = hit["organism"]
+    iso  = hit.get("isoform_name", "")
+    desc = f"{gene} isoform {iso}" if iso else gene
+    header = f">{acc} {desc} [{org}]"
+    seq = hit["sequence"]
+    lines = [header] + [seq[i:i+60] for i in range(0, len(seq), 60)]
+    return "\n".join(lines)
+
+
+def _fetch_isoforms(canonical_acc, base_hit):
+    """Expand a canonical UniProt entry into one hit dict per isoform.
+
+    Reads the ALTERNATIVE PRODUCTS comment for the isoform list, then fetches
+    each non-canonical isoform sequence from the per-accession FASTA endpoint.
+    Returns a list of hit dicts (canonical first), or [base_hit] on failure.
+    """
+    try:
+        resp = requests.get(
+            f"https://rest.uniprot.org/uniprotkb/{canonical_acc}",
+            params={"format": "json"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception:
+        return [base_hit]
+
+    alt = next(
+        (c for c in data.get("comments", []) if c.get("commentType") == "ALTERNATIVE PRODUCTS"),
+        None,
+    )
+    if not alt or not alt.get("isoforms"):
+        return [base_hit]
+
+    hits = []
+    for iso in alt["isoforms"]:
+        iso_ids = iso.get("isoformIds", [])
+        if not iso_ids:
+            continue
+        iso_acc    = iso_ids[0]                               # e.g. "P04637-2"
+        iso_num    = iso_acc.rsplit("-", 1)[-1] if "-" in iso_acc else "1"
+        synonyms   = [s["value"] for s in iso.get("synonyms", [])]
+        iso_name   = synonyms[0] if synonyms else iso.get("name", {}).get("value", "")
+        status     = iso.get("isoformSequenceStatus", "")
+        safe_id    = iso_acc.replace("-", "_")                # safe Shiny input ID
+
+        if status == "Displayed":
+            # canonical isoform — sequence already in base_hit
+            hit = dict(base_hit)
+            hit.update(accession=iso_acc, isoform=iso_num,
+                       isoform_name=iso_name, safe_id=safe_id)
+        else:
+            try:
+                r2 = requests.get(
+                    f"https://rest.uniprot.org/uniprotkb/{iso_acc}.fasta",
+                    timeout=15,
+                )
+                if not r2.ok:
+                    continue
+                fasta_lines = r2.text.strip().splitlines()
+                seq = "".join(fasta_lines[1:])
+            except Exception:
+                continue
+            hit = dict(base_hit)
+            hit.update(accession=iso_acc, sequence=seq, length=str(len(seq)),
+                       isoform=iso_num, isoform_name=iso_name,
+                       has_afdb=False, safe_id=safe_id)  # AFDB covers canonical only
+
+        hits.append(hit)
+
+    return hits if hits else [base_hit]
+
+
 # ── module server ─────────────────────────────────────────────────────────────
 
 @module.server
@@ -80,6 +163,11 @@ def setup_server(input, output, session, shared_json):
     organism_taxid   = reactive.Value("")   # resolved taxid string from organism selection
     _pdb_plddt_valid = reactive.Value(True) # False when uploaded PDB lacks valid pLDDT B-factors
     _search_hits     = reactive.Value([])   # [(name, taxid_str)] from UniProt taxonomy search
+
+    # UniProt protein-search state
+    _uniprot_hits = reactive.Value([])   # list of hit dicts from UniProt gene search
+    _selected_hit = reactive.Value(None) # chosen hit dict, or None
+    _selected_pdb = reactive.Value("")   # AFDB PDB text for the chosen hit ("" = none/unavailable)
 
     # ── organism selection ────────────────────────────────────────────────────
 
@@ -210,12 +298,27 @@ def setup_server(input, output, session, shared_json):
             )
             for e in entries
         ]
-        return ui.div(
-            ui.tags.p("Use taxids to limit BLAST searches to specific taxa:",
-                      style="font-size:0.78rem; color:#495057; margin:0.4rem 0 0.15rem;"),
-            ui.tags.table(
-                ui.tags.tbody(*rows),
-                style="font-size:0.75rem; border-collapse:collapse;",
+        table = ui.tags.table(
+            ui.tags.tbody(*rows),
+            style="font-size:0.75rem; border-collapse:collapse;",
+        )
+        return ui.tags.details(
+            ui.tags.summary(
+                "Taxids for BLAST scoping",
+                style=(
+                    "font-size:0.8rem; font-weight:600; cursor:pointer; "
+                    "padding:0.35rem 0.5rem; color:#212529; user-select:none;"
+                ),
+            ),
+            ui.div(
+                ui.tags.p("Use these taxids to limit BLAST searches to specific taxa.",
+                          style="font-size:0.78rem; color:#495057; margin:0 0 0.3rem;"),
+                table,
+                style="padding:0.3rem 0.5rem 0.4rem;",
+            ),
+            style=(
+                "border:1px solid #adb5bd; border-radius:4px; "
+                "margin-top:0.4rem; background:#f8f9fa;"
             ),
         )
 
@@ -245,6 +348,301 @@ def setup_server(input, output, session, shared_json):
                 type="warning",
                 duration=10,
             )
+
+    # ── UniProt protein search ────────────────────────────────────────────────
+
+    def _parse_tsv_hits(tsv_text):
+        """Parse a UniProt TSV response into a list of hit dicts.
+
+        The TSV must include the 'Reviewed' column (requested via fields=...reviewed...)
+        so hits carry a reviewed=True/False flag for downstream filtering.
+        """
+        lines = tsv_text.strip().splitlines()
+        if len(lines) < 2:
+            return []
+        header = lines[0].split("\t")
+        col = {h: i for i, h in enumerate(header)}
+        hits = []
+        for line in lines[1:]:
+            parts = line.split("\t")
+            if len(parts) < len(header):
+                continue
+            acc      = parts[col.get("Entry", 0)].strip()
+            gene     = parts[col.get("Gene Names (primary)", 1)].strip()
+            protein  = parts[col.get("Protein names", 2)].strip()
+            length   = parts[col.get("Length", 3)].strip()
+            organism = parts[col.get("Organism", 4)].strip()
+            taxid_h  = parts[col.get("Organism (ID)", 5)].strip()
+            sequence = parts[col.get("Sequence", 6)].strip()
+            afdb_col = parts[col.get("AlphaFoldDB", 7)].strip() if "AlphaFoldDB" in col else ""
+            reviewed = parts[col.get("Reviewed", 8)].strip().lower() == "reviewed" if "Reviewed" in col else False
+            hits.append({
+                "accession":    acc,
+                "gene":         gene,
+                "protein":      protein,
+                "length":       length,
+                "organism":     organism,
+                "taxid":        taxid_h,
+                "has_afdb":     bool(afdb_col),
+                "sequence":     sequence,
+                "reviewed":     reviewed,
+                "isoform":      None,
+                "isoform_name": "",
+                "safe_id":      acc.replace("-", "_"),
+            })
+        return hits
+
+    @reactive.effect
+    @reactive.event(input.uniprot_search_btn)
+    def _uniprot_search():
+        """Search UniProt for proteins by gene name or accession, scoped by organism if set.
+
+        Strategy:
+        1. Use gene:q as the primary search — this finds all entries whose primary gene
+           name is q, including computationally defined isoforms stored as separate
+           TrEMBL entries (e.g. the 14 unc-44 isoforms in C. elegans).
+        2. If the gene search returns nothing (q is likely an accession, not a gene name),
+           fall back to a plain full-text search.
+        3. For each hit, also expand curated isoforms via ALTERNATIVE PRODUCTS comment
+           (e.g. TP53's 9 manually curated isoforms all live inside P04637).
+        """
+        q = input.uniprot_query().strip() if "uniprot_query" in input else ""
+        if not q:
+            return
+
+        tid = organism_taxid()
+        scope = f" AND taxonomy_id:{tid}" if tid else ""
+        fields = "accession,gene_primary,protein_name,length,organism_name,organism_id,reviewed,sequence,xref_alphafolddb"
+
+        def _fetch_tsv(query):
+            resp = requests.get(
+                "https://rest.uniprot.org/uniprotkb/search",
+                params={"query": query, "format": "tsv", "fields": fields, "size": 25},
+                timeout=15,
+            )
+            resp.raise_for_status()
+            return resp.text
+
+        try:
+            # gene-field search is the primary path; returns all entries with gene name = q,
+            # including computationally defined isoforms stored as separate TrEMBL entries
+            all_hits = _parse_tsv_hits(_fetch_tsv(f"gene:{q}{scope}"))
+
+            if not all_hits:
+                # q is likely an accession — fetch it directly rather than doing a
+                # free-text search (which returns many unrelated hits)
+                resp = requests.get(
+                    f"https://rest.uniprot.org/uniprotkb/{q}",
+                    params={"format": "json"},
+                    timeout=15,
+                )
+                if resp.ok:
+                    entry = resp.json()
+                    org   = entry.get("organism", {})
+                    prot  = entry.get("proteinDescription", {})
+                    # extract primary gene name from nested structure
+                    genes = entry.get("genes", [])
+                    gene  = genes[0].get("geneName", {}).get("value", "") if genes else ""
+                    # extract protein name
+                    rec_name = prot.get("recommendedName", {})
+                    prot_name = rec_name.get("fullName", {}).get("value", "") if rec_name else ""
+                    seq   = entry.get("sequence", {}).get("value", "")
+                    afdb  = any(
+                        x.get("database") == "AlphaFoldDB"
+                        for x in entry.get("uniProtKBCrossReferences", [])
+                    )
+                    rev   = entry.get("entryType", "") == "UniProtKB reviewed (Swiss-Prot)"
+                    all_hits = [{
+                        "accession":    entry.get("primaryAccession", q),
+                        "gene":         gene,
+                        "protein":      prot_name,
+                        "length":       str(entry.get("sequence", {}).get("length", len(seq))),
+                        "organism":     org.get("scientificName", ""),
+                        "taxid":        str(org.get("taxonId", "")),
+                        "has_afdb":     afdb,
+                        "sequence":     seq,
+                        "reviewed":     rev,
+                        "isoform":      None,
+                        "isoform_name": "",
+                        "safe_id":      q.replace("-", "_"),
+                    }]
+        except Exception as e:
+            ui.notification_show(f"UniProt search failed: {e}", type="error", duration=5)
+            return
+
+        if not all_hits:
+            _uniprot_hits.set([])
+            _selected_hit.set(None)
+            _selected_pdb.set("")
+            ui.notification_show("No UniProt hits found.", type="warning", duration=4)
+            return
+
+        # prefer reviewed (SwissProt) entries when available — they have curated isoform
+        # annotations via ALTERNATIVE PRODUCTS; only include unreviewed (TrEMBL) entries
+        # when no reviewed entry exists (e.g. unc-44 which is entirely unreviewed)
+        reviewed_hits = [h for h in all_hits if h["reviewed"]]
+        base_hits = reviewed_hits if reviewed_hits else all_hits
+
+        # expand curated isoforms (entries with ALTERNATIVE PRODUCTS comment, e.g. TP53)
+        seen = {}
+        for h in base_hits:
+            for exp_h in _fetch_isoforms(h["accession"], h):
+                if exp_h["accession"] not in seen:
+                    seen[exp_h["accession"]] = exp_h
+
+        _selected_hit.set(None)
+        _selected_pdb.set("")
+        _uniprot_hits.set(list(seen.values()))
+        for h in seen.values():
+            _register_hit_select(h)
+
+    def _register_hit_select(hit):
+        """Register a reactive effect that selects a hit when its Use button fires."""
+        sid = hit["safe_id"]
+        acc = hit["accession"]   # capture in closure
+
+        @reactive.effect
+        @reactive.event(lambda: input[f"use_hit_{sid}"]())
+        def _handler():
+            _selected_hit.set(hit)
+
+            if not hit["has_afdb"]:
+                _selected_pdb.set("")
+                ui.notification_show(
+                    f"{acc}: no AFDB structure — will be searched at run time.",
+                    type="warning", duration=6,
+                )
+                return
+
+            # AFDB indexes by canonical accession — strip isoform suffix (P30628-1 → P30628)
+            parts = acc.rsplit("-", 1)
+            afdb_acc = parts[0] if len(parts) == 2 and parts[1].isdigit() else acc
+            try:
+                pdb_bytes = ebi_rest.dbfetch("afdb", afdb_acc, "pdb", "raw")
+                pdb_text = pdb_bytes.decode("utf-8", errors="replace")
+            except Exception as e:
+                ui.notification_show(f"AFDB fetch failed for {afdb_acc}: {e}", type="error", duration=5)
+                _selected_pdb.set("")
+                return
+
+            if "ERROR" in pdb_text[:50]:
+                _selected_pdb.set("")
+                ui.notification_show(
+                    f"{afdb_acc}: AFDB structure not available — will be searched at run time.",
+                    type="warning", duration=6,
+                )
+                return
+
+            _selected_pdb.set(pdb_text)
+            ui.notification_show(
+                f"Selected {acc} ({hit['gene'] or acc}) — AFDB structure loaded.",
+                type="message", duration=4,
+            )
+
+    @render.ui
+    def uniprot_results_ui():
+        """Render UniProt hits as an accordion; each panel expands to show FASTA + select."""
+        all_hits = _uniprot_hits()
+        if not all_hits:
+            return None
+
+        # apply display filters
+        afdb_only = input.uniprot_afdb_only()
+        hits = [h for h in all_hits if not afdb_only or h["has_afdb"]]
+
+        hidden = len(all_hits) - len(hits)
+        if not hits:
+            return ui.div(
+                ui.tags.p(
+                    f"No results match the current filters "
+                    f"({hidden} result{'s' if hidden != 1 else ''} hidden).",
+                    style="font-size:0.78rem; color:#6c757d; margin:0.3rem 0;",
+                ),
+            )
+
+        panels = []
+        for hit in hits:
+            acc      = hit["accession"]
+            gene     = hit["gene"] or acc
+            iso_name = hit.get("isoform_name", "")
+            iso_num  = hit.get("isoform", None)
+            sid      = hit["safe_id"]
+
+            afdb_badge = (
+                ui.tags.span("✓ AFDB", class_="uc-afdb-yes")
+                if hit["has_afdb"]
+                else ui.tags.span("no AFDB", class_="uc-afdb-no")
+            )
+            # show isoform number for non-canonical isoforms; always show length
+            iso_badge = (
+                ui.tags.span(f"isoform {iso_num}", class_="uc-isoform-badge")
+                if iso_num and iso_num != "1"
+                else None
+            )
+            len_badge = ui.tags.span(f"{hit['length']} aa", class_="uc-canonical-badge")
+
+            # show isoform common name (e.g. "p53alpha") alongside gene name
+            title = f"{gene} · {iso_name}" if iso_name else gene
+            header = ui.span(
+                title,
+                ui.tags.span(acc, class_="task-type-badge"),
+                *([iso_badge] if iso_badge else []),
+                len_badge,
+                afdb_badge,
+            )
+
+            body = ui.div(
+                # protein name + organism line
+                ui.div(
+                    ui.tags.span(hit["protein"],
+                                 style="font-size:0.78rem; color:#495057;"),
+                    ui.tags.span(f" · {hit['organism']}",
+                                 style="font-size:0.75rem; color:#6c757d; font-style:italic;"),
+                    style="margin-bottom:0.4rem;",
+                ),
+                # FASTA sequence in a scrollable code block
+                ui.tags.pre(
+                    _format_fasta(hit),
+                    style=(
+                        "font-size:0.7rem; background:#f8f9fa; border:1px solid #adb5bd; "
+                        "border-radius:3px; padding:0.4rem 0.6rem; overflow-x:auto; "
+                        "white-space:pre; margin-bottom:0.4rem; "
+                        "max-height:120px; overflow-y:auto;"
+                    ),
+                ),
+                ui.div(
+                    ui.input_action_button(
+                        f"use_hit_{sid}", "✓ Use this sequence",
+                        class_="btn-sm btn-primary",
+                    ),
+                    style="margin-top:0.3rem;",
+                ),
+            )
+
+            panels.append(ui.accordion_panel(header, body, value=sid))
+
+        n_shown  = len(hits)
+        hint = f"{n_shown} result{'s' if n_shown != 1 else ''}"
+        if hidden:
+            hint += f" ({hidden} hidden by filters)"
+        return ui.div(
+            ui.tags.p(
+                f"{hint} — open a card to inspect and select",
+                style="font-size:0.78rem; color:#6c757d; margin:0.3rem 0 0.2rem;",
+            ),
+            ui.accordion(*panels, open=None, multiple=True, class_="task-accordion"),
+        )
+
+    @render.text
+    def seq_source_status():
+        """One-line indicator showing which protein source will be used at save time."""
+        hit = _selected_hit()
+        if hit is not None:
+            pdb_note = " + AFDB structure" if _selected_pdb() else ""
+            return f"Using UniProt {hit['accession']} ({hit['gene'] or hit['organism']}){pdb_note}"
+        if input.input_file():
+            return "Using uploaded file"
+        return "No sequence selected yet."
 
     # ── preset refresh (called after saving a new preset) ────────────────────
 
@@ -279,9 +677,10 @@ def setup_server(input, output, session, shared_json):
     @reactive.calc
     def _ready():
         """True when all required fields for Save Analysis are present."""
+        has_sequence = bool(input.input_file()) or _selected_hit() is not None
         return (
             bool(input.email())
-            and bool(input.input_file())
+            and has_sequence
             and bool(input.working_dir())
             and len(tasks()) > 0
         )
@@ -308,7 +707,7 @@ def setup_server(input, output, session, shared_json):
     def save_status():
         """One-line hint next to the Save button."""
         if not _ready():
-            return "Requires email, a sequence file, an analysis name, and at least one task."
+            return "Requires email, a sequence file or UniProt hit, an analysis name, and at least one task."
         if input.save_analysis() == 0:
             return "Ready — click Save Analysis to write the run configuration."
         return f"Saved → {input.working_dir()}{input.run_name()}.json"
@@ -469,7 +868,7 @@ def setup_server(input, output, session, shared_json):
             widgets = _build_param_inputs(task, snap)
             add_table = (
                 ui.div(
-                    ui.input_file(f"{task['id']}_add_table", "＋ Add table (.tsv)",
+                    compact_file_input(f"{task['id']}_add_table", "＋ Add table (.tsv)",
                         accept=[".tsv"]),
                     style="margin-top:0.2rem;",
                 )
@@ -510,29 +909,51 @@ def setup_server(input, output, session, shared_json):
     @reactive.effect
     @reactive.event(input.save_analysis)
     def _save_analysis():
-        """Write the run JSON and publish its path via shared_json."""
-        wd  = input.working_dir()
-        rn  = input.run_name()
+        """Write the run JSON and publish its path via shared_json.
+
+        Protein-source precedence: UniProt hit > uploaded file.
+        Both branches produce (input_file, pdb_path, pdb_is_valid_plddt).
+        """
+        wd    = input.working_dir()
+        rn    = input.run_name()
         email = input.email()
 
         Path(wd).mkdir(parents=True, exist_ok=True)
 
-        # copy uploaded protein file to the working directory
-        tmp_protein = Path(input.input_file()[0]["datapath"])
-        ext = ".pdb" if tmp_protein.suffix.lower() == ".pdb" else ".fa"
-        protein_dest = wd + rn + ext
-        shutil.copy(tmp_protein, protein_dest)
-
-        # if PDB: extract FASTA and set pdb field; otherwise pdb stays empty
-        pdb_path = ""
-        input_file = protein_dest
-        if ext == ".pdb":
-            pdb_path = protein_dest
-            fasta_dest = protein_dest.replace(".pdb", ".fa")
-            save_fasta(Path(pdb_path).stem, get_sequence(pdb_path), fasta_dest)
+        # ── protein source resolution ─────────────────────────────────────────
+        hit = _selected_hit()
+        if hit is not None:
+            # UniProt branch: write sequence from search result; write AFDB PDB if fetched
+            fasta_dest = wd + rn + ".fa"
+            save_fasta(hit["accession"], hit["sequence"], fasta_dest)
             input_file = fasta_dest
 
-        # copy optional genomic FASTA
+            pdb_path = ""
+            pdb_text = _selected_pdb()
+            if pdb_text:
+                pdb_dest = wd + rn + ".pdb"
+                with open(pdb_dest, "w") as f:
+                    f.write(pdb_text)
+                pdb_path = pdb_dest
+            # AFDB structures always carry valid pLDDT B-factors
+            pdb_is_valid_plddt = bool(pdb_path)
+        else:
+            # upload branch: copy protein file to working dir (existing logic)
+            tmp_protein = Path(input.input_file()[0]["datapath"])
+            ext = ".pdb" if tmp_protein.suffix.lower() == ".pdb" else ".fa"
+            protein_dest = wd + rn + ext
+            shutil.copy(tmp_protein, protein_dest)
+
+            pdb_path = ""
+            input_file = protein_dest
+            if ext == ".pdb":
+                pdb_path = protein_dest
+                fasta_dest = protein_dest.replace(".pdb", ".fa")
+                save_fasta(Path(pdb_path).stem, get_sequence(pdb_path), fasta_dest)
+                input_file = fasta_dest
+            pdb_is_valid_plddt = _pdb_plddt_valid()
+
+        # ── copy optional genomic FASTA ───────────────────────────────────────
         genomic_path = ""
         if input.input_genomic():
             tmp_gen = Path(input.input_genomic()[0]["datapath"])
@@ -540,7 +961,7 @@ def setup_server(input, output, session, shared_json):
             shutil.copy(tmp_gen, genomic_dest)
             genomic_path = genomic_dest
 
-        # build the global block
+        # ── build the global block ────────────────────────────────────────────
         global_block = build_global_block(
             email        = email,
             run_name     = rn,
@@ -550,16 +971,15 @@ def setup_server(input, output, session, shared_json):
             genomic_file = genomic_path,
         )
 
-        # build per-task entries
+        # ── build per-task entries ────────────────────────────────────────────
         task_entries = []
         for task in tasks():
             args = _collect_args(task)
             if task["name"] == "plddt":
                 # use the supplied PDB only when it contains valid pLDDT B-factors
-                use_supplied_pdb = bool(pdb_path) and _pdb_plddt_valid()
+                use_supplied_pdb = bool(pdb_path) and pdb_is_valid_plddt
                 args["existing_AF2"] = 0 if use_supplied_pdb else 1
-                # write pdb into task args so parse_run merge doesn't lose it to
-                # global_block being overridden by the empty-string task default
+                # write pdb into task args so parse_run merge doesn't lose it
                 args["pdb"] = pdb_path if use_supplied_pdb else ""
                 # always inject the resolved taxid so AFDB lookup can filter by organism
                 args["taxid"] = organism_taxid()
@@ -568,7 +988,7 @@ def setup_server(input, output, session, shared_json):
                                  task_output_suffix(task["name"]), wd, rn)
             )
 
-        # build reagents entry or warn
+        # ── build reagents entry or warn ──────────────────────────────────────
         reagents_entry = None
         if genomic_path:
             reagents_entry = build_reagents_entry(
