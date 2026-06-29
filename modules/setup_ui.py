@@ -120,10 +120,10 @@ _STYLE = """
     /* divider between file-upload and UniProt search */
     .or-divider {
         display: flex; align-items: center; gap: 0.5rem;
-        margin: 0.6rem 0; color: #adb5bd; font-size: 0.78rem;
+        margin: 0.6rem 0; color: #ced4da; font-size: 0.78rem;
     }
     .or-divider::before, .or-divider::after {
-        content: ""; flex: 1; border-top: 1px solid #adb5bd;
+        content: ""; flex: 1; border-top: 1px solid #ced4da;
     }
 
     /* uniprot search row */
@@ -189,8 +189,11 @@ def setup_ui():
 
             # ── Panel 1: Global parameters ────────────────────────────────────
             ui.accordion_panel(
-                "1 · Global parameters",
-                ui.p("Run identity, output location, and target organism.", class_="section-hint"),
+                ui.span(
+                    "1 · Global parameters",
+                    ui.span("Run identity, output location, and target organism.",
+                            style="font-size:0.8rem; font-weight:400; color:#6c757d; margin-left:0.75rem;"),
+                ),
 
                 ui.div(
                     ui.input_text("email",
@@ -224,9 +227,11 @@ def setup_ui():
 
             # ── Panel 2: Sequence input ───────────────────────────────────────
             ui.accordion_panel(
-                "2 · Sequence input",
-                ui.p("Upload a protein sequence file, or search UniProt by gene name / accession.",
-                     class_="section-hint"),
+                ui.span(
+                    "2 · Sequence input",
+                    ui.span("Upload a protein sequence file or search UniProt by gene name / accession.",
+                            style="font-size:0.8rem; font-weight:400; color:#6c757d; margin-left:0.75rem;"),
+                ),
 
                 ui.div(
                     # UniProt search (first)
@@ -262,11 +267,11 @@ def setup_ui():
                     ui.div(ui.output_text("seq_source_status"), class_="seq-source-status"),
 
                     # divider between protein and genomic inputs
-                    ui.tags.hr(style="margin: 0.75rem 0; border-color: #adb5bd;"),
+                    ui.tags.hr(style="margin: 0.75rem 0; border-color: #6c757d;"),
                     ui.tags.p(
                         "Genomic sequence",
                         ui.tags.span(" (required for reagent design)",
-                                     style="font-weight:400; color:#6c757d;"),
+                                     style="font-weight:400; color:#9b1c1c;"),
                         class_="form-label",
                         style="margin-bottom: 0.2rem;",
                     ),
@@ -350,7 +355,8 @@ def setup_ui():
             ),
             # right: save preset
             ui.div(
-                ui.tags.label("Save current analyses as default", class_="form-label"),
+                ui.tags.label("Save current analyses as default", class_="form-label",
+                              title="Saves to disk — not available when running via shinyapps.io"),
                 ui.input_text("preset_name", label="", placeholder="name"),
                 ui.input_action_button("save_preset_btn", "Save",
                     disabled=True, class_="btn-sm btn-outline-secondary"),

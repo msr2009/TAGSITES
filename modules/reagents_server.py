@@ -21,6 +21,7 @@ from reagent_sequences import (
     ascii_diagram,
     build_ssodn,
     calc_tm,
+    check_recut_risk,
     design_pcr_primers,
     load_tags,
     truncate_arms,
@@ -303,6 +304,31 @@ def reagents_server(input, output, session, shared_json, shared_sites):
             }
         return result
 
+    # ── recut risk: does the insert reconstitute the guide target? ────────────
+
+    @reactive.calc
+    def _recut_risk():
+        """Dict {guide_id: bool} — True if the insert seq reconstitutes the guide target at the junction."""
+        df = sites_df()
+        insert = _insert_seq()
+        content = _guide_content()
+        if df is None or not insert or not content:
+            return {}
+        result = {}
+        for _, row in df.iterrows():
+            gid = str(row["guide_id"])
+            c = content.get(gid, {})
+            left = c.get("left", "")
+            right = c.get("right", "")
+            if not left or not right:
+                result[gid] = False
+                continue
+            result[gid] = check_recut_risk(
+                left, right, insert,
+                str(row["spacer"]), str(row["pam_seq"]), str(row["guide_strand"])
+            )
+        return result
+
     # ── Outputs ───────────────────────────────────────────────────────────────
 
     @render.ui
@@ -473,6 +499,7 @@ def reagents_server(input, output, session, shared_json, shared_sites):
             )
 
         content = _guide_content()   # cached; does not re-run on checkbox changes
+        recut   = _recut_risk()
 
         panels = []
         for rid in sorted(sites):
@@ -482,7 +509,7 @@ def reagents_server(input, output, session, shared_json, shared_sites):
             aa = str(site_rows.iloc[0]["amino_acid"])
             site_label = "{}{}".format(aa, rid)
 
-            guide_divs = _build_guide_divs(site_rows, rid, content)
+            guide_divs = _build_guide_divs(site_rows, rid, content, recut)
 
             panels.append(
                 ui.accordion_panel(
@@ -527,7 +554,7 @@ def reagents_server(input, output, session, shared_json, shared_sites):
 
     # ── private helpers ───────────────────────────────────────────────────────
 
-    def _build_guide_divs(site_rows, rid, content):
+    def _build_guide_divs(site_rows, rid, content, recut_risk):
         """Build guide-panel divs for one tag site.
 
         Best guide (lowest distance) is always visible.  Guides 2-N are placed
@@ -568,6 +595,15 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                 ) if _short else ui.span()
             )
 
+            recut_warning = (
+                ui.div(
+                    "⚠ Recut risk: the insert sequence reconstitutes the guide target "
+                    "at the arm/insert junction. Consider a different guide or modifying "
+                    "the insert sequence.",
+                    class_="ts-warn",
+                ) if recut_risk.get(gid, False) else ui.span()
+            )
+
             meta_cells = []
             for label, val in [
                 ("Spacer", str(row["spacer"])),
@@ -588,6 +624,7 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                     class_="guide-header",
                 ),
                 arm_clip_warning,
+                recut_warning,
                 diagram_content,
                 ui.div(*meta_cells, class_="param-grid mt-2"),
                 class_="guide-panel{}".format(" guide-best" if best else ""),

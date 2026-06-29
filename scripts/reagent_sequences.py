@@ -12,13 +12,19 @@ Matt Rich, 2025
 
 import csv
 import os
+import re
 import sys
 from html import escape as _esc
 
 from Bio.SeqUtils import MeltingTemp as _mt
 
 sys.path.insert(0, os.path.dirname(__file__))
-from crispr_util import reverse_complement, CODONS
+from crispr_util import (
+    iupac_to_regex,
+    reverse_complement,
+    reverse_complement_iupac,
+    CODONS,
+)
 
 
 def _rc_case(seq):
@@ -73,6 +79,34 @@ def calc_tm(seq):
         return float(_mt.Tm_NN(seq))
     except Exception:
         return 0.0
+
+
+# ── Recut risk check ─────────────────────────────────────────────────────────
+
+def check_recut_risk(left_arm, right_arm, insert_seq, spacer, pam_seq, guide_strand):
+    """Return True if inserting insert_seq reconstitutes the guide target at the repair junction.
+
+    Builds a window spanning both arm/insert junctions and searches for the
+    original spacer+PAM sequence.  The left_arm and right_arm should already
+    contain any PAM-disrupting mutations — this check catches the separate case
+    where the insert itself provides bases that complete the PAM.
+    """
+    spacer = spacer.upper()
+    pam_seq = pam_seq.upper()
+    insert_seq = insert_seq.upper()
+
+    # Window must span spacer + PAM across both junctions
+    n = len(spacer) + len(pam_seq)
+    junction = left_arm[-(n + len(insert_seq)):].upper() + insert_seq + right_arm[:(n + len(insert_seq))].upper()
+
+    # For + strand: look for spacer immediately followed by PAM on the fwd strand
+    # For - strand: look for RC(PAM) + RC(spacer) on the fwd strand
+    if guide_strand == '+':
+        pattern = re.escape(spacer) + iupac_to_regex(pam_seq)
+    else:
+        pattern = iupac_to_regex(reverse_complement_iupac(pam_seq)) + re.escape(reverse_complement(spacer))
+
+    return bool(re.search(pattern, junction))
 
 
 # ── ssODN assembly ────────────────────────────────────────────────────────────
@@ -151,6 +185,16 @@ def _build_aa_line(seq_raw, local_ins):
     Codons are read outward from local_ins (the insert/junction point).
     """
     ann = [' '] * len(seq_raw)
+    seq_raw = list(seq_raw)  # mutable so stop codon bases can be forced uppercase
+
+    def _annotate(cod_pos, seq_raw):
+        codon = ''.join(seq_raw[k].upper() for k in cod_pos)
+        aa = CODONS.get(codon, 'X')
+        if aa == '_':
+            aa = '*'
+            for k in cod_pos:   # stop codons always display uppercase
+                seq_raw[k] = seq_raw[k].upper()
+        ann[cod_pos[1]] = aa
 
     # Right side: codons read forward from local_ins
     i = local_ins
@@ -167,11 +211,29 @@ def _build_aa_line(seq_raw, local_ins):
             else:
                 break
         if len(cod_pos) == 3:
-            codon = ''.join(seq_raw[k].upper() for k in cod_pos)
-            ann[cod_pos[1]] = CODONS.get(codon, 'X')
+            _annotate(cod_pos, seq_raw)
             i = j
         else:
             break
+
+    # After the coding region, check if the very next codon (ignoring case) is a stop.
+    # Only do this when no more uppercase bases exist to the right — i.e. we are at the
+    # end of the last exon, not in an intron between exons (where TAA/TAG/TGA can appear
+    # at splice sites).
+    no_more_exon = not any(seq_raw[k].isupper() for k in range(i, len(seq_raw)))
+    if no_more_exon:
+        stop_pos = []
+        k = i
+        while k < len(seq_raw) and len(stop_pos) < 3:
+            if seq_raw[k].upper() in 'ACGT':
+                stop_pos.append(k)
+            k += 1
+        if len(stop_pos) == 3:
+            codon = ''.join(seq_raw[p].upper() for p in stop_pos)
+            if CODONS.get(codon) == '_':
+                ann[stop_pos[1]] = '*'
+                for p in stop_pos:
+                    seq_raw[p] = seq_raw[p].upper()
 
     # Left side: codons read backward from local_ins
     i = local_ins - 1
@@ -188,13 +250,12 @@ def _build_aa_line(seq_raw, local_ins):
             else:
                 break
         if len(cod_pos) == 3:
-            codon = ''.join(seq_raw[k].upper() for k in cod_pos)
-            ann[cod_pos[1]] = CODONS.get(codon, 'X')
+            _annotate(cod_pos, seq_raw)
             i = j
         else:
             break
 
-    return ''.join(ann)
+    return ''.join(ann), ''.join(seq_raw)
 
 
 # ── ASCII diagram ─────────────────────────────────────────────────────────────
@@ -254,8 +315,13 @@ def ascii_diagram(guide_row, left_arm, right_arm, left_wt=None, right_wt=None):
 
     pfx = '   '   # 3-char left prefix (space or '...')
 
+    # ── Row 2: translation — computed first so stop codons can be forced uppercase
+    wt_raw_base = l_show + r_show
+    aa_raw, wt_raw = _build_aa_line(wt_raw_base, local_ins)
+    aa_line = pfx + _esc(aa_raw)
+
     # ── Row 1: WT sequence ────────────────────────────────────────────────────
-    wt_raw = l_show + r_show   # mutated arm; we restore PAM positions below
+    # wt_raw may differ from wt_raw_base at stop codon positions (forced uppercase)
     wt_parts = [pfx]
     for i, ch in enumerate(wt_raw):
         if _in_pam(i):
@@ -265,10 +331,6 @@ def ascii_diagram(guide_row, left_arm, right_arm, left_wt=None, right_wt=None):
         else:
             wt_parts.append(_esc(ch))
     wt_line = ''.join(wt_parts)
-
-    # ── Row 2: translation (AAs centered in coding triplets) ─────────────────
-    aa_raw  = _build_aa_line(wt_raw, local_ins)
-    aa_line = pfx + _esc(aa_raw)
 
     # ── Row 3: repair template ────────────────────────────────────────────────
     # Context bases (outside the arm) shown in dim gray; arm bases shown normally

@@ -5,7 +5,13 @@ from modules.results_ui import results_ui
 from modules.reagents_ui import reagents_ui
 
 app_ui = ui.page_fluid(
-    ui.tags.style("#download_app{position:fixed;top:4px;right:16px;z-index:9999}"),
+    ui.tags.style(
+        "#download_app{"
+        "color:#b0bac4;border-color:#b0bac4;"
+        "position:relative;top:-3px;"
+        "}"
+        "#download_app:hover{color:#fff;background:#b0bac4;border-color:#b0bac4;}"
+    ),
     ui.navset_card_tab(
         ui.nav_panel("Analysis Setup", setup_ui("setup")),
         ui.nav_panel("Progress", progress_ui("progress")),
