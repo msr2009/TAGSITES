@@ -19,16 +19,32 @@ provides guide spacers and mutated homology arms ready to order.
 
 ## Install
 
-### 1. Clone the repository
+**Prerequisites:** Python 3.12 and an internet connection. All analyses (BLAST, Clustal Omega,
+InterPro, Genewise) run through the EBI and AlphaFold web services — no local bioinformatics
+binaries are required.
+
+### 1. Get the code
+
+**Option A — Download from the app** *(no git required)*
+
+Click **⬇ Download App** in the top-right corner of the running app. Unzip the downloaded
+`tagsites-app.zip` and enter the folder:
+
+```bash
+unzip tagsites-app.zip
+cd tagsites-app
+```
+
+**Option B — Clone the repository**
 
 ```bash
 git clone https://github.com/msr2009/TAGSITES.git
 cd TAGSITES
 ```
 
-### 2. Create the conda environment
+### 2. Set up the Python environment
 
-A portable environment spec is provided:
+**Recommended: conda** ([Miniconda](https://docs.conda.io/en/latest/miniconda.html) or Anaconda)
 
 ```bash
 conda env create -f environment.yml
@@ -38,6 +54,14 @@ conda activate tagsites
 > **Exact-pin reference:** `tagsites.yml` is a full osx-64 build-pinned export of the original
 > development environment. Use it on macOS to reproduce the exact environment:
 > `conda env create -f tagsites.yml`
+
+**Alternative: pip + venv** *(if you already have Python 3.12 and prefer not to use conda)*
+
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate    # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+```
 
 ### 3. Register your EBI e-mail
 
@@ -50,12 +74,12 @@ app's Setup page.
 ## Run the app
 
 ```bash
-conda activate tagsites
+conda activate tagsites   # or: source .venv/bin/activate
 python app_modular.py
 ```
 
-Open the printed URL in a browser. Use the Setup page to upload a sequence, configure analyses,
-and submit a run.
+The app starts at **http://127.0.0.1:8000** — open that URL in a browser. Use the Setup page
+to upload a sequence, configure analyses, and submit a run.
 
 ---
 
@@ -70,8 +94,8 @@ python scripts/run_tag_sites_from_json.py -i <run.json>
 ```
 
 A minimal example JSON (using pre-computed Genewise output so no network is needed) is at
-[`tests/data/example_run.json`](tests/data/example_run.json). Outputs land in the directory
-specified by `global.working_dir`.
+`tests/data/example_run.json` in the cloned repository (not included in the downloaded zip).
+Outputs land in the directory specified by `global.working_dir`.
 
 ---
 

@@ -72,7 +72,7 @@ params/
 
 ## Environment
 
-Key dependencies: `shiny`, `biopython`, `plotly`, `pandas`, `scipy`, `scikit-learn`, `matplotlib`, `requests`, `clustalo` (CLI).
+Key dependencies: `shiny`, `biopython`, `plotly`, `pandas`, `scipy`, `scikit-learn`, `matplotlib`, `requests`. No local bioinformatics binaries required — Clustal Omega, BLAST, Genewise, and InterPro all run via the EBI REST API.
 
 ## External services
 
