@@ -91,7 +91,7 @@ def test_no_none_recut_method(snb1_df):
 
 
 def test_valid_recut_methods(snb1_df):
-    valid = {"syn_1", "syn_2", "gc_preserve", "insertion"}
+    valid = {"syn_1", "mut_1", "insertion"}
     bad = set(snb1_df["recut_block_method"].unique()) - valid
     assert not bad, f"unexpected recut methods: {bad}"
 

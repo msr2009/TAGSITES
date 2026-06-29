@@ -22,7 +22,7 @@ def pdb_outputs(DATA, tmp_path_factory):
     tmp = tmp_path_factory.mktemp("pdb_out")
     plddt_out = str(tmp / "unc25_plddt.txt")
     pdb_main(str(DATA / "unc-25.pdb"), plddt_out)
-    sasa_out = plddt_out.replace("plddt.txt", "sasa.txt")
+    sasa_out = plddt_out.replace(".txt", ".sasa.txt")
     return Path(plddt_out), Path(sasa_out)
 
 

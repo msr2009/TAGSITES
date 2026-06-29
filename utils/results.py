@@ -56,6 +56,48 @@ def _merge_phobius_intervals(phobius_df):
     return pd.DataFrame(merged_rows, columns=["source", "start", "stop", "description"])
 
 
+def _isoform_n(iso_df):
+    """Parse the isoform denominator N from descriptions like 'constitutive (2/2 isoforms)'.
+
+    Returns the highest N found in the DataFrame, or 0 if none parse.
+    """
+    best = 0
+    for desc in iso_df["description"]:
+        m = re.search(r"/(\d+)\s+isoform", str(desc))
+        if m:
+            best = max(best, int(m.group(1)))
+    return best
+
+
+def _isoform_nonconstit_coverage(iso_df):
+    """Sum of residue span for non-constitutive rows (unique + intermediate).
+
+    Used as a tie-break: more differentiated coverage = more informative task.
+    """
+    mask = ~iso_df["description"].str.startswith("constitutive")
+    rows = iso_df[mask]
+    return int((rows["stop"] - rows["start"] + 1).sum())
+
+
+def _select_isoform_candidate(candidates):
+    """Choose the most informative isoform DataFrame from a list of (task_name, iso_df).
+
+    Ranking: highest N (isoform count) → most non-constitutive residue coverage →
+    original task order (stable). Returns the winning iso_df.
+    """
+    # sort is stable: last key dominates, so apply in reverse priority order
+    ranked = sorted(
+        candidates,
+        key=lambda item: (_isoform_n(item[1]), _isoform_nonconstit_coverage(item[1])),
+        reverse=True,
+    )
+    task_name, best_df = ranked[0]
+    n = _isoform_n(best_df)
+    if len(candidates) > 1:
+        print(f"Isoforms: selected task '{task_name}' (N={n}) from {len(candidates)} candidates.")
+    return best_df
+
+
 def load_data_from_json(json_in, type_dict):
     """Load per-task result TSVs referenced in the run JSON.
 
@@ -67,7 +109,7 @@ def load_data_from_json(json_in, type_dict):
     range_cols = ["source", "start", "stop", "description"]
     dat = pd.DataFrame(columns=range_cols)
     alns = []  # list of (aln_path, task_name, params_dict)
-    isoforms_loaded = False  # only load isoforms from the first blast task that has them
+    iso_candidates = []  # list of (task_name, iso_df) from all blast tasks
 
     # accept dict, JSON string, or file path
     j = {}
@@ -126,18 +168,16 @@ def load_data_from_json(json_in, type_dict):
                     params = {k: val for k, val in v.get("args", {}).items()
                               if k not in _skip and val not in ("", None)}
                     alns.append((aln_path, task, params))
-                    # pick up isoform segments from the first blast task that has them;
-                    # skip subsequent tasks to avoid overlapping segments from different organisms
-                    if not isoforms_loaded:
-                        iso_path = companion_path(output_path, "blast", "isoforms")
-                        if os.path.exists(iso_path) and os.path.getsize(iso_path) > 0:
-                            try:
-                                iso_df = pd.read_csv(iso_path, sep="\t",
-                                                     names=["source", "start", "stop", "description"])
-                                dat = pd.concat([dat, iso_df], ignore_index=True)
-                                isoforms_loaded = True
-                            except Exception as e:
-                                print(f"Error loading isoform data for task '{task}': {e}")
+                    # collect isoform segments from all blast tasks; best candidate
+                    # is selected after the loop to avoid first-task-wins ordering bias
+                    iso_path = companion_path(output_path, "blast", "isoforms")
+                    if os.path.exists(iso_path) and os.path.getsize(iso_path) > 0:
+                        try:
+                            iso_df = pd.read_csv(iso_path, sep="\t",
+                                                 names=["source", "start", "stop", "description"])
+                            iso_candidates.append((task, iso_df))
+                        except Exception as e:
+                            print(f"Error loading isoform data for task '{task}': {e}")
             except Exception as e:
                 print(f"Error loading continuous data for task '{task}': {e}")
                 continue
@@ -153,6 +193,11 @@ def load_data_from_json(json_in, type_dict):
         else:
             print(f"Unknown analysis type '{analysis}' for task '{task}'. Skipping.")
             continue
+
+    # pick the most informative isoform candidate and merge into range_df
+    if iso_candidates:
+        chosen_iso = _select_isoform_candidate(iso_candidates)
+        dat = pd.concat([dat, chosen_iso], ignore_index=True)
 
     # translate verbose Phobius descriptions and merge overlapping intervals per label
     if not dat.empty:

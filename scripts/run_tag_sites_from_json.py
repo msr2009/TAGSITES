@@ -48,7 +48,8 @@ def searchAFDB_required(tasks, global_args):
     _AFDB_EXCLUDE = {"pdb", "output", "existing_AF2", "scripts_folder",
                      "selected_sites", "genomic_file", "taxid_file"}
     for key, v in tasks.items():
-        if v["type"] == "plddt" and v["args"].get("pdb", "") == "":
+        if (v["type"] == "plddt" and v["args"].get("pdb", "") == ""
+                and v["args"].get("existing_AF2", 1) != 0):
             merged = {**global_args, **v["args"]}
             merged.setdefault("taxid", merged.get("species_taxid", 1))
             return build_task_args_string(merged, EXCLUDE=list(_AFDB_EXCLUDE))

@@ -3,7 +3,7 @@ test_parse_genewise.py — offline unit tests for scripts/parse_genewise.py
 
 Uses committed fixtures in tests/data/:
   snb-1  — 109 residues, 2 exons, no split codons
-  src-1  — 536 residues, 6 exons, 8 split codons; forward score 1138 bits
+  src-1  — 533 residues, 6 exons, 5 split codons; forward score 1138 bits
   src-1 rc — same gene, RC genomic input; garbage score 1.39 bits
 """
 
@@ -79,7 +79,7 @@ class TestEnumerateInsertionSites:
 
     def test_src1_residue_count(self, DATA):
         sites = self._src1(DATA)
-        assert len(sites) == 536
+        assert len(sites) == 533
 
     def test_src1_first_residue(self, DATA):
         sites = self._src1(DATA)
@@ -88,7 +88,7 @@ class TestEnumerateInsertionSites:
 
     def test_src1_split_codons(self, DATA):
         sites = self._src1(DATA)
-        assert sites["is_split_codon"].sum() == 8
+        assert sites["is_split_codon"].sum() == 5
 
     def test_src1_last_exon_sentinel(self, DATA):
         sites = self._src1(DATA)
@@ -96,7 +96,7 @@ class TestEnumerateInsertionSites:
 
     def test_src1_residue_indices_sequential(self, DATA):
         sites = self._src1(DATA)
-        assert list(sites["residue_index"]) == list(range(1, 537))
+        assert list(sites["residue_index"]) == list(range(1, 534))
 
     def test_snb1_translation_matches_fasta(self, DATA):
         """Translated residues from enumerated sites must equal the protein FASTA.

@@ -72,7 +72,7 @@ def _build_colors_and_legend(track, task_name, scheme, aa_df, range_df, seq_len,
 
 
 @module.server
-def results_server(input, output, session, shared_json, shared_sites):
+def results_server(input, output, session, shared_json, shared_sites, shared_results_trigger=None):
 
     # ── Per-run data ────────────────────────────────────────────────────────────
     aa_data     = reactive.Value()     # continuous scores DataFrame
@@ -170,8 +170,12 @@ def results_server(input, output, session, shared_json, shared_sites):
 
     @reactive.effect
     async def auto_load_results():
-        """Auto-plot results whenever the pipeline writes a new shared JSON path."""
+        """Auto-plot results whenever the JSON path changes or a run completes."""
         path = shared_json.get()
+        # take a dependency on the completion trigger so we reload after tasks finish
+        # even when the JSON path hasn't changed
+        if shared_results_trigger is not None:
+            shared_results_trigger.get()
         if not path:
             return
         try:

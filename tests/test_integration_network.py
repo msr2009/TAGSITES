@@ -84,26 +84,28 @@ def test_full_pipeline_reagents_tsv(DATA, email, tmp_path):
     output_tsv = working_dir / "snb-1.reagents.tsv"
 
     run_json = {
-        "scripts": {"reagents": "design_tag_reagents.py"},
         "global": {
             "email": email,
-            "working_dir": str(working_dir),
+            "working_dir": str(working_dir) + "/",
             "run_name": "snb-1",
             "input_file": str(prot_fa),
             "pdb": "",
             "scripts_folder": SCRIPTS,
+            "selected_sites": [],
         },
-        "REAGENTS_reagents": {
-            "analysis": "reagents",
-            "args": {
-                "genomic_fasta": str(genomic_fa),
-                "genewise": "",   # empty → triggers genewise_required pre-step
-                "n_guides": 3,
-                "arm_length": 200,
-                "PAM": "NGG",
-                "guide_length": 20,
-                "cut_offset": 3,
-                "output": str(output_tsv),
+        "tasks": {
+            "REAGENTS_reagents": {
+                "type": "reagents",
+                "args": {
+                    "genomic_fasta": str(genomic_fa),
+                    "genewise": "",   # empty → triggers genewise_required pre-step
+                    "n_guides": 3,
+                    "arm_length": 200,
+                    "PAM": "NGG",
+                    "guide_length": 20,
+                    "cut_offset": 3,
+                    "output": str(output_tsv),
+                }
             }
         }
     }

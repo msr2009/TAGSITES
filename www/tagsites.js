@@ -787,6 +787,13 @@
     var container = document.getElementById("ts-viewer-container");
     if (!container) return;
 
+    // Clear any existing viewer so stale canvases don't stack on re-init
+    if (viewer) {
+      viewer.clear();
+      viewer = null;
+    }
+    container.innerHTML = "";
+
     viewer = $3Dmol.createViewer(container, {
       backgroundColor: "white", backgroundAlpha: 0,
       hoverDuration: 100,

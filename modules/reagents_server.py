@@ -124,7 +124,7 @@ def reagents_server(input, output, session, shared_json, shared_sites):
         working_dir.set(wd)
 
         # read reagent args to discover stored arm length and TSV path
-        reagent_args = j.get("REAGENTS_reagents", {}).get("args", {})
+        reagent_args = j.get("tasks", {}).get("REAGENTS_reagents", {}).get("args", {})
         s_arm = int(reagent_args.get("arm_length", 1000))
         stored_arm_len.set(s_arm)
 

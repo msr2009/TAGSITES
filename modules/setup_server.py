@@ -558,6 +558,9 @@ def setup_server(input, output, session, shared_json):
                 # use the supplied PDB only when it contains valid pLDDT B-factors
                 use_supplied_pdb = bool(pdb_path) and _pdb_plddt_valid()
                 args["existing_AF2"] = 0 if use_supplied_pdb else 1
+                # write pdb into task args so parse_run merge doesn't lose it to
+                # global_block being overridden by the empty-string task default
+                args["pdb"] = pdb_path if use_supplied_pdb else ""
                 # always inject the resolved taxid so AFDB lookup can filter by organism
                 args["taxid"] = organism_taxid()
             task_entries.append(

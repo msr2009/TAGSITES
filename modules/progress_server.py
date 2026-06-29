@@ -78,7 +78,7 @@ def _build_body(task, global_block, entry):
 # ── module server ─────────────────────────────────────────────────────────────
 
 @module.server
-def progress_server(input, output, session, shared_json):
+def progress_server(input, output, session, shared_json, shared_results_trigger):
 
     # per-session state derived from the loaded JSON
     global_block = reactive.Value({})
@@ -272,6 +272,21 @@ def progress_server(input, output, session, shared_json):
                 pass
         _baseline_tick.set(_baseline_tick.get() + 1)
         run_all_tasks.invoke(shared_json.get(), wd, rn, rerun_set)
+
+    # plain mutable guard — avoids re-signaling on the same completion
+    _completion_count = [0]
+    _completion_notified = [False]
+
+    @reactive.effect
+    def _on_tasks_complete():
+        """Increment shared_results_trigger once when tasks finish so results reload."""
+        status = run_all_tasks.status()
+        if status == "running":
+            _completion_notified[0] = False
+        elif status == "success" and not _completion_notified[0]:
+            _completion_notified[0] = True
+            _completion_count[0] += 1
+            shared_results_trigger.set(_completion_count[0])
 
     @reactive.effect
     @reactive.event(input.run_analysis)

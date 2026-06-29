@@ -13,8 +13,8 @@ def main(input_file, output_file):
 		print("\t".join([str(aa+1), str(bf[aa])]), file=bf_out)
 	bf_out.close()
 
-	#now we extract SASA values
-	sasa_out = open(output_file.replace("plddt.txt", "sasa.txt"), "w")
+	#now we extract SASA values; name matches companion_path convention (.txt → .sasa.txt)
+	sasa_out = open(output_file.replace(".txt", ".sasa.txt"), "w")
 	sasa = calc_sasa_shrakerupley(input_file)
 	for s in sasa:
 		print("\t".join([s[0], s[1], three_to_one(s[2])]), file=sasa_out)

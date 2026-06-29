@@ -14,7 +14,13 @@ def app_server(input, output, session):
     # chosen tag sites — list of residue positions (ints) from the Results page
     shared_sites = reactive.Value([])
 
+    # incremented by progress_server each time a run completes so results_server
+    # reloads even when the JSON path hasn't changed
+    shared_results_trigger = reactive.Value(0)
+
     setup_server("setup", shared_json=shared_values)
-    progress_server("progress", shared_json=shared_values)
-    results_server("results", shared_json=shared_values, shared_sites=shared_sites)
+    progress_server("progress", shared_json=shared_values,
+                    shared_results_trigger=shared_results_trigger)
+    results_server("results", shared_json=shared_values, shared_sites=shared_sites,
+                   shared_results_trigger=shared_results_trigger)
     reagents_server("reagents", shared_json=shared_values, shared_sites=shared_sites)

@@ -3,7 +3,7 @@ test_crispr_util.py — offline unit tests for scripts/crispr_util.py
 
 Covers: iupac_to_regex, reverse_complement, reverse_complement_iupac,
         SYN_CODONS consistency, find_guides (PAM parametric, both strands,
-        coords), disrupt_pam (syn_1 synonymous, gc_preserve GC-stable,
+        coords), disrupt_pam (syn_1 synonymous, mut_1 single-base fallback,
         PAM actually broken after mutation).
 """
 
@@ -186,14 +186,14 @@ def _make_coding_context():
 
 
 def test_disrupt_pam_syn_1_coding():
-    """A PAM fully inside a coding codon should return syn_1 or syn_2."""
+    """A PAM fully inside a coding codon should return syn_1 or mut_1."""
     dna, cds_df = _make_coding_context()
     frame_lookup = build_frame_lookup(cds_df, dna)
     # PAM TGG at position 9 on + strand
     result = disrupt_pam(dna, "NGG", pam_fwd_start=9, strand="+", frame_lookup=frame_lookup)
     assert result is not None, "disrupt_pam returned None for a mutable coding PAM"
     mutated_seq, desc, method = result
-    assert method in ("syn_1", "syn_2", "gc_preserve"), f"unexpected method: {method}"
+    assert method in ("syn_1", "mut_1"), f"unexpected method: {method}"
     # The PAM in the mutated sequence should no longer match NGG
     assert _pam_disrupted(mutated_seq, "NGG", 9, 3, "+"), (
         "PAM still matches after disruption"
