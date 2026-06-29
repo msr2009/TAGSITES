@@ -20,22 +20,16 @@ def _hseq_sig(hsp):
     return hsp.get("hsp_hseq", "").replace("-", "")
 
 
-def _check_identity(hsp, min_identity, min_perfect_len):
-    """Return True if the HSP meets identity and perfect-run-length thresholds."""
+def _check_identity(hsp, min_perfect_len):
+    """Return True if the HSP has a consecutive perfect-match run >= min_perfect_len.
+
+    Organism + gene-name filtering already excludes paralogs; this guards against
+    spurious same-gene hits with no substantial shared block.
+    """
     qseq = hsp.get("hsp_qseq", "")
     hseq = hsp.get("hsp_hseq", "")
     if not qseq or not hseq:
-        # no alignment strings — fall back to summary identity percentage
-        return float(hsp.get("hsp_identity", 0)) / 100.0 >= min_identity
-    # fraction of non-gap query positions that match hit
-    total = sum(1 for c in qseq if c != "-")
-    if total == 0:
-        return False
-    identical = sum(1 for q, h in zip(qseq, hseq) if q != "-" and h != "-" and q == h)
-    if identical / total < min_identity:
-        return False
-    # require at least one consecutive perfect-match run >= min_perfect_len
-    # (guards against same-organism hits that are deeply gapped paralogs)
+        return True  # no alignment strings; accept if it passed organism/gene filters
     max_run = cur_run = 0
     for q, h in zip(qseq, hseq):
         if q != "-" and h != "-" and q == h:
@@ -68,7 +62,7 @@ def _mark_presence(hsp, presence, query_len):
         qpos += 1
 
 
-def derive_isoform_segments(blast_output, min_perfect_len=40, min_identity=0.98):
+def derive_isoform_segments(blast_output, min_perfect_len=40):
     """Classify query residues by isoform coverage from a BLAST result dict.
 
     Returns a list of (start, stop, description) tuples (1-based, inclusive),
@@ -87,7 +81,7 @@ def derive_isoform_segments(blast_output, min_perfect_len=40, min_identity=0.98)
     query_ox = hits[0].get("hit_uni_ox", "")
     query_gn = hits[0].get("hit_uni_gn", "")
 
-    # filter hits to same-organism, same-gene, near-100%-identity candidates
+    # filter hits to same-organism, same-gene candidates with a shared conserved block
     candidates = []
     for h in hits:
         hsp = h["hit_hsps"][0]
@@ -98,7 +92,7 @@ def derive_isoform_segments(blast_output, min_perfect_len=40, min_identity=0.98)
         # gene name filter: skip if both names are known but differ
         if query_gn and hit_gn and hit_gn != query_gn:
             continue
-        if not _check_identity(hsp, min_identity, min_perfect_len):
+        if not _check_identity(hsp, min_perfect_len):
             continue
         candidates.append(h)
 
@@ -144,14 +138,13 @@ def derive_isoform_segments(blast_output, min_perfect_len=40, min_identity=0.98)
     return segments
 
 
-def main(blast_json_path, output_path, min_perfect_len=40, min_identity=0.98):
+def main(blast_json_path, output_path, min_perfect_len=40):
     """Derive isoform segments from a BLAST JSON file and write a range TSV."""
     with open(blast_json_path) as f:
         blast_output = json.load(f)
     segments = derive_isoform_segments(
         blast_output,
         min_perfect_len=int(min_perfect_len),
-        min_identity=float(min_identity),
     )
     with open(output_path, "w") as f:
         for start, stop, desc in segments:
@@ -167,7 +160,5 @@ if __name__ == "__main__":
                         help="path to write isoforms TSV")
     parser.add_argument("--min_perfect_len", dest="MIN_PERFECT_LEN", default=40, type=int,
                         help="minimum consecutive perfect-match run length (default 40)")
-    parser.add_argument("--min_identity", dest="MIN_IDENTITY", default=0.98, type=float,
-                        help="minimum fractional identity (default 0.98)")
     args, _ = parser.parse_known_args()
-    main(args.BLAST_JSON, args.OUTPUT, args.MIN_PERFECT_LEN, args.MIN_IDENTITY)
+    main(args.BLAST_JSON, args.OUTPUT, args.MIN_PERFECT_LEN)
