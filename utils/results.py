@@ -361,50 +361,89 @@ def _task_color(task_name):
     return palette[0]
 
 
-def residue_colors_for_track(aa_df, task_name, hex_color):
+# ── Named colormaps (t, (r, g, b)) stops, t ∈ [0, 1] ───────────────────────
+
+_VIRIDIS = [
+    (0.000, (68,  1,  84)),  (0.111, (72,  40, 120)),  (0.222, (62,  74, 137)),
+    (0.333, (49, 104, 142)), (0.444, (38, 130, 142)),  (0.556, (31, 158, 137)),
+    (0.667, (53, 183, 121)), (0.778, (110, 206,  88)), (0.889, (181, 222,  43)),
+    (1.000, (253, 231,  37)),
+]
+
+_PLASMA = [
+    (0.00, (13,  8,  135)), (0.25, (126,  3, 168)),
+    (0.50, (203, 70, 121)), (0.75, (248, 149,  64)),
+    (1.00, (240, 249,  33)),
+]
+
+# matplotlib "cool": cyan → magenta
+_COOL = [
+    (0.0, (0, 255, 255)),
+    (1.0, (255, 0, 255)),
+]
+
+# pLDDT gradient: band boundary values are used as t stops so the colour
+# transitions coincide with the categorical 4-band cutoffs (stored 0–1)
+_PLDDT_GRADIENT = [
+    (0.00, (255, 125, 69)),   # very low  → orange  (#FF7D45)
+    (0.50, (255, 219, 19)),   # low       → yellow  (#FFDB13)
+    (0.70, (101, 203, 243)),  # confident → cyan    (#65CBF3)
+    (1.00, (0,   83, 214)),   # very high → blue    (#0053D6)
+]
+
+
+def _interp_cmap(t, stops):
+    """Interpolate a (t, (r,g,b)) stop list at value t ∈ [0, 1]."""
+    t = max(0.0, min(1.0, t))
+    for i in range(len(stops) - 1):
+        t0, c0 = stops[i]
+        t1, c1 = stops[i + 1]
+        if t <= t1:
+            f = (t - t0) / (t1 - t0) if t1 > t0 else 0.0
+            r = int(c0[0] + f * (c1[0] - c0[0]))
+            g = int(c0[1] + f * (c1[1] - c0[1]))
+            b = int(c0[2] + f * (c1[2] - c0[2]))
+            return f"#{r:02x}{g:02x}{b:02x}"
+    c = stops[-1][1]
+    return f"#{c[0]:02x}{c[1]:02x}{c[2]:02x}"
+
+
+def _pick_gradient_cmap(task_name):
+    """Return the stop list for a gradient based on track type."""
+    if task_name.endswith("_sasa"):
+        return _COOL
+    analysis = _guess_analysis_type(task_name)
+    if analysis == "plddt":
+        return _PLDDT_GRADIENT
+    if analysis == "blast":
+        return _VIRIDIS
+    return _PLASMA
+
+
+def residue_colors_for_track(aa_df, task_name, hex_color=None):
     """Compute per-residue hex colors for a continuous track.
 
-    pLDDT tracks use the AlphaFold 4-band categorical scheme; SASA and all
-    other tracks use a white → hex_color gradient.
+    pLDDT tracks use the AlphaFold 4-band categorical scheme; all other tracks
+    use the gradient appropriate for their type (see _pick_gradient_cmap).
     Use residue_colors_gradient() directly to force gradient mode on pLDDT.
     """
     if task_name not in aa_df.columns:
         return []
     if _guess_analysis_type(task_name) == "plddt" and not task_name.endswith("_sasa"):
         return _residue_colors_plddt(aa_df, task_name)
-    return residue_colors_gradient(aa_df, task_name, hex_color)
+    return residue_colors_gradient(aa_df, task_name)
 
 
 def residue_colors_gradient(aa_df, task_name, hex_color=None):
-    """Viridis gradient for any continuous track (hex_color ignored, kept for API compat)."""
-    # viridis sampled at 9 stops (low → high)
-    _VIRIDIS = [
-        (68,  1,  84), (72,  40, 120), (62,  74, 137), (49, 104, 142),
-        (38, 130, 142), (31, 158, 137), (53, 183, 121), (110, 206,  88),
-        (181, 222,  43), (253, 231,  37),
-    ]
-
+    """Per-residue gradient colors routed by track type (hex_color ignored, kept for API compat)."""
     if task_name not in aa_df.columns:
         return []
+    stops = _pick_gradient_cmap(task_name)
     series = aa_df.set_index("pos")[task_name]
-    # normalize to fixed [0, 1] so color position is absolute, not relative to data range
-    normed = series
-
-    def _viridis_hex(t):
-        # linearly interpolate between the two nearest stops
-        t = max(0.0, min(1.0, t))
-        idx = t * (len(_VIRIDIS) - 1)
-        lo, hi = int(idx), min(int(idx) + 1, len(_VIRIDIS) - 1)
-        frac = idx - lo
-        r = int(_VIRIDIS[lo][0] + (_VIRIDIS[hi][0] - _VIRIDIS[lo][0]) * frac)
-        g = int(_VIRIDIS[lo][1] + (_VIRIDIS[hi][1] - _VIRIDIS[lo][1]) * frac)
-        b = int(_VIRIDIS[lo][2] + (_VIRIDIS[hi][2] - _VIRIDIS[lo][2]) * frac)
-        return f"#{r:02x}{g:02x}{b:02x}"
-
     colors = []
     for pos in sorted(series.index):
-        v = normed.get(pos, float("nan"))
-        colors.append("#aaaaaa" if pd.isna(v) else _viridis_hex(v))
+        v = series.get(pos, float("nan"))
+        colors.append("#aaaaaa" if pd.isna(v) else _interp_cmap(v, stops))
     return colors
 
 

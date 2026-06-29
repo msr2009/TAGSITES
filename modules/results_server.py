@@ -14,6 +14,8 @@ from utils.results import (
     residue_colors_for_isoforms,
     residue_colors_jet,
     _guess_analysis_type,
+    _pick_gradient_cmap,
+    _VIRIDIS, _PLASMA, _COOL, _PLDDT_GRADIENT,
 )
 from config import RESULTS_TYPE_DICT, DOMAIN_SOURCE_COLORS
 
@@ -66,7 +68,13 @@ def _build_colors_and_legend(track, task_name, scheme, aa_df, range_df, seq_len,
             and scheme != "continuous"):
         legend = {"type": "categorical", "items": _PLDDT_LEGEND}
     else:
-        legend = {"type": "gradient", "label": task_name, "vmin": 0, "vmax": 1}
+        _CMAP_NAMES = {
+            id(_VIRIDIS): "viridis", id(_PLASMA): "plasma",
+            id(_COOL): "cool",       id(_PLDDT_GRADIENT): "plddt",
+        }
+        cmap_name = _CMAP_NAMES.get(id(_pick_gradient_cmap(task_name)), "viridis")
+        legend = {"type": "gradient", "label": task_name, "vmin": 0, "vmax": 1,
+                  "cmap": cmap_name}
 
     return colors, legend
 
@@ -106,12 +114,14 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
 
         # build color-by button choices
         # pLDDT tracks get two buttons: categorical (4-band) and continuous (gradient)
-        choices = {"(none)": "None"}
+        choices = {"(none)": "N→C"}
         if aa_df is not None:
             for col in aa_df.columns[1:]:
                 if _guess_analysis_type(col) == "plddt" and not col.endswith("_sasa"):
                     choices[col + ":categorical"] = f"{col} (4-band)"
                     choices[col + ":continuous"]  = f"{col} (gradient)"
+                elif col.endswith("_sasa"):
+                    choices[col] = "Solv Access"
                 else:
                     choices[col] = col
         if range_df is not None and not range_df.empty:
@@ -312,6 +322,24 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
         sites = sorted(set(shared_sites.get()) | new_sites)
         shared_sites.set(sites)
         pending_sites.set(set())
+
+    @reactive.effect
+    @reactive.event(input.add_nterm_button)
+    def on_add_nterm():
+        """Add position 1 (N-terminus) to committed sites."""
+        sites = sorted(set(shared_sites.get()) | {1})
+        shared_sites.set(sites)
+
+    @reactive.effect
+    @reactive.event(input.add_cterm_button)
+    def on_add_cterm():
+        """Add the last residue (C-terminus) to committed sites."""
+        meta = run_meta.get() or {}
+        seq_len = meta.get("seq_len", 0)
+        if not seq_len:
+            return
+        sites = sorted(set(shared_sites.get()) | {seq_len})
+        shared_sites.set(sites)
 
     @reactive.effect
     @reactive.event(input.add_suggested_button)

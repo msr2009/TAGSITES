@@ -43,7 +43,7 @@ def results_ui():
                     # hidden select registers the color_by input with Shiny;
                     # the visible button row drives it via Shiny.setInputValue
                     ui.div(
-                        ui.input_select("color_by", "", choices={"(none)": "None"}),
+                        ui.input_select("color_by", "", choices={"(none)": "N→C"}),
                         style="display:none; position:absolute; pointer-events:none;",
                     ),
                     # color-by buttons above the viewer
@@ -59,12 +59,18 @@ def results_ui():
             col_widths=(7, 5),
         ),
 
-        # ── Chosen tag sites: chips | Add highlighted | Add suggested | Clear ──
+        # ── Chosen tag sites: chips | Add highlighted | N-term | C-term | Add suggested | Clear ──
         ui.div(
             ui.output_ui("chosen_sites_display"),
             ui.input_action_button("add_highlighted_button",
                                    "Add highlighted",
                                    class_="btn btn-success btn-sm ts-sites-btn"),
+            ui.input_action_button("add_nterm_button",
+                                   "Add N-term",
+                                   class_="btn btn-outline-primary btn-sm ts-sites-btn"),
+            ui.input_action_button("add_cterm_button",
+                                   "Add C-term",
+                                   class_="btn btn-outline-danger btn-sm ts-sites-btn"),
             ui.input_action_button("add_suggested_button",
                                    "Add suggested",
                                    class_="btn btn-outline-success btn-sm ts-sites-btn"),

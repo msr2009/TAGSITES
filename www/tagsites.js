@@ -1010,9 +1010,15 @@
 
   // ── Structure color legend ─────────────────────────────────────────────────────
 
-  // viridis stops for the gradient bar (matches residue_colors_gradient in Python)
-  var _VIRIDIS_CSS = "linear-gradient(to right," +
-    "#440154,#48306e,#3e4989,#31688e,#26838f,#1f9e89,#35b779,#6ece58,#b5de2b,#fde725)";
+  // gradient CSS strings — must match the Python colormaps in utils/results.py
+  var _CMAP_CSS = {
+    viridis: "linear-gradient(to right," +
+      "#440154,#48306e,#3e4989,#31688e,#26838f,#1f9e89,#35b779,#6ece58,#b5de2b,#fde725)",
+    plasma:  "linear-gradient(to right,#0d0887,#7e03a8,#cb4679,#f89540,#f0f921)",
+    cool:    "linear-gradient(to right,#00ffff,#ff00ff)",
+    // pLDDT gradient: stops at band boundaries (0%, 50%, 70%, 100%)
+    plddt:   "linear-gradient(to right,#ff7d45 0%,#ffdb13 50%,#65cbf3 70%,#0053d6 100%)",
+  };
 
   // rainbow N→C matches 3Dmol's default chain-spectrum coloring
   var _RAINBOW_CSS = "linear-gradient(to right,#0000ff,#00ffff,#00ff00,#ffff00,#ff0000)";
@@ -1023,11 +1029,12 @@
     if (!legend) { el.innerHTML = ""; return; }
 
     if (legend.type === "gradient") {
+      var gradCSS = _CMAP_CSS[legend.cmap] || _CMAP_CSS.viridis;
       el.innerHTML =
         '<div class="ts-sleg-label">' + legend.label + '</div>' +
         '<div class="ts-sleg-bar-row">' +
           '<span class="ts-sleg-tick">' + legend.vmin + '</span>' +
-          '<div class="ts-sleg-bar" style="background:' + _VIRIDIS_CSS + '"></div>' +
+          '<div class="ts-sleg-bar" style="background:' + gradCSS + '"></div>' +
           '<span class="ts-sleg-tick">' + legend.vmax + '</span>' +
         '</div>';
     } else if (legend.type === "rainbow") {
