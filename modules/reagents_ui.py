@@ -1,6 +1,7 @@
 """reagents_ui.py — Shiny UI module for the Design Reagents tab."""
 
 from shiny import ui, module
+from modules.ui_helpers import COMPACT_FILE_CSS
 
 
 _STYLE = """
@@ -32,7 +33,7 @@ _STYLE = """
     .reagents-accordion .accordion-button:not(.collapsed) { background: #dde4f8; }
 
     /* guide sub-panels */
-    .guide-panel { border: 1px solid #dee2e6; border-radius: 4px;
+    .guide-panel { border: 1px solid #adb5bd; border-radius: 4px;
                    padding: 0.5rem 0.75rem; margin-bottom: 0.5rem; background: #fff; }
     .guide-panel.guide-best { border-color: #4a90d9; background: #f5f9ff; }
     .guide-header { font-size: 0.8rem; font-weight: 600; margin-bottom: 0.4rem;
@@ -42,7 +43,7 @@ _STYLE = """
 
     /* ASCII diagram */
     .guide-diagram pre {
-        font-size: 0.72rem; background: #f8f9fa; border: 1px solid #dee2e6;
+        font-size: 0.72rem; background: #f8f9fa; border: 1px solid #adb5bd;
         border-radius: 3px; padding: 0.4rem 0.6rem; overflow-x: auto;
         white-space: pre; margin-top: 0.4rem; margin-bottom: 0.4rem;
     }
@@ -63,9 +64,6 @@ _STYLE = """
     /* download row */
     .download-row { display: flex; gap: 0.5rem; margin: 0.5rem 0; flex-wrap: wrap; }
 
-    /* file input */
-    .shiny-input-file .btn { font-size: 0.8rem !important; padding: 0.2rem 0.5rem !important; }
-    .shiny-input-file .form-control { font-size: 0.8rem; }
 """
 
 
@@ -73,7 +71,7 @@ _STYLE = """
 def reagents_ui():
     return ui.page_fluid(
 
-        ui.tags.style(_STYLE),
+        ui.tags.style(_STYLE + COMPACT_FILE_CSS),
 
         # ── JSON upload card ──────────────────────────────────────────────────
         ui.output_ui("json_upload_card"),

@@ -1,6 +1,7 @@
 """progress_ui.py — Shiny UI module for the Progress tab."""
 
 from shiny import ui, module
+from modules.ui_helpers import COMPACT_FILE_CSS
 
 
 _STYLE = """
@@ -67,14 +68,10 @@ _STYLE = """
     /* sticky action bar */
     .save-bar {
         position: sticky; bottom: 0; background: #fff;
-        border-top: 2px solid #dee2e6; padding: 0.5rem 1rem;
+        border-top: 2px solid #adb5bd; padding: 0.5rem 1rem;
         margin-top: 0.75rem; z-index: 100;
         display: flex; align-items: center; gap: 0.75rem;
     }
-
-    /* file input sizing */
-    .shiny-input-file .btn { font-size: 0.8rem !important; padding: 0.2rem 0.5rem !important; }
-    .shiny-input-file .form-control { font-size: 0.8rem; }
 
     /* current-stage chip in accordion title */
     .stage-chip {
@@ -87,7 +84,7 @@ _STYLE = """
     .task-log {
         width: 100%; margin-top: 0.5rem;
         font-family: monospace; font-size: 0.72rem;
-        background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 3px;
+        background: #f8f9fa; border: 1px solid #adb5bd; border-radius: 3px;
         padding: 0.3rem 0.5rem; resize: vertical; color: #212529;
     }
 """
@@ -97,7 +94,7 @@ _STYLE = """
 def progress_ui():
     return ui.page_fluid(
 
-        ui.tags.style(_STYLE),
+        ui.tags.style(_STYLE + COMPACT_FILE_CSS),
 
         ui.output_ui("json_upload_card"),
 

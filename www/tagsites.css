@@ -292,3 +292,34 @@
 .ts-controls-row .form-group {
   margin-bottom: 0;
 }
+
+/* compact-file-input row */
+.compact-file-input {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: nowrap;
+    margin-bottom: 0.25rem;
+}
+.compact-file-input .cfi-label {
+    white-space: nowrap;
+    flex-shrink: 0;
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: #343a40;
+    margin: 0;
+}
+.compact-file-input .cfi-filename {
+    font-size: 0.75rem;
+    color: #6c757d;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 220px;
+}
+.cfi-hidden {
+    position: fixed;
+    top: -9999px;
+    left: -9999px;
+}
+.cfi-hidden .shiny-input-container { margin: 0 !important; }

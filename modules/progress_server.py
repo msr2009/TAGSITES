@@ -310,7 +310,12 @@ def progress_server(input, output, session, shared_json, shared_results_trigger)
         wd, rn = working_dir.get(), run_name.get()
         if not wd or not rn:
             return {}
-        return _run_status.load_status(wd, rn)
+        status = _run_status.load_status(wd, rn)
+        # Also poll while tasks are "queued": covers the race between _do_launch
+        # writing "queued" and the extended_task transitioning to "running".
+        if any(e.get("status") == "queued" for e in status.values()):
+            reactive.invalidate_later(2)
+        return status
 
     # ── task accordion ─────────────────────────────────────────────────────────
     #

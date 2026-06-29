@@ -27,6 +27,7 @@ from reagent_sequences import (
 )
 
 from modules.json_card import json_upload_card as _json_upload_card
+from modules.ui_helpers import compact_file_input
 
 _TAGS_PATH = Path(__file__).parent.parent / "tables" / "tags.tsv"
 _TAGS = load_tags(_TAGS_PATH) if _TAGS_PATH.exists() else {}
@@ -371,7 +372,7 @@ def reagents_server(input, output, session, shared_json, shared_sites):
         if repair == "amplicon":
             tmpl = _template_seq.get()
             children = [
-                ui.input_file(
+                compact_file_input(
                     "pcr_template_file",
                     "Template (FASTA or GenBank)",
                     accept=[".fa", ".fasta", ".fna", ".gb", ".gbk", ".genbank"],

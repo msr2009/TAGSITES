@@ -1,6 +1,7 @@
 """json_card.py — shared JSON-upload card used by Progress, Results, and Reagents tabs."""
 
 from shiny import ui
+from modules.ui_helpers import compact_file_input
 
 
 def json_upload_card(input_id, body_id, title, has_json):
@@ -22,7 +23,7 @@ def json_upload_card(input_id, body_id, title, has_json):
             ),
             ui.div(
                 ui.div(
-                    ui.input_file(input_id, None, accept=[".json"]),
+                    compact_file_input(input_id, "Load JSON", accept=[".json"]),
                     class_="card-body py-2",
                 ),
                 id=body_id,
