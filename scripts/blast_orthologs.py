@@ -14,7 +14,7 @@ from site_selection_util import read_fasta
 # ensure scripts/ is importable when called from the app
 sys.path.insert(0, str(Path(__file__).parent))
 import ebi_rest
-from progress import report as _report, resolve_reporter, poll_adapter
+from progress import report as _report, resolve_reporter, timed_poll_adapter
 from derive_isoforms import derive_isoform_segments
 
 
@@ -61,7 +61,8 @@ def main(fasta_in, email, workingdir, name, output,
         blast_params["taxids"] = str(taxid)
 
     _report(reporter, "Submitting NCBI BLAST job…", stage="blast_submit")
-    blast_job_id = ebi_rest.run_job(ebi_rest.NCBIBLAST, blast_params, poll_cb=poll_adapter(reporter))
+    blast_job_id = ebi_rest.run_job(ebi_rest.NCBIBLAST, blast_params,
+                                    poll_cb=timed_poll_adapter(reporter, stage="blast_submit"))
 
     # fetch JSON result and save to the path the rest of the script expects
     blast_json_bytes = ebi_rest.fetch_result(ebi_rest.NCBIBLAST, blast_job_id, "json")
@@ -226,7 +227,7 @@ def main(fasta_in, email, workingdir, name, output,
         }
         _report(reporter, "Submitting Clustal Omega job…", stage="align_submit")
         clustalo_job_id = ebi_rest.run_job(ebi_rest.CLUSTALO, clustalo_params,
-                                           poll_cb=poll_adapter(reporter))
+                                           poll_cb=timed_poll_adapter(reporter, stage="align_submit"))
         aln_bytes = ebi_rest.fetch_result(ebi_rest.CLUSTALO, clustalo_job_id, "aln-fasta")
         with open(aln_path, "wb") as f:
             f.write(aln_bytes)

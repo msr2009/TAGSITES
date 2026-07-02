@@ -33,7 +33,7 @@ from site_selection_util import get_sequence, uniprot_accession_regex, save_fast
 
 sys.path.insert(0, str(Path(__file__).parent))
 import ebi_rest
-from progress import report as _report, resolve_reporter, poll_adapter
+from progress import report as _report, resolve_reporter, timed_poll_adapter
 
 
 def _uniprot_checksum_lookup(seq, taxid=None):
@@ -41,7 +41,7 @@ def _uniprot_checksum_lookup(seq, taxid=None):
 
     Returns the first matching UniProt accession, or None.
     """
-    checksum = crc64(seq)
+    checksum = crc64(seq).replace("CRC-", "")  # Biopython adds "CRC-" prefix; UniProt expects bare hex
     query = f"checksum:{checksum}"
     if str(taxid) not in ("", "1", "1.0", "None", None):
         query += f" AND taxonomy_id:{taxid}"
@@ -106,7 +106,8 @@ def search_AFDB(fasta_in, email, workingdir, name, taxid, evalue, percentid,
             if str(taxid) not in ("", "1", "1.0"):
                 params["taxids"] = str(taxid)
 
-            blast_job_id = ebi_rest.run_job(ebi_rest.NCBIBLAST, params, poll_cb=poll_adapter(reporter))
+            blast_job_id = ebi_rest.run_job(ebi_rest.NCBIBLAST, params,
+                                            poll_cb=timed_poll_adapter(reporter, stage="afdb_blast"))
             tsv_bytes = ebi_rest.fetch_result(ebi_rest.NCBIBLAST, blast_job_id, "tsv")
 
             tsv_path = f"{outfile_prefix}.ncbiblast.tsv.tsv"

@@ -51,7 +51,7 @@ from Bio.Seq import Seq
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from crispr_util import reverse_complement
 from parse_genewise import parse_genewise_score, cds_coverage, parse_genewise
-from progress import report as _report, resolve_reporter
+from progress import report as _report, resolve_reporter, timed_poll_adapter
 import ebi_rest
 
 # Score / coverage thresholds
@@ -77,11 +77,9 @@ def run_genewise_client(protein_fa, genomic_fa, email, outfile_prefix, report=No
         "gff":       "true",  # embed GFF section in output; required by parse_genewise
     }
 
-    def _cb(job_id, status):
-        _report(reporter, f"Genewise job {job_id}: {status}", stage='genewise_run')
-
     _report(reporter, f"Submitting Genewise job for {os.path.basename(protein_fa)}", stage='genewise_run')
-    job_id = ebi_rest.run_job(ebi_rest.GENEWISE, params, poll_cb=_cb)
+    job_id = ebi_rest.run_job(ebi_rest.GENEWISE, params,
+                              poll_cb=timed_poll_adapter(reporter, stage='genewise_run'))
 
     result_bytes = ebi_rest.fetch_result(ebi_rest.GENEWISE, job_id, "out")
     expected = f"{outfile_prefix}.out.txt"

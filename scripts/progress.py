@@ -61,6 +61,26 @@ def poll_adapter(reporter):
     return _cb
 
 
+def timed_poll_adapter(reporter, stage="ebi_poll", repeat_every=30):
+    """Return a poll_cb with elapsed time; emits on status change or every repeat_every seconds."""
+    import time
+    start = time.time()
+    last_status = [None]
+    last_reported_elapsed = [0]
+
+    def _cb(job_id, status_str):
+        elapsed = int(time.time() - start)
+        changed = status_str != last_status[0]
+        # report on status change, or if same status has persisted past the repeat interval
+        if changed or (elapsed - last_reported_elapsed[0]) >= repeat_every:
+            prefix = "still " if (not changed and elapsed > 0) else ""
+            report(reporter, f"job {job_id}: {prefix}{status_str} ({elapsed}s elapsed)", stage=stage)
+            last_status[0] = status_str
+            last_reported_elapsed[0] = elapsed
+
+    return _cb
+
+
 def parse_line(line):
     """Parse 'HH:MM:SS [stage] message' → (stage, message, level); untagged → ('', line, 'info')."""
     line = line.rstrip("\n")

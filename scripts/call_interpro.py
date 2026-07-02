@@ -24,7 +24,7 @@ from site_selection_util import read_fasta
 
 sys.path.insert(0, str(Path(__file__).parent))
 import ebi_rest
-from progress import report as _report, resolve_reporter, poll_adapter
+from progress import report as _report, resolve_reporter, timed_poll_adapter
 
 
 def main(fasta_in, email, workingdir, clients_folder, outputfile, report=None):
@@ -41,7 +41,8 @@ def main(fasta_in, email, workingdir, clients_folder, outputfile, report=None):
     }
 
     _report(reporter, "Submitting InterProScan5 job…", stage="iprscan_submit")
-    job_id = ebi_rest.run_job(ebi_rest.IPRSCAN5, params, poll_cb=poll_adapter(reporter))
+    job_id = ebi_rest.run_job(ebi_rest.IPRSCAN5, params,
+                              poll_cb=timed_poll_adapter(reporter, stage="iprscan_submit"))
 
     # fetch TSV result and save intermediate file (mirrors old naming: name.interpro.tsv.tsv)
     tsv_bytes = ebi_rest.fetch_result(ebi_rest.IPRSCAN5, job_id, "tsv")
