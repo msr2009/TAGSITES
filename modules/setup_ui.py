@@ -302,6 +302,18 @@ def setup_ui():
                                 class_="btn-sm btn-outline-secondary"),
                             class_="task-type-row",
                         ),
+                        ui.tags.details(
+                            ui.tags.summary(
+                                "Load existing run JSON…",
+                                style=(
+                                    "font-size:0.78rem; color:#6c757d; cursor:pointer; "
+                                    "margin-top:0.5rem; user-select:none;"
+                                ),
+                            ),
+                            compact_file_input("upload_run_json", label="",
+                                accept=[".json"]),
+                            style="margin-top:0.15rem;",
+                        ),
                     ),
                 ),
 

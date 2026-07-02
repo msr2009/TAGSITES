@@ -145,7 +145,7 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
         # record the canonical on-disk path so _save_sites can write back
         wd = json_content["global"].get("working_dir", "")
         rn_str = json_content["global"].get("run_name", "")
-        canon = os.path.join(wd, rn_str + ".json") if wd and rn_str else None
+        canon = os.path.join(wd, rn_str + ".run.json") if wd and rn_str else None
         json_path.set(canon)
 
         # restore previously saved site selection (or start fresh)

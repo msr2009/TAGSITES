@@ -110,7 +110,7 @@ def test_full_pipeline_reagents_tsv(DATA, email, tmp_path):
         }
     }
 
-    json_path = working_dir / "snb-1.json"
+    json_path = working_dir / "snb-1.run.json"
     json_path.write_text(json.dumps(run_json, indent=4))
 
     ret = subprocess.call(

@@ -16,7 +16,7 @@ from shiny import module, reactive, render, ui
 from config import (
     DEFAULT_SPECIES, GLOBAL_TOOLTIPS, TASK_PARAMETERS,
     task_hidden, task_defaults, task_choices, task_tooltips, task_output_suffix,
-    GLOBAL_DEFAULTS,
+    GLOBAL_DEFAULTS, GLOBAL_KEYS,
 )
 from modules.setup_ui import label_with_tip, TASK_DESCRIPTIONS
 from modules.ui_helpers import compact_file_input
@@ -159,6 +159,9 @@ def setup_server(input, output, session, shared_json):
 
     tasks      = reactive.Value([])   # list of in-memory task dicts
     task_snap  = reactive.Value({})   # {task_id: {param: value}} — preserved across re-renders
+
+    # prevents the self-save from re-loading tasks back into the setup form
+    _skip_next_load = [False]
 
     organism_taxid   = reactive.Value("")   # resolved taxid string from organism selection
     _pdb_plddt_valid = reactive.Value(True) # False when uploaded PDB lacks valid pLDDT B-factors
@@ -710,7 +713,7 @@ def setup_server(input, output, session, shared_json):
             return "Requires email, a sequence file or UniProt hit, an analysis name, and at least one task."
         if input.save_analysis() == 0:
             return "Ready — click Save Analysis to write the run configuration."
-        return f"Saved → {input.working_dir()}{input.run_name()}.json"
+        return f"Saved → {input.working_dir()}{input.run_name()}.run.json"
 
     @render.text
     def task_type_desc():
@@ -904,6 +907,80 @@ def setup_server(input, output, session, shared_json):
             class_="task-accordion",
         )
 
+    # ── load run JSON (direct upload in setup tab) ────────────────────────────
+
+    @reactive.effect
+    @reactive.event(input.upload_run_json)
+    def _handle_json_upload():
+        """Store an uploaded run JSON path in shared state (same as other tabs)."""
+        info = input.upload_run_json()
+        if info:
+            shared_json.set(info[0]["datapath"])
+
+    # ── populate setup from any loaded JSON ───────────────────────────────────
+
+    def _tasks_from_run_json(data):
+        """Parse a run-JSON dict into a list of setup task dicts, skipping reagents."""
+        new_tasks = []
+        for tid, entry in data.get("tasks", {}).items():
+            ttype = entry.get("type", "")
+            if not ttype or ttype == "reagents":
+                continue
+            hidden = task_hidden(ttype)
+            raw_args = entry.get("args", {})
+            # strip global keys and internal-only fields
+            params = {
+                p: v for p, v in raw_args.items()
+                if p not in hidden and p not in GLOBAL_KEYS and p != "output"
+            }
+            tips    = task_tooltips(ttype)
+            choices = task_choices(ttype)
+            task = {"id": tid, "name": ttype, "params": params,
+                    "tooltips": tips, "choices": choices, "start_open": False}
+            new_tasks.append(task)
+        return new_tasks
+
+    @reactive.effect
+    @reactive.event(shared_json)
+    def _load_from_shared_json():
+        """Populate setup task cards (and global fields) whenever any tab loads a JSON."""
+        if _skip_next_load[0]:
+            _skip_next_load[0] = False
+            return
+        path = shared_json.get()
+        if not path:
+            return
+        try:
+            with open(path) as f:
+                data = json.load(f)
+        except Exception:
+            return
+        if "tasks" not in data:
+            return   # preset format, not a run JSON — ignore
+
+        gb = data.get("global", {})
+
+        # populate global text fields when present in the JSON
+        if gb.get("email"):
+            ui.update_text("email", value=gb["email"])
+        if gb.get("run_name"):
+            ui.update_text("run_name", value=gb["run_name"])
+        if gb.get("working_dir"):
+            ui.update_text("working_dir", value=gb["working_dir"])
+
+        new_tasks = _tasks_from_run_json(data)
+        _snapshot()
+        for t in new_tasks:
+            _register_remove(t["id"])
+            if t["name"] == "scores":
+                _register_table_upload(t["id"])
+        tasks.set(new_tasks)
+        if new_tasks:
+            ui.notification_show(
+                f"Loaded {len(new_tasks)} task{'s' if len(new_tasks) != 1 else ''} from JSON.",
+                type="message", duration=3,
+            )
+
     # ── save analysis ─────────────────────────────────────────────────────────
 
     @reactive.effect
@@ -1012,8 +1089,9 @@ def setup_server(input, output, session, shared_json):
             reagents_entry = reagents_entry,
         )
 
-        out_path = f"{wd}{rn}.json"
+        out_path = f"{wd}{rn}.run.json"
         with open(out_path, "w") as f:
             json.dump(run_json, f, indent=4)
 
+        _skip_next_load[0] = True
         shared_json.set(out_path)

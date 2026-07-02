@@ -47,7 +47,7 @@ changing task types. The app reads it at startup via `scripts/task_registry.py`.
 
 ---
 
-### 2. `{working_dir}{run_name}.json` — per-run state (written by the app / CLI)
+### 2. `{working_dir}{run_name}.run.json` — per-run state (written by the app / CLI)
 
 Stores only what changes per run. No tooltips, no choices, no script names,
 no global keys copied per-task.

@@ -163,8 +163,8 @@ def main(json_input_file, force=False):
                         v["args"]["existing_AF2"] = 0
                         v["args"]["pdb"] = af2_pdb
 
-                orig_json_path = os.path.join(working_dir, run_name + ".json")
-                user_json_path = os.path.join(working_dir, "user_" + run_name + ".json")
+                orig_json_path = os.path.join(working_dir, run_name + ".run.json")
+                user_json_path = os.path.join(working_dir, "user_" + run_name + ".run.json")
                 if os.path.exists(orig_json_path):
                     os.rename(orig_json_path, user_json_path)
                 _write_json(json_input_file, global_args, tasks)
