@@ -26,6 +26,14 @@ from reagent_sequences import (
     load_tags,
     truncate_arms,
 )
+from plasmid_assembly import (
+    OLIGO_MAX,
+    SAPI_SITE,
+    SAPI_RC,
+    SAPTRAP_OVERHANGS,
+    build_saptrap_site,
+    find_internal_sapi,
+)
 
 from modules.json_card import json_upload_card as _json_upload_card
 from modules.ui_helpers import compact_file_input
@@ -34,7 +42,7 @@ _TAGS_PATH = Path(__file__).parent.parent / "tables" / "tags.tsv"
 _TAGS = load_tags(_TAGS_PATH) if _TAGS_PATH.exists() else {}
 
 # Arm-length defaults by repair type
-_ARM_DEFAULTS = {"ha": 1000, "ssodn": 50, "amplicon": 50, "plasmid": 500}
+_ARM_DEFAULTS = {"ha": 1000, "ssodn": 50, "amplicon": 50, "plasmid": 57}
 
 
 def _safe_id(s):
@@ -386,12 +394,6 @@ def reagents_server(input, output, session, shared_json, shared_sites):
 
         if repair == "ssodn":
             return ui.div(
-                ui.input_checkbox("consider_strand", "Consider repair strand",
-                                  value=True),
-                ui.p("When checked: if the guide cut is 5′ of the insertion site "
-                     "the ssODN is reverse-complemented to place the insert on "
-                     "the strand used by the repair machinery.",
-                     class_="section-hint"),
                 ui.output_ui("ssodn_len_warning"),
             )
 
@@ -422,27 +424,54 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                     "5′ phosphorylate one primer (lambda-exo single-strand degradation)",
                     value=False,
                 ),
+                ui.hr(style="margin: 0.5rem 0;"),
+                ui.p("Optional 5′ extensions (e.g. Gibson assembly overhangs, "
+                     "restriction sites, SapI tails). Prepended to the arm overhang.",
+                     class_="section-hint"),
+                ui.input_text("pcr_fwd_ext", "Forward primer 5′ extension", value="",
+                              placeholder="e.g. AAACCCGGG"),
+                ui.input_text("pcr_rev_ext", "Reverse primer 5′ extension", value="",
+                              placeholder="e.g. TTTGGGCCC"),
             ]
             return ui.div(*children)
 
-        # TODO: implement plasmid donor design
-        # UI radio button is in reagents_ui.py repair_type choices — the "plasmid" key.
-        # This branch should render a plasmid backbone selector and generate a donor map.
         if repair == "plasmid":
             df = sites_df()
-            c3_count = 0
-            total_count = 0
-            if df is not None:
-                total_count = len(df)
-                c3_count = int(df["spacer"].str.upper().str[-1:].eq("C").sum())
-            children = [ui.p("Plasmid donor design coming soon.", class_="section-hint")]
-            if c3_count > 0:
-                children.append(ui.div(
-                    "⚠ {}/{} candidate guides for the selected sites end in 3′C "
-                    "and will not express efficiently from plasmid.".format(
-                        c3_count, total_count),
-                    class_="ts-warn",
-                ))
+            children = []
+
+            # ── arm-length mode hint ─────────────────────────────────────────
+            try:
+                arm_len = int(input.arm_length())
+            except Exception:
+                arm_len = None
+            if arm_len is not None:
+                if arm_len <= OLIGO_MAX:
+                    mode_msg = (
+                        "Arms ≤ {} bp → ordered as annealed oligo pairs (no PCR).".format(OLIGO_MAX)
+                    )
+                else:
+                    mode_msg = (
+                        "Arms {} bp > {} bp → PCR primers with SapI sites will be designed.".format(
+                            arm_len, OLIGO_MAX)
+                    )
+                children.append(ui.p(mode_msg, class_="section-hint"))
+
+            # ── Tm target (shown only for PCR-arm mode) ───────────────────────
+            if arm_len is not None and arm_len > OLIGO_MAX:
+                children.append(
+                    ui.input_numeric("saptrap_tm", "Primer binding Tm target (°C)",
+                                     value=60, min=40, max=80)
+                )
+
+            # ── optional GenBank output ──────────────────────────────────────
+            children.append(
+                ui.input_checkbox(
+                    "saptrap_genbank",
+                    "Generate ApE-compatible GenBank files",
+                    value=False,
+                )
+            )
+
             return ui.div(*children)
 
         return ui.span()   # ha: no extra options
@@ -554,6 +583,30 @@ def reagents_server(input, output, session, shared_json, shared_sites):
 
     # ── private helpers ───────────────────────────────────────────────────────
 
+    def _arm_sapi_html(seq, label):
+        """HTML for an arm sequence with SapI recognition sites highlighted in red."""
+        from html import escape as _esc
+        seq_up = seq.upper()
+        sites = set()
+        for site_str in [SAPI_SITE, SAPI_RC]:
+            i = 0
+            while True:
+                p = seq_up.find(site_str, i)
+                if p == -1:
+                    break
+                for k in range(p, p + 7):
+                    sites.add(k)
+                i = p + 1
+
+        parts = [_esc(label) + ': <code>']
+        for i, ch in enumerate(seq):
+            if i in sites:
+                parts.append('<span style="color:#c0392b;font-weight:bold">' + _esc(ch) + '</span>')
+            else:
+                parts.append(_esc(ch))
+        parts.append('</code>')
+        return ''.join(parts)
+
     def _build_guide_divs(site_rows, rid, content, recut_risk):
         """Build guide-panel divs for one tag site.
 
@@ -566,10 +619,11 @@ def reagents_server(input, output, session, shared_json, shared_sites):
         n_extra   = len(rows_list) - 1
 
         def _one_panel(row, i):
-            gid  = str(row["guide_id"])
-            cid  = "sel_{}_{}".format(rid, _safe_id(gid))
-            dist = int(row["distance"])
-            best = i == 0
+            gid    = str(row["guide_id"])
+            cid    = "sel_{}_{}".format(rid, _safe_id(gid))
+            dist   = int(row["distance"])
+            spacer = str(row["spacer"]).upper()
+            best   = i == 0
 
             cached = content.get(gid, {})
             diag_text = cached.get("diagram", "")
@@ -604,6 +658,55 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                 ) if recut_risk.get(gid, False) else ui.span()
             )
 
+            # per-guide plasmid-specific warnings (shown inline in the guide card)
+            plasmid_warnings = []
+            try:
+                repair = input.repair_type()
+            except Exception:
+                repair = ""
+            if repair == "plasmid":
+                # 3'C guide expression warning
+                if spacer.endswith("C"):
+                    plasmid_warnings.append(
+                        "guide contains 3′C and may be inefficient when expressed from a plasmid"
+                    )
+                # SapI domestication warning for spacer and arms
+                for seq_label, seq_val in [
+                    ("spacer", spacer),
+                    ("5′ HA", cached.get("left", "")),
+                    ("3′ HA", cached.get("right", "")),
+                ]:
+                    if seq_val and find_internal_sapi(seq_val):
+                        plasmid_warnings.append(
+                            "internal SapI site in {} — must domesticate before assembly".format(seq_label)
+                        )
+            plasmid_warning_div = (
+                ui.div(
+                    *[ui.div("⚠ " + msg, class_="ts-warn") for msg in plasmid_warnings]
+                ) if plasmid_warnings else ui.span()
+            )
+
+            # arm sequence display with SapI sites highlighted (SapTrap mode only)
+            arm_sapi_display = ui.span()
+            if repair == "plasmid":
+                arm_divs = []
+                for arm_label, arm_seq, is_left in [
+                    ("5′ HA", cached.get("left", ""), True),
+                    ("3′ HA", cached.get("right", ""), False),
+                ]:
+                    if arm_seq and find_internal_sapi(arm_seq):
+                        short = len(arm_seq) <= OLIGO_MAX
+                        note = "(auto-domesticated in oligo)" if short else "(include mutation in inner primer)"
+                        arm_divs.append(ui.div(
+                            ui.HTML(_arm_sapi_html(arm_seq, arm_label)),
+                            ui.span(" " + note, style="color:#888;font-size:0.85em"),
+                        ))
+                if arm_divs:
+                    arm_sapi_display = ui.div(
+                        *arm_divs,
+                        style="font-size:0.85em;margin:0.25rem 0;",
+                    )
+
             meta_cells = []
             for label, val in [
                 ("Spacer", str(row["spacer"])),
@@ -621,10 +724,12 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                     ui.input_checkbox(cid, "Use this guide", value=best),
                     ui.span("Guide {}".format(i + 1), class_="fw-semibold"),
                     ui.span("{} bp from cut to insert".format(dist), class_="dist-badge"),
+                    plasmid_warning_div,
                     class_="guide-header",
                 ),
                 arm_clip_warning,
                 recut_warning,
+                arm_sapi_display,
                 diagram_content,
                 ui.div(*meta_cells, class_="param-grid mt-2"),
                 class_="guide-panel{}".format(" guide-best" if best else ""),
@@ -736,17 +841,12 @@ def reagents_server(input, output, session, shared_json, shared_sites):
         insert = _insert_seq()
         tag    = _insert_tag_name()
         lines  = ["name\tsequence"]
-        consider = True
-        try:
-            consider = input.consider_strand()
-        except Exception:
-            pass
         for row, left, right in _selected_rows():
             base = '{}_{}_{}'.format(rn, _guide_label(row), tag)
             cut  = int(row['cut_pos'])
             ins  = int(row['insert_pos'])
             if repair == 'ssodn':
-                seq, _, _ = build_ssodn(left, right, insert, cut, ins, consider)
+                seq, _, _ = build_ssodn(left, right, insert, cut, ins, True)
                 lines.append('{}_repair\t{}'.format(base, seq))
             elif repair == 'amplicon':
                 # prefer text area (may have manual edits), fall back to file-loaded value
@@ -771,20 +871,81 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                     (_, fwd), (_, rev) = design_pcr_primers(
                         left, right, template, tm, phos, cut, ins
                     )
+                    fwd_ext = ''
+                    rev_ext = ''
+                    try:
+                        fwd_ext = input.pcr_fwd_ext().strip().upper()
+                    except Exception:
+                        pass
+                    try:
+                        rev_ext = input.pcr_rev_ext().strip().upper()
+                    except Exception:
+                        pass
+                    if fwd_ext:
+                        fwd = fwd_ext + fwd
+                    if rev_ext:
+                        rev = rev_ext + rev
                     lines.append('{}_F\t{}'.format(base, fwd))
                     lines.append('{}_R\t{}'.format(base, rev))
         return '\n'.join(lines) + '\n' if len(lines) > 1 else None
 
+    def _assemble_saptrap_tsv():
+        """[runname]_saptrap-oligos.tsv: sgRNA oligos + 5'HA + 3'HA oligos/primers.
+
+        Returns (tsv_text, genbank_records) where genbank_records is a list of
+        (filename, SeqRecord) pairs (empty list when GenBank option is off).
+        """
+        rn = run_name.get() or 'run'
+        tm = 60.0
+        try:
+            tm = float(input.saptrap_tm())
+        except Exception:
+            pass
+        do_gb = False
+        try:
+            do_gb = bool(input.saptrap_genbank())
+        except Exception:
+            pass
+
+        lines = ["name\tsequence\tkind\tnotes"]
+        gb_pairs = []   # list of (filename, SeqRecord)
+        for row, left, right in _selected_rows():
+            oligo_rows, records = build_saptrap_site(
+                row, left, right, tm_target=tm, genbank=do_gb
+            )
+            for orow in oligo_rows:
+                lines.append("{}\t{}\t{}\t{}".format(
+                    orow["name"], orow["sequence"],
+                    orow.get("kind", ""), orow.get("notes", "")))
+            for rec in records:
+                gb_pairs.append((
+                    "{}_{}_saptrap.gb".format(rn, rec.id), rec
+                ))
+
+        tsv_text = '\n'.join(lines) + '\n' if len(lines) > 1 else None
+        return tsv_text, gb_pairs
+
     def _build_zip():
         """Produce ZIP bytes: always HA + guides TSVs; oligos when applicable."""
         import zipfile as _zf
+        from Bio import SeqIO
+        repair = input.repair_type()
         rn  = run_name.get() or 'run'
         buf = io.BytesIO()
         with _zf.ZipFile(buf, 'w', _zf.ZIP_DEFLATED) as zf:
             zf.writestr('{}_homology-arms.tsv'.format(rn), _assemble_ha_tsv())
             zf.writestr('{}_guides.tsv'.format(rn),        _assemble_guides_tsv())
-            oligos = _assemble_oligos_tsv()
-            if oligos:
-                zf.writestr('{}_oligos.tsv'.format(rn), oligos)
+            if repair == 'plasmid':
+                tsv_text, gb_pairs = _assemble_saptrap_tsv()
+                if tsv_text:
+                    zf.writestr('{}_saptrap-oligos.tsv'.format(rn), tsv_text)
+                for fname, rec in gb_pairs:
+                    gb_buf = io.StringIO()
+                    SeqIO.write(rec, gb_buf, "genbank")
+                    zf.writestr(fname, gb_buf.getvalue())
+            else:
+                oligos = _assemble_oligos_tsv()
+                if oligos:
+                    zf.writestr('{}_oligos.tsv'.format(rn), oligos)
         buf.seek(0)
         return buf.read()

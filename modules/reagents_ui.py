@@ -102,9 +102,7 @@ def reagents_ui():
                             "ha":       "Homology arm only",
                             "ssodn":    "ssODN",
                             "amplicon": "Amplicon (PCR)",
-                            # TODO: implement plasmid donor design
-                            # Server stub is in reagents_server.py repair_options() — the "plasmid" branch.
-                            "plasmid":  "Plasmid (coming soon)",
+                            "plasmid":  "SapTrap donor",
                         },
                         selected="ha",
                         inline=True,
