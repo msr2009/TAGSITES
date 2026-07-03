@@ -482,9 +482,24 @@ def setup_server(input, output, session, shared_json):
 
         # prefer reviewed (SwissProt) entries when available — they have curated isoform
         # annotations via ALTERNATIVE PRODUCTS; only include unreviewed (TrEMBL) entries
-        # when no reviewed entry exists (e.g. unc-44 which is entirely unreviewed)
+        # when no reviewed entry exists (e.g. unc-44 which is entirely unreviewed).
+        # Exception: always keep TrEMBL entries whose primary gene name exactly matches
+        # the query — otherwise e.g. searching "rab-5" drops the TrEMBL P91857 entry
+        # because a reviewed RAB family member also appears in the results.
         reviewed_hits = [h for h in all_hits if h["reviewed"]]
-        base_hits = reviewed_hits if reviewed_hits else all_hits
+        if reviewed_hits:
+            exact_unreviewed = [h for h in all_hits
+                                if not h["reviewed"] and h["gene"].lower() == q.lower()]
+            base_hits = reviewed_hits + exact_unreviewed
+        else:
+            base_hits = all_hits
+
+        # exact gene name matches first, then reviewed, then the rest
+        def _hit_sort_key(h):
+            exact = h["gene"].lower() != q.lower()   # False (0) sorts before True (1)
+            return (exact, not h["reviewed"])
+
+        base_hits.sort(key=_hit_sort_key)
 
         # expand curated isoforms (entries with ALTERNATIVE PRODUCTS comment, e.g. TP53)
         seen = {}
