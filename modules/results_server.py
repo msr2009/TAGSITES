@@ -166,16 +166,19 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
         if not info:
             return
         path = info[0]["datapath"]
-        try:
-            with open(path) as f:
-                json.load(f)
-        except FileNotFoundError:
-            ui.notification_show("Uploaded file not found.", type="error", duration=6)
-            return
-        except json.JSONDecodeError:
-            ui.notification_show("Could not parse JSON — file may be malformed.",
-                                 type="error", duration=6)
-            return
+        # bundle ZIPs are valid — the interceptor in server.py handles extraction
+        from utils.bundle import is_bundle_zip
+        if not is_bundle_zip(path):
+            try:
+                with open(path) as f:
+                    json.load(f)
+            except FileNotFoundError:
+                ui.notification_show("Uploaded file not found.", type="error", duration=6)
+                return
+            except json.JSONDecodeError:
+                ui.notification_show("Could not parse JSON — file may be malformed.",
+                                     type="error", duration=6)
+                return
         shared_json.set(path)
 
     @reactive.effect

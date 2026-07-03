@@ -7,12 +7,13 @@ All data-shaping is delegated to progress_logic.py.
 """
 
 import asyncio
-import io
 import json
 import os
 import sys
-import zipfile
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from utils.bundle import make_bundle
 
 from shiny import module, reactive, render, ui
 
@@ -398,28 +399,9 @@ def progress_server(input, output, session, shared_json, shared_results_trigger)
 
     @render.download(filename=lambda: f"{run_name.get() or 'results'}.zip")
     def download_results():
-        """Zip all completed output files plus run and status JSON."""
-        tasks  = task_list.get()
-        status = _current_status()
-        wd, rn = working_dir.get(), run_name.get()
-
-        buf = io.BytesIO()
-        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-            # run JSON
-            json_path = shared_json.get()
-            if json_path and os.path.exists(json_path):
-                zf.write(json_path, os.path.basename(json_path))
-            # status JSON
-            if wd and rn:
-                sp = _run_status.status_path(wd, rn)
-                if os.path.exists(sp):
-                    zf.write(sp, os.path.basename(sp))
-            # task output files
-            for t in tasks:
-                entry = status.get(t["id"], {})
-                if entry.get("status") == "success":
-                    out = t.get("output", "")
-                    if out and os.path.exists(out):
-                        zf.write(out, os.path.basename(out))
-        buf.seek(0)
-        yield buf.read()
+        """Produce a complete portable bundle (run JSON + all outputs + companions)."""
+        json_path = shared_json.get()
+        if json_path and os.path.exists(json_path):
+            yield make_bundle(json_path)
+        else:
+            yield b""
