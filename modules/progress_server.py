@@ -398,12 +398,23 @@ def progress_server(input, output, session, shared_json, shared_results_trigger)
 
     @render.download(filename=lambda: f"{run_name.get() or 'results'}.zip")
     def download_results():
-        """Zip all completed output files and stream to the browser."""
+        """Zip all completed output files plus run and status JSON."""
         tasks  = task_list.get()
         status = _current_status()
+        wd, rn = working_dir.get(), run_name.get()
 
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            # run JSON
+            json_path = shared_json.get()
+            if json_path and os.path.exists(json_path):
+                zf.write(json_path, os.path.basename(json_path))
+            # status JSON
+            if wd and rn:
+                sp = _run_status.status_path(wd, rn)
+                if os.path.exists(sp):
+                    zf.write(sp, os.path.basename(sp))
+            # task output files
             for t in tasks:
                 entry = status.get(t["id"], {})
                 if entry.get("status") == "success":

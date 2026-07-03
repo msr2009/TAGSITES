@@ -79,9 +79,8 @@ def reagents_server(input, output, session, shared_json, shared_sites):
     selected_guides  = reactive.Value({})     # {residue_index (int): set(guide_id)}
     _template_seq    = reactive.Value("")     # PCR template, persists across repair-type switches
 
-    # plain mutable cell: stores tsv_path without creating a reactive dependency
-    # so that _poll_for_tsv can read it without re-triggering on every path write
-    _tsv_path_cache = [""]
+    # reactive path cell: drives _poll_for_tsv even when reagents_df stays None
+    _tsv_path_cache = reactive.Value("")
 
     # ── populate tag dropdown once at session start ───────────────────────────
 
@@ -139,7 +138,7 @@ def reagents_server(input, output, session, shared_json, shared_sites):
         stored_arm_len.set(s_arm)
 
         tsv_path = reagent_args.get("output", "")
-        _tsv_path_cache[0] = tsv_path   # always store so the poll effect can find it
+        _tsv_path_cache.set(tsv_path)   # reactive set so _poll_for_tsv re-fires
         if tsv_path and os.path.exists(tsv_path):
             df = pd.read_csv(tsv_path, sep='\t')
             df["guide_id"] = (
@@ -179,7 +178,7 @@ def reagents_server(input, output, session, shared_json, shared_sites):
         """
         if reagents_df.get() is not None:
             return
-        path = _tsv_path_cache[0]
+        path = _tsv_path_cache.get()
         if not path:
             return
         reactive.invalidate_later(2.0)   # schedule next check before file test
