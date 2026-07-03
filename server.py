@@ -1,11 +1,14 @@
+import asyncio
 import io
+import json
 import os
 import shutil
+import sys
 import tempfile
 import zipfile
 from pathlib import Path
 
-from shiny import reactive, render
+from shiny import reactive, render, ui
 
 from modules.setup_server import setup_server
 from modules.progress_server import progress_server
@@ -47,12 +50,14 @@ def app_server(input, output, session):
 
     @reactive.effect
     @reactive.event(shared_values)
-    def _handle_bundle_upload():
-        """Intercept bundle ZIP uploads: extract into a session temp dir and rebase paths.
+    async def _handle_bundle_upload():
+        """Intercept bundle ZIP uploads: extract, rebase, and re-run reagents if missing.
 
-        When any tab sets shared_values to a bundle ZIP path, this effect extracts
-        the bundle into a session-scoped temp dir, rewrites the run JSON's path fields
-        to point there, and updates shared_values to the rewritten JSON path.
+        When any tab sets shared_values to a bundle ZIP path, this effect:
+        1. Extracts the bundle into a session-scoped temp dir and rewrites all paths.
+        2. If the reagents TSV is absent but genewise output files are present, patches
+           the reagents args to point at them so the runner skips the slow EBI step.
+        3. Runs the reagents task in a thread if the TSV still doesn't exist.
         Non-ZIP uploads (bare run JSON files) pass through unchanged.
         The loop cannot repeat: the rewritten JSON path is not a ZIP.
         """
@@ -61,12 +66,46 @@ def app_server(input, output, session):
             return
         try:
             new_path = extract_and_rebase(path, _get_session_dir())
-            shared_values.set(new_path)
         except Exception as exc:
-            from shiny import ui as _ui
-            _ui.notification_show(
-                f"Could not extract bundle: {exc}", type="error", duration=8
-            )
+            ui.notification_show(f"Could not extract bundle: {exc}",
+                                 type="error", duration=8)
+            return
+
+        # check if the reagents TSV was included; if not, re-run the task
+        try:
+            j = json.load(open(new_path))
+            reagents_task = j.get("tasks", {}).get("REAGENTS_reagents")
+            if reagents_task:
+                args    = reagents_task.get("args", {})
+                tsv_out = args.get("output", "")
+                if tsv_out and not os.path.exists(tsv_out):
+                    # patch genewise paths if available so the runner skips the EBI call
+                    wd = j["global"].get("working_dir", "")
+                    rn = j["global"].get("run_name", "")
+                    gw_out = os.path.join(wd, f"{rn}_genewise.genewise.out.txt")
+                    gw_fa  = os.path.join(wd, f"{rn}_genewise.genewise_genomic.fa")
+                    if os.path.exists(gw_out) and os.path.exists(gw_fa):
+                        args = dict(args, genewise=gw_out, genomic_fasta=gw_fa)
+
+                    ui.notification_show("Reagents TSV not in bundle — recomputing…",
+                                         type="message", duration=5)
+                    sys.path.insert(0, str(Path(__file__).parent / "scripts"))
+                    from task_runners import run_reagents
+                    loop = asyncio.get_running_loop()
+                    await loop.run_in_executor(None, lambda: run_reagents(args))
+                    if os.path.exists(tsv_out):
+                        ui.notification_show("Reagents recomputed.", type="message", duration=4)
+                        shared_results_trigger.set(shared_results_trigger.get() + 1)
+                    else:
+                        ui.notification_show(
+                            "Reagents recompute failed — run the Reagents task manually.",
+                            type="warning", duration=8,
+                        )
+        except Exception as exc:
+            ui.notification_show(f"Reagents check failed: {exc}",
+                                 type="warning", duration=6)
+
+        shared_values.set(new_path)
 
     setup_server("setup", shared_json=shared_values)
     progress_server("progress", shared_json=shared_values,

@@ -83,6 +83,13 @@ def bundle_file_map(run_json_path):
             if aln.endswith(".aln"):
                 _add(aln[:-len(".aln")] + ".png")
 
+    # genewise outputs: allow fast reagents re-run after bundle restore
+    # (stored at {wd}{rn}_genewise.* regardless of what the reagents args say)
+    if wd and rn:
+        pfx = os.path.join(wd, f"{rn}_genewise")
+        for suffix in (".genewise.out.txt", ".genewise_genomic.fa"):
+            _add(pfx + suffix)
+
     return files
 
 
