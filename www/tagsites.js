@@ -1061,6 +1061,23 @@
   });
 
   // Update task log textareas in-place so scroll position and user-resize are preserved.
+  // Show a spinner next to the file input when a .zip bundle is selected.
+  document.addEventListener("change", function (e) {
+    var inp = e.target;
+    if (inp.type !== "file" || !inp.files || !inp.files.length) return;
+    var cardBody = inp.closest(".card-body");
+    if (!cardBody) return;
+    var spinner = cardBody.querySelector(".ts-bundle-spinner");
+    if (!spinner) return;
+    spinner.style.display = inp.files[0].name.toLowerCase().endsWith(".zip") ? "flex" : "none";
+  });
+
+  Shiny.addCustomMessageHandler("tagsites_bundle_done", function (msg) {
+    document.querySelectorAll(".ts-bundle-spinner").forEach(function (el) {
+      el.style.display = "none";
+    });
+  });
+
   Shiny.addCustomMessageHandler("tagsites_update_logs", function (msg) {
     (msg.updates || []).forEach(function (u) {
       var el = document.getElementById(u.id);

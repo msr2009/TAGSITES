@@ -69,6 +69,7 @@ def app_server(input, output, session):
         except Exception as exc:
             ui.notification_show(f"Could not extract bundle: {exc}",
                                  type="error", duration=8)
+            await session.send_custom_message("tagsites_bundle_done", {})
             return
 
         # check if the reagents TSV was included; if not, re-run the task
@@ -105,6 +106,7 @@ def app_server(input, output, session):
             ui.notification_show(f"Reagents check failed: {exc}",
                                  type="warning", duration=6)
 
+        await session.send_custom_message("tagsites_bundle_done", {})
         shared_values.set(new_path)
 
     setup_server("setup", shared_json=shared_values)
