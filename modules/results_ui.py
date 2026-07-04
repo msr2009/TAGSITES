@@ -19,16 +19,16 @@ def results_ui():
             ui.div(
                 # pan / set-region / zoom-in / zoom-out / reset toolbar
                 ui.div(
-                    ui.tags.button("✥", onclick="tsSetMode('pan')",
-                                   class_="btn btn-sm ts-mode-btn", title="Pan"),
-                    ui.tags.button("⬚", onclick="tsSetMode('zoom')",
-                                   class_="btn btn-sm ts-mode-btn ts-mode-active", title="Set region"),
-                    ui.tags.button("⊕", onclick="tsZoomIn()",
-                                   class_="btn btn-sm ts-mode-btn", title="Zoom in"),
-                    ui.tags.button("⊖", onclick="tsZoomOut()",
-                                   class_="btn btn-sm ts-mode-btn", title="Zoom out"),
-                    ui.tags.button("⟳", onclick="tsResetZoom()",
-                                   class_="btn btn-sm btn-outline-secondary", title="Reset zoom"),
+                    ui.tags.button("✥ Pan", onclick="tsSetMode('pan')",
+                                   class_="btn btn-sm ts-mode-btn"),
+                    ui.tags.button("[ ] Set region", onclick="tsSetMode('zoom')",
+                                   class_="btn btn-sm ts-mode-btn ts-mode-active"),
+                    ui.tags.button("⊕ Zoom in", onclick="tsZoomIn()",
+                                   class_="btn btn-sm ts-mode-btn"),
+                    ui.tags.button("⊖ Zoom out", onclick="tsZoomOut()",
+                                   class_="btn btn-sm ts-mode-btn"),
+                    ui.tags.button("↻ Reset", onclick="tsResetZoom()",
+                                   class_="btn btn-sm ts-mode-btn"),
                     class_="ts-plot-toolbar",
                 ),
                 ui.div(
