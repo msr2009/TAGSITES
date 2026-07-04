@@ -10,3 +10,4 @@ shiny
 shinywidgets
 xmltramp2
 ridgeplot
+reportlab
