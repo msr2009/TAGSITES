@@ -476,14 +476,14 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
 
     @render.ui
     def alignments_container():
-        """Render blast alignment PNGs as collapsible accordion panes."""
+        """Render blast alignment PDFs as collapsible accordion panes."""
         alns = aln_meta.get()
         if not alns:
             return ui.div()
 
         panels = []
         for aln_path, task_name, params in alns:
-            png_path = aln_path.removesuffix(".aln") + ".png"
+            pdf_path = aln_path.removesuffix(".aln") + ".pdf"
 
             param_rows = [
                 ui.tags.tr(ui.tags.td(k), ui.tags.td(str(v)))
@@ -494,22 +494,21 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
                 class_="ts-aln-params",
             ) if param_rows else ui.div()
 
-            if os.path.exists(png_path):
-                with open(png_path, "rb") as f:
+            if os.path.exists(pdf_path):
+                with open(pdf_path, "rb") as f:
                     b64 = base64.b64encode(f.read()).decode("ascii")
-                img = ui.tags.img(
-                    src=f"data:image/png;base64,{b64}",
-                    style="height:auto; display:block;",
+                embed = ui.tags.iframe(
+                    src=f"data:application/pdf;base64,{b64}",
+                    style="width:100%; height:400px; border:none;",
                 )
                 body = ui.div(
                     param_table,
-                    ui.div(img, class_="ts-aln-svg-wrap",
-                           style="overflow-x:auto; overflow-y:hidden;"),
+                    ui.div(embed, class_="ts-aln-svg-wrap"),
                 )
             else:
                 body = ui.div(
                     param_table,
-                    ui.p(f"Alignment image not found: {os.path.basename(png_path)}",
+                    ui.p(f"Alignment image not found: {os.path.basename(pdf_path)}",
                          style="color:#c00;"),
                 )
 

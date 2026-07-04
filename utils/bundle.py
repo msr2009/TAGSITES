@@ -2,7 +2,7 @@
 
 A bundle is a flat ZIP holding everything needed to restore a run on any
 instance (local or shinyapps.io): the run JSON, its status JSON, the query
-FASTA/PDB, every task output plus companions (.aln/.png/.isoforms/.sasa),
+FASTA/PDB, every task output plus companions (.aln/.pdf/.isoforms/.sasa),
 and the reagents TSV.
 
 Restore works by extracting the bundle into a directory and rewriting the
@@ -81,7 +81,7 @@ def bundle_file_map(run_json_path):
         if analysis == "blast":
             aln = companion_path(output, analysis, "alignment")
             if aln.endswith(".aln"):
-                _add(aln[:-len(".aln")] + ".png")
+                _add(aln[:-len(".aln")] + ".pdf")
 
     # genewise outputs: allow fast reagents re-run after bundle restore
     # (stored at {wd}{rn}_genewise.* regardless of what the reagents args say)

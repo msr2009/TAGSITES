@@ -247,10 +247,9 @@ def main(fasta_in, email, workingdir, name, output,
     except Exception:
         _report(reporter, "Rendering alignment image…", stage="align_img")
 
-    # import in-process (no subprocess needed; build_heatmap_images.py is a local script)
     try:
-        import build_heatmap_images
-        build_heatmap_images.plot_alignment_matrix_matplotlib(aln_path)
+        import build_heatmap_reportlab
+        build_heatmap_reportlab.plot_alignment_reportlab(aln_path)
         _report(reporter, "Alignment image saved.", stage="align_img")
     except Exception as e:
         _report(reporter, f"alignment image generation failed: {e}", stage="align_img", level="warning")
