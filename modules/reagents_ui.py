@@ -29,8 +29,8 @@ _STYLE = """
     .accordion-body   { padding: 0.5rem 0.75rem; }
     .card-body        { padding: 0.45rem 0.75rem; }
     .card             { margin-bottom: 0.4rem; }
-    .reagents-accordion .accordion-button { background: #f0f4ff; color: #212529; }
-    .reagents-accordion .accordion-button:not(.collapsed) { background: #dde4f8; }
+    .reagents-accordion .accordion-button { background: #e9ecef; color: #212529; }
+    .reagents-accordion .accordion-button:not(.collapsed) { background: #dee2e6; }
 
     /* guide sub-panels */
     .guide-panel { border: 1px solid #adb5bd; border-radius: 4px;

@@ -660,6 +660,8 @@ def setup_server(input, output, session, shared_json):
             return f"Using UniProt {hit['accession']} ({hit['gene'] or hit['organism']}){pdb_note}"
         if input.input_file():
             return "Using uploaded file"
+        if input.protein_seq_paste().strip():
+            return "Using pasted sequence"
         return "No sequence selected yet."
 
     # ── preset refresh (called after saving a new preset) ────────────────────
@@ -695,7 +697,11 @@ def setup_server(input, output, session, shared_json):
     @reactive.calc
     def _ready():
         """True when all required fields for Save Analysis are present."""
-        has_sequence = bool(input.input_file()) or _selected_hit() is not None
+        has_sequence = (
+            bool(input.input_file())
+            or _selected_hit() is not None
+            or bool(input.protein_seq_paste().strip())
+        )
         return (
             bool(input.email())
             and has_sequence
@@ -1003,8 +1009,9 @@ def setup_server(input, output, session, shared_json):
     def _save_analysis():
         """Write the run JSON and publish its path via shared_json.
 
-        Protein-source precedence: UniProt hit > uploaded file.
-        Both branches produce (input_file, pdb_path, pdb_is_valid_plddt).
+        Protein-source precedence: UniProt hit > uploaded file > pasted sequence.
+        Genomic-source precedence: uploaded file > pasted sequence.
+        All branches produce (input_file, pdb_path, pdb_is_valid_plddt).
         """
         wd    = input.working_dir()
         rn    = input.run_name()
@@ -1029,7 +1036,7 @@ def setup_server(input, output, session, shared_json):
                 pdb_path = pdb_dest
             # AFDB structures always carry valid pLDDT B-factors
             pdb_is_valid_plddt = bool(pdb_path)
-        else:
+        elif input.input_file():
             # upload branch: copy protein file to working dir (existing logic)
             tmp_protein = Path(input.input_file()[0]["datapath"])
             ext = ".pdb" if tmp_protein.suffix.lower() == ".pdb" else ".fa"
@@ -1044,6 +1051,16 @@ def setup_server(input, output, session, shared_json):
                 save_fasta(Path(pdb_path).stem, get_sequence(pdb_path), fasta_dest)
                 input_file = fasta_dest
             pdb_is_valid_plddt = _pdb_plddt_valid()
+        else:
+            # pasted sequence branch
+            raw = input.protein_seq_paste().strip()
+            fasta_dest = wd + rn + ".fa"
+            seq = raw if raw.startswith(">") else f">{rn}\n{raw}"
+            with open(fasta_dest, "w") as f:
+                f.write(seq + "\n")
+            input_file = fasta_dest
+            pdb_path = ""
+            pdb_is_valid_plddt = False
 
         # ── copy optional genomic FASTA ───────────────────────────────────────
         genomic_path = ""
@@ -1051,6 +1068,13 @@ def setup_server(input, output, session, shared_json):
             tmp_gen = Path(input.input_genomic()[0]["datapath"])
             genomic_dest = wd + rn + ".genomic" + tmp_gen.suffix
             shutil.copy(tmp_gen, genomic_dest)
+            genomic_path = genomic_dest
+        elif input.genomic_seq_paste().strip():
+            raw_gen = input.genomic_seq_paste().strip()
+            genomic_dest = wd + rn + ".genomic.fa"
+            seq_gen = raw_gen if raw_gen.startswith(">") else f">{rn}_genomic\n{raw_gen}"
+            with open(genomic_dest, "w") as f:
+                f.write(seq_gen + "\n")
             genomic_path = genomic_dest
 
         # ── build the global block ────────────────────────────────────────────

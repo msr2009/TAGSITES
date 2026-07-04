@@ -59,9 +59,13 @@ _STYLE = """
     .card-body   { padding: 0.45rem 0.75rem; }
     .card        { margin-bottom: 0.4rem; }
 
+    /* setup accordion panels */
+    .accordion-button { background: #f8f9fa !important; color: #212529; }
+    .accordion-button:not(.collapsed) { background: #f8f9fa !important; }
+
     /* task accordion */
-    .task-accordion .accordion-button { background: #f8f9fa; color: #212529; }
-    .task-accordion .accordion-button:not(.collapsed) { background: #e9ecef; }
+    .task-accordion .accordion-button { background: #e9ecef !important; color: #212529; }
+    .task-accordion .accordion-button:not(.collapsed) { background: #dee2e6 !important; }
     .task-type-badge {
         font-size: 0.7rem; font-weight: 400; color: #6c757d;
         background: #e9ecef; border-radius: 3px; padding: 1px 5px;
@@ -225,11 +229,11 @@ def setup_ui():
                 value="global",
             ),
 
-            # ── Panel 2: Sequence input ───────────────────────────────────────
+            # ── Panel 2: Protein sequence input ───────────────────────────────
             ui.accordion_panel(
                 ui.span(
-                    "2 · Sequence input",
-                    ui.span("Upload a protein sequence file or search UniProt by gene name / accession.",
+                    "2 · Protein sequence input",
+                    ui.span("Search UniProt, upload a file, or paste a sequence.",
                             style="font-size:0.8rem; font-weight:400; color:#6c757d; margin-left:0.75rem;"),
                 ),
 
@@ -263,33 +267,58 @@ def setup_ui():
                                        _t.get("input_file", "")),
                         accept=[".fa", ".fasta", ".pdb"]),
 
+                    # — or — divider between file upload and paste
+                    ui.div(ui.span("— or paste —"), class_="or-divider"),
+
+                    # protein sequence paste
+                    ui.input_text_area("protein_seq_paste",
+                        label="",
+                        placeholder="Paste FASTA or raw amino acid sequence here…",
+                        rows=1, width="100%"),
+
                     # which source will be used at save time
                     ui.div(ui.output_text("seq_source_status"), class_="seq-source-status"),
 
-                    # divider between protein and genomic inputs
-                    ui.tags.hr(style="margin: 0.75rem 0; border-color: #6c757d;"),
-                    ui.tags.p(
-                        "Genomic sequence",
-                        ui.tags.span(" (required for reagent design)",
-                                     style="font-weight:400; color:#9b1c1c;"),
-                        class_="form-label",
-                        style="margin-bottom: 0.2rem;",
-                    ),
+                    class_="inputs-inner",
+                ),
+                value="protein_seq",
+            ),
 
-                    # genomic FASTA
+            # ── Panel 3: Genomic sequence input ───────────────────────────────
+            ui.accordion_panel(
+                ui.span(
+                    "3 · Genomic sequence input",
+                    ui.tags.span(" (required for reagent design)",
+                                 style="font-size:0.8rem; font-weight:400; color:#9b1c1c; margin-left:0.75rem;"),
+                ),
+
+                ui.div(
+                    # genomic file upload
                     compact_file_input("input_genomic",
                         label_with_tip("Genomic region FASTA", _t.get("input_genomic", "")),
                         accept=[".fasta", ".fa"]),
 
+                    # — or — divider between file upload and paste
+                    ui.div(ui.span("— or paste —"), class_="or-divider"),
+
+                    # genomic sequence paste
+                    ui.input_text_area("genomic_seq_paste",
+                        label="",
+                        placeholder="Paste FASTA or raw genomic sequence here…",
+                        rows=1, width="100%"),
+
                     class_="inputs-inner",
                 ),
-                value="sequence",
+                value="genomic_seq",
             ),
 
-            # ── Panel 3: Analyses ─────────────────────────────────────────────
+            # ── Panel 4: Analyses ─────────────────────────────────────────────
             ui.accordion_panel(
-                "3 · Analyses",
-                ui.p("Build the set of analyses to run.", class_="section-hint"),
+                ui.span(
+                    "4 · Analyses",
+                    ui.span("Build the set of analyses to run.",
+                            style="font-size:0.8rem; font-weight:400; color:#6c757d; margin-left:0.75rem;"),
+                ),
 
                 # preset load row
                 ui.card(
@@ -352,7 +381,7 @@ def setup_ui():
                 value="analyses",
             ),
 
-            open=["global", "sequence", "analyses"],
+            open=["global", "protein_seq", "genomic_seq", "analyses"],
             multiple=True,
         ),
 
