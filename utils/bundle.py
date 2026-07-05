@@ -25,6 +25,8 @@ MANIFEST_NAME = "MANIFEST.json"
 _GLOBAL_PATH_KEYS = ("input_file", "pdb", "genomic_file")
 # reagents-task arg fields that hold file paths (present only when reagents ran)
 _REAGENT_PATH_KEYS = ("genomic_fasta", "genewise")
+# task arg fields that hold file paths and must be re-based on extract
+_TASK_PATH_KEYS = ("pdb",) + _REAGENT_PATH_KEYS
 
 
 # ── shared JSON loader ──────────────────────────────────────────────────────
@@ -175,12 +177,12 @@ def extract_and_rebase(zip_path, dest_dir):
         if g.get(key):
             g[key] = _rebase(g[key], dest_dir)
 
-    # rebase each task's output + any reagent path args
+    # rebase each task's output + path args (pdb, genomic_fasta, genewise)
     for _, v in j.get("tasks", {}).items():
         args = v.get("args", {})
         if args.get("output"):
             args["output"] = _rebase(args["output"], dest_dir)
-        for key in _REAGENT_PATH_KEYS:
+        for key in _TASK_PATH_KEYS:
             if args.get(key):
                 args[key] = _rebase(args[key], dest_dir)
 
