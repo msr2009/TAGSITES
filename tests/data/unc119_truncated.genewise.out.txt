@@ -1,0 +1,34 @@
+genewise $Name: wise2-4-1 $ (unreleased release)
+This program is freely distributed under a GPL. See source directory
+Copyright (c) GRL limited: portions of the code are from separate copyright
+
+Query protein:       G5EGP9
+Comp Matrix:         BLOSUM62.bla
+Gap open:            12
+Gap extension:       2
+Start/End            local
+Target Sequence      Unspliced
+Strand:              forward
+Start/End (protein)  local
+Gene Parameter file: gene.stat
+Splice site model:   GT/AG only
+GT/AG bits penalty   -9.96
+Codon Table:         codon.table
+Subs error:          1e-06
+Indel error:         1e-06
+Null model           syn
+Algorithm            623
+
+genewise output
+Score 150.00 bits over entire alignment
+Scores as bits over a synchronous coding model
+
+Warning: The bits scores is not probablistically correct for single seqs
+See WWW help for more info
+
+//
+Unspliced	GeneWise	match	2008	5889	150.00	+	.	Unspliced-genewise-prediction-1
+Unspliced	GeneWise	cds	2008	2068	0.00	+	0	Unspliced-genewise-prediction-1
+Unspliced	GeneWise	intron	2069	5815	0.00	+	.	Unspliced-genewise-prediction-1
+Unspliced	GeneWise	cds	5816	5889	0.00	+	2	Unspliced-genewise-prediction-1
+//

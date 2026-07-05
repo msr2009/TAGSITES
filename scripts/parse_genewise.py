@@ -50,12 +50,40 @@ def parse_genewise_score(out_txt):
         Score NNN.NN bits over entire alignment
 
     Returns None if the line is not found.
+    NOTE: the EBI REST API does not write this header line; use
+    parse_genewise_gff_score() instead for reliable score extraction.
     """
     with open(out_txt) as fh:
         for line in fh:
             m = re.match(r'^Score\s+([\d.]+)\s+bits', line)
             if m:
                 return float(m.group(1))
+    return None
+
+
+def parse_genewise_gff_score(out_txt):
+    """
+    Extract the alignment score from the GFF 'match' row score column.
+
+    The EBI REST Genewise API does not write a 'Score NNN bits' header line,
+    but the score is present in the GFF section as the score of the 'match'
+    feature (column 6).  This function works for both EBI output and the
+    local standalone format; parse_genewise_score() only works for standalone.
+
+    Returns float score, or None if no match row is found.
+    """
+    with open(out_txt) as fh:
+        content = fh.read()
+    for section in content.split('//'):
+        if '\tGeneWise\t' not in section:
+            continue
+        for line in section.strip().split('\n'):
+            parts = line.split('\t')
+            if len(parts) >= 9 and parts[2] == 'match':
+                try:
+                    return float(parts[5])
+                except ValueError:
+                    pass
     return None
 
 

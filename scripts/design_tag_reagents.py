@@ -44,7 +44,7 @@ from Bio import SeqIO
 sys.path.insert(0, __file__.rsplit('/', 1)[0])
 from crispr_util import find_guides, build_frame_lookup, disrupt_pam
 from parse_genewise import parse_genewise, enumerate_insertion_sites, \
-    parse_genewise_score, cds_coverage
+    parse_genewise_score, parse_genewise_gff_score, cds_coverage
 from progress import report as _report, resolve_reporter
 
 
@@ -61,6 +61,7 @@ def _case_arm(arm_seq, arm_start, frame_lookup):
 def design_reagents(
     genewise_out,
     genomic_fasta,
+    protein_length=None,
     n_guides=5,
     arm_length=1000,
     pam='NGG',
@@ -75,11 +76,19 @@ def design_reagents(
     ----------
     genewise_out   : str  path to Genewise .out.txt
     genomic_fasta  : str  path to the genomic region FASTA
+    protein_length : int or None  amino acid count of the query protein; used to
+                     check CDS coverage.  If None, coverage check is skipped.
     n_guides       : int  max guides to report per insertion site
     arm_length     : int  homology arm length (bp) on each side
     pam            : str  IUPAC PAM (default 'NGG')
     guide_length   : int  spacer length (default 20)
     cut_offset     : int  cut distance from PAM (SpCas9=3)
+
+    Raises
+    ------
+    ValueError if the Genewise alignment looks like a wrong or truncated
+    genomic sequence (score < 50 bits OR CDS coverage < 90%), or if any
+    homology arm in the output is shorter than half of arm_length.
     """
     reporter = resolve_reporter(report)
 
@@ -91,25 +100,35 @@ def design_reagents(
     L = len(dna)
 
     # 2. Parse Genewise → CDS exon table
-    # TODO: run Genewise on both orientations (forward + RC) and pick the better
-    # one automatically before calling design_reagents.  The EBI call takes ~10 s,
-    # so running both is cheap.  For now the caller (run_genewise.py / the
-    # orchestrator pre-step) is responsible for supplying the correct .out.txt;
-    # we guard against silent garbage mappings via the score/coverage check below.
     cds_df = parse_genewise(genewise_out)
     _report(reporter, '{} CDS exons parsed'.format(len(cds_df)), stage='parse_genewise')
 
-    # Low-score / low-coverage guard: warn loudly so we never silently process
-    # a garbage (wrong-strand or failed) Genewise alignment.
-    score = parse_genewise_score(genewise_out)
-    if score is not None:
-        n_protein = len(cds_df)   # rough proxy; real protein length unknown here
-        coverage  = cds_coverage(cds_df, n_protein) if n_protein > 0 else 0.0
-        if score < 50.0:
-            _report(reporter,
-                    'Genewise score very low ({:.2f} bits); may indicate wrong strand or '
-                    'failed alignment'.format(score),
-                    stage='parse_genewise', level='warning')
+    # Bad-alignment guard: raise an error rather than silently producing garbage
+    # reagents.  The EBI REST API does not write a "Score NNN bits" header line,
+    # so we read the score from the GFF match row instead.
+    score = parse_genewise_gff_score(genewise_out) or parse_genewise_score(genewise_out)
+    coverage = None
+    if protein_length and protein_length > 0:
+        coverage = cds_coverage(cds_df, protein_length)
+
+    bad_score    = score    is not None and score    < 50.0
+    # 90% threshold: catches a partial isoform (e.g. 3-exon short DNA aligned against
+    # a 5-exon long protein = 81.6% coverage) while passing correct full-gene alignments
+    bad_coverage = coverage is not None and coverage < 0.90
+
+    if bad_score or bad_coverage:
+        parts = []
+        if score is not None:
+            parts.append('score {:.1f} bits'.format(score))
+        if coverage is not None:
+            parts.append('CDS coverage {:.0%}'.format(coverage))
+        detail = ', '.join(parts)
+        raise ValueError(
+            'Mismatch between DNA and protein sequences ({}).\n'
+            'Confirm genomic sequence covers (1) correct gene isoform and '
+            '(2) contains sufficient flanking sequence to make full-length '
+            'homology arms (>{} bp).'.format(detail, arm_length)
+        )
 
     # 3. Enumerate insertion sites
     sites = enumerate_insertion_sites(cds_df, dna)
@@ -227,23 +246,45 @@ def design_reagents(
                 'right_arm':           right_arm,
             })
 
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
+
+    # Short-arm check: only runs when protein_length is provided (same gate as
+    # the coverage check above).  If any reagent has an arm shorter than half
+    # the configured arm_length, the genomic sequence lacks enough flanking
+    # sequence for HDR — typically because the user supplied a short isoform
+    # transcript instead of a proper genomic region.
+    if protein_length and protein_length > 0 and not df.empty:
+        min_arm   = arm_length // 2
+        min_left  = df['left_arm'].str.len().min()
+        min_right = df['right_arm'].str.len().min()
+        if min_left < min_arm or min_right < min_arm:
+            raise ValueError(
+                'Mismatch between DNA and protein sequences '
+                '(shortest arm: left={} nt, right={} nt).\n'
+                'Confirm genomic sequence covers (1) correct gene isoform and '
+                '(2) contains sufficient flanking sequence to make full-length '
+                'homology arms (>{} bp).'.format(
+                    min_left, min_right, arm_length)
+            )
+
+    return df
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
-def main(genewise, genomic_fasta, output, n_guides=5, arm_length=1000,
-         pam='NGG', guide_length=20, cut_offset=3, report=None):
+def main(genewise, genomic_fasta, output, protein_length=None, n_guides=5,
+         arm_length=1000, pam='NGG', guide_length=20, cut_offset=3, report=None):
     """Entry point for in-process calls from task_runners."""
     df = design_reagents(
-        genewise_out  = genewise,
-        genomic_fasta = genomic_fasta,
-        n_guides      = n_guides,
-        arm_length    = arm_length,
-        pam           = pam,
-        guide_length  = guide_length,
-        cut_offset    = cut_offset,
-        report        = report,
+        genewise_out   = genewise,
+        genomic_fasta  = genomic_fasta,
+        protein_length = protein_length,
+        n_guides       = n_guides,
+        arm_length     = arm_length,
+        pam            = pam,
+        guide_length   = guide_length,
+        cut_offset     = cut_offset,
+        report         = report,
     )
     df.to_csv(output, sep='\t', index=False)
 
@@ -264,6 +305,8 @@ if __name__ == '__main__':
                         help='Genomic region FASTA (same sequence/orientation submitted to Genewise)')
     parser.add_argument('--output', required=True,
                         help='Output TSV file path')
+    parser.add_argument('--protein_fasta',
+                        help='Protein FASTA; used to compute protein length for CDS coverage check')
     # Optional guide / arm parameters
     parser.add_argument('--n_guides', type=int, default=5,
                         help='Max guide RNAs to report per insertion site (default: 5)')
@@ -277,9 +320,16 @@ if __name__ == '__main__':
                         help='Bases upstream of PAM where DSB occurs (SpCas9=3)')
     args = parser.parse_args()
 
+    protein_length = None
+    if args.protein_fasta:
+        recs = list(SeqIO.parse(args.protein_fasta, 'fasta'))
+        if recs:
+            protein_length = len(recs[0].seq)
+
     print('Running design_tag_reagents.py', file=sys.stderr)
     print('  genewise      : {}'.format(args.genewise), file=sys.stderr)
     print('  genomic_fasta : {}'.format(args.genomic_fasta), file=sys.stderr)
+    print('  protein_length: {}'.format(protein_length), file=sys.stderr)
     print('  PAM           : {}'.format(args.PAM), file=sys.stderr)
     print('  arm_length    : {}'.format(args.arm_length), file=sys.stderr)
     print('  n_guides      : {}'.format(args.n_guides), file=sys.stderr)
@@ -287,6 +337,7 @@ if __name__ == '__main__':
     df = design_reagents(
         genewise_out   = args.genewise,
         genomic_fasta  = args.genomic_fasta,
+        protein_length = protein_length,
         n_guides       = args.n_guides,
         arm_length     = args.arm_length,
         pam            = args.PAM,

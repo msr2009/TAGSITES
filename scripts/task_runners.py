@@ -190,9 +190,10 @@ def run_reagents(args, report=None):
     genewise_path = _str(args.get("genewise"))
     genomic_fa    = _str(args.get("genomic_fasta"))
 
+    protein_fa = _str(args.get("input_file") or args.get("fasta"))
+
     if not genewise_path and genomic_fa:
         # run both-strand Genewise and pick the winner
-        protein_fa  = _str(args.get("input_file") or args.get("fasta"))
         email       = _str(args.get("email"))
         working_dir = _str(args.get("working_dir"))
         run_name    = _str(args.get("run_name"))
@@ -202,16 +203,25 @@ def run_reagents(args, report=None):
         args = dict(args, genewise=genewise_path,
                     genomic_fasta=outprefix + ".genewise_genomic.fa")
 
+    # Compute protein_length from the protein FASTA for coverage validation
+    protein_length = None
+    if protein_fa and os.path.exists(protein_fa):
+        from Bio import SeqIO as _SeqIO
+        recs = list(_SeqIO.parse(protein_fa, 'fasta'))
+        if recs:
+            protein_length = len(recs[0].seq)
+
     design_tag_reagents.main(
-        genewise      = genewise_path,
-        genomic_fasta = _str(args.get("genomic_fasta")),
-        output        = _str(args.get("output")),
-        n_guides      = _int(args.get("n_guides"), 5),
-        arm_length    = _int(args.get("arm_length"), 1000),
-        pam           = _str(args.get("PAM"), "NGG"),
-        guide_length  = _int(args.get("guide_length"), 20),
-        cut_offset    = _int(args.get("cut_offset"), 3),
-        report        = report,
+        genewise       = genewise_path,
+        genomic_fasta  = _str(args.get("genomic_fasta")),
+        output         = _str(args.get("output")),
+        protein_length = protein_length,
+        n_guides       = _int(args.get("n_guides"), 5),
+        arm_length     = _int(args.get("arm_length"), 1000),
+        pam            = _str(args.get("PAM"), "NGG"),
+        guide_length   = _int(args.get("guide_length"), 20),
+        cut_offset     = _int(args.get("cut_offset"), 3),
+        report         = report,
     )
 
 

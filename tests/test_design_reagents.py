@@ -6,8 +6,12 @@ and performs structural + correctness checks on the output DataFrame.
 """
 
 import re
+import sys
+from pathlib import Path
 import pytest
 from Bio import SeqIO
+
+sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
 from design_tag_reagents import design_reagents
 from crispr_util import iupac_to_regex, reverse_complement
@@ -142,3 +146,84 @@ def test_mutated_arms_differ_where_expected(snb1_df, snb1_dna):
             assert row["right_arm"] != raw_right, (
                 f"right_arm unchanged for residue {row['residue_index']}"
             )
+
+
+# ── Bad-input validation (unc119 longpro/shortdna fixtures) ──────────────────
+
+DATA_DIR = Path(__file__).parent.parent / "data"
+LONGPRO_SHORTDNA = DATA_DIR / "unc119_longpro_shortdna"
+LONGPRO_LONGDNA  = DATA_DIR / "unc119_longpro_longdna"
+UNC119_PROTEIN_LEN = 244   # G5EGP9, the long isoform
+
+
+class TestShortDnaIsoformMismatch:
+    """
+    longpro_shortdna: 244 aa long-isoform protein aligned to the 1335 nt
+    short-isoform genomic (3 exons).  Genewise score is high (428 bits) but
+    CDS coverage is only 82%, which is below the 90% threshold.  The task
+    should raise ValueError rather than silently producing truncated reagents.
+    """
+
+    @pytest.fixture(scope="class", autouse=False)
+    @classmethod
+    def paths(cls):
+        return {
+            "gw": LONGPRO_SHORTDNA / "unc119_longpro_shortdna_genewise.genewise.out.txt",
+            "fa": LONGPRO_SHORTDNA / "unc119_longpro_shortdna_genewise.genewise_genomic.fa",
+        }
+
+    def test_raises_on_low_coverage(self, paths):
+        with pytest.raises(ValueError, match="Mismatch between DNA and protein"):
+            design_reagents(
+                genewise_out=paths["gw"],
+                genomic_fasta=paths["fa"],
+                protein_length=UNC119_PROTEIN_LEN,
+            )
+
+    def test_error_mentions_coverage(self, paths):
+        with pytest.raises(ValueError, match="coverage"):
+            design_reagents(
+                genewise_out=paths["gw"],
+                genomic_fasta=paths["fa"],
+                protein_length=UNC119_PROTEIN_LEN,
+            )
+
+    def test_high_score_does_not_mask_bad_coverage(self, paths):
+        """Score 428 bits is high; the error must come from coverage, not score."""
+        import scripts.parse_genewise as pg
+        score = pg.parse_genewise_gff_score(str(paths["gw"]))
+        assert score > 50.0, "fixture score should be above score threshold"
+        # Now confirm design_reagents still raises despite the good score
+        with pytest.raises(ValueError):
+            design_reagents(
+                genewise_out=paths["gw"],
+                genomic_fasta=paths["fa"],
+                protein_length=UNC119_PROTEIN_LEN,
+            )
+
+
+class TestLongDnaCorrectCase:
+    """longpro_longdna: correct protein + correct genomic — must pass all checks."""
+
+    @pytest.fixture(scope="class")
+    @classmethod
+    def result(cls):
+        gw = LONGPRO_LONGDNA / "unc119_longpro_longdna_genewise.genewise.out.txt"
+        fa = LONGPRO_LONGDNA / "unc119_longpro_longdna_genewise.genewise_genomic.fa"
+        return design_reagents(
+            genewise_out=gw,
+            genomic_fasta=fa,
+            protein_length=UNC119_PROTEIN_LEN,
+        )
+
+    def test_produces_reagents(self, result):
+        assert len(result) > 0
+
+    def test_all_arms_full_length(self, result):
+        """With adequate flanking, every arm should be exactly arm_length=1000."""
+        assert result["left_arm"].str.len().min() == 1000
+        assert result["right_arm"].str.len().min() == 1000
+
+    def test_residue_count_matches_protein(self, result):
+        """One row per residue × guide; unique residues should equal protein length."""
+        assert result["residue_index"].nunique() == UNC119_PROTEIN_LEN
