@@ -106,7 +106,9 @@ def design_reagents(
     # Bad-alignment guard: raise an error rather than silently producing garbage
     # reagents.  The EBI REST API does not write a "Score NNN bits" header line,
     # so we read the score from the GFF match row instead.
-    score = parse_genewise_gff_score(genewise_out) or parse_genewise_score(genewise_out)
+    score = parse_genewise_gff_score(genewise_out)
+    if score is None:
+        score = parse_genewise_score(genewise_out)
     coverage = None
     if protein_length and protein_length > 0:
         coverage = cds_coverage(cds_df, protein_length)
