@@ -199,7 +199,7 @@ def main(json_input_file, force=False):
 
         # mark as pending before launch so a crash shows "pending" not stale "success"
         run_status.update_task(working_dir, run_name, task_id,
-                               status="pending", output=output_path, job_id="", message="")
+                               status="pending", output=output_path, job_ids=[], message="")
 
     if not task_commands:
         print("All tasks already complete. Use --force to re-run.")

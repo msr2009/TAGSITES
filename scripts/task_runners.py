@@ -5,9 +5,14 @@ Used by the Shiny progress module to run tasks in-process (no subprocess)
 instead of launching them as shell commands.  The CLI interface of every
 underlying script is unchanged; only the internal call path differs.
 
-Each runner signature: runner(args_dict, progress_cb=None)
-  args_dict — the "args" sub-dict from the run JSON for one task
-  progress_cb(job_id, status) — optional; forwarded to EBI poll callbacks
+Each runner signature: runner(args_dict, report=None, job_id_cb=None, resume_job_ids=None)
+  args_dict      — the "args" sub-dict from the run JSON for one task
+  report         — optional progress reporter, forwarded to the script's main()
+  job_id_cb(index, jid)  — optional; tags a freshly-submitted EBI job ID by its
+                           sequential position among the task's EBI submissions
+  resume_job_ids — optional; the job ID list persisted from a previous attempt,
+                   used to reattach to still-pending or already-finished EBI jobs
+                   instead of resubmitting. Runners that don't call EBI ignore both.
 """
 
 import os
@@ -111,7 +116,7 @@ def afdb_presearch(tasks, report=None):
 
 # ── analysis runners ─────────────────────────────────────────────────────────
 
-def run_blast(args, report=None):
+def run_blast(args, report=None, job_id_cb=None, resume_job_ids=None):
     """Run blast_orthologs.main() from a JSON args dict."""
     import blast_orthologs
     return blast_orthologs.main(
@@ -129,10 +134,12 @@ def run_blast(args, report=None):
         clients_folder = str(_SCRIPTS) + "/",
         exclude_paralogs = _bool(args.get("exclude_paralogs"), False),
         report         = report,
+        job_id_cb      = job_id_cb,
+        resume_job_ids = resume_job_ids,
     )
 
 
-def run_plddt(args, report=None):
+def run_plddt(args, report=None, job_id_cb=None, resume_job_ids=None):
     """Run extract_from_pdb.main(). AFDB lookup is handled by afdb_presearch() before tasks start."""
     import extract_from_pdb
 
@@ -145,7 +152,7 @@ def run_plddt(args, report=None):
     extract_from_pdb.main(pdb_path, output)
 
 
-def run_modifications(args, report=None):
+def run_modifications(args, report=None, job_id_cb=None, resume_job_ids=None):
     """Run regex_sites.main() from a JSON args dict."""
     import regex_sites
     fasta_in  = _str(args.get("input_file") or args.get("fasta"))
@@ -155,7 +162,7 @@ def run_modifications(args, report=None):
         regex_sites.main(fasta_in, sites_file, fout)
 
 
-def run_domains(args, report=None):
+def run_domains(args, report=None, job_id_cb=None, resume_job_ids=None):
     """Run call_interpro.main() from a JSON args dict."""
     import call_interpro
     return call_interpro.main(
@@ -165,10 +172,12 @@ def run_domains(args, report=None):
         clients_folder= str(_SCRIPTS) + "/",
         outputfile    = _str(args.get("output")),
         report        = report,
+        job_id_cb     = job_id_cb,
+        resume_job_ids = resume_job_ids,
     )
 
 
-def run_scores(args, report=None):
+def run_scores(args, report=None, job_id_cb=None, resume_job_ids=None):
     """Run calculate_protein_scores.main() from a JSON args dict."""
     import calculate_protein_scores
     fasta_in   = _str(args.get("input_file") or args.get("fasta"))
@@ -179,7 +188,7 @@ def run_scores(args, report=None):
         calculate_protein_scores.main(fasta_in, fout, window, scores_file)
 
 
-def run_reagents(args, report=None):
+def run_reagents(args, report=None, job_id_cb=None, resume_job_ids=None):
     """Run design_tag_reagents.main() from a JSON args dict.
 
     Runs the Genewise pre-step if needed (empty 'genewise' arg).
@@ -198,7 +207,13 @@ def run_reagents(args, report=None):
         working_dir = _str(args.get("working_dir"))
         run_name    = _str(args.get("run_name"))
         outprefix   = os.path.join(working_dir, run_name + "_genewise")
-        run_genewise.main(protein_fa, genomic_fa, email, outprefix, report=report)
+        genewise_result = run_genewise.main(protein_fa, genomic_fa, email, outprefix, report=report,
+                                            job_id_cb=job_id_cb, resume_job_ids=resume_job_ids)
+        # only genewise's own {"ebi_status": "pending"|"expired"} sentinel means
+        # "not done yet" — its success return (select_orientation's score dict)
+        # is also a dict, so it must not be mistaken for that sentinel here.
+        if isinstance(genewise_result, dict) and "ebi_status" in genewise_result:
+            return genewise_result
         genewise_path = outprefix + ".genewise.out.txt"
         args = dict(args, genewise=genewise_path,
                     genomic_fasta=outprefix + ".genewise_genomic.fa")

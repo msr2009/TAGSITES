@@ -1078,6 +1078,11 @@
     });
   });
 
+  Shiny.addCustomMessageHandler("tagsites_trigger_download", function (msg) {
+    var link = document.getElementById("progress-download_results");
+    if (link) link.click();
+  });
+
   Shiny.addCustomMessageHandler("tagsites_update_logs", function (msg) {
     (msg.updates || []).forEach(function (u) {
       var el = document.getElementById(u.id);

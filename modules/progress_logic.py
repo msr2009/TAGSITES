@@ -59,3 +59,16 @@ def display_params(args, global_block, analysis=None):
 def status_label(entry):
     """Return the status string from a status-file entry, defaulting to 'pending'."""
     return entry.get("status", "pending")
+
+
+def all_terminal(status_dict, tasks):
+    """True once every task has reached a terminal status ('success' or 'failed').
+
+    Unlike watching the batch-runner's own extended-task status, this checks
+    each task individually, so a batch that "finished" but left some tasks
+    'queued' (still waiting on a stalled EBI job) does not count as done.
+    """
+    if not tasks:
+        return False
+    return all(status_dict.get(t["id"], {}).get("status") in ("success", "failed")
+              for t in tasks)

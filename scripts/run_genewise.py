@@ -50,7 +50,7 @@ from Bio.Seq import Seq
 # Allow importing sibling scripts directly
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from crispr_util import reverse_complement
-from parse_genewise import parse_genewise_score, cds_coverage, parse_genewise
+from parse_genewise import parse_genewise_score, parse_genewise_gff_score, cds_coverage, parse_genewise
 from progress import report as _report, resolve_reporter, timed_poll_adapter
 import ebi_rest
 
@@ -61,28 +61,49 @@ LOW_COVER_WARN   = 0.50   # fraction of protein length covered by CDS
 
 # ── EBI client wrapper ────────────────────────────────────────────────────────
 
-def run_genewise_client(protein_fa, genomic_fa, email, outfile_prefix, report=None):
-    """Submit protein+DNA FASTAs to EBI Genewise REST API; write .out.txt and return its path."""
+def run_genewise_client(protein_fa, genomic_fa, email, outfile_prefix, report=None,
+                        poll_job_id_cb=None, resume_job_id=None):
+    """Submit protein+DNA FASTAs to EBI Genewise REST API; write .out.txt and return its path.
+
+    poll_job_id_cb, when given, is a poll_cb(job_id, status)-shaped callback
+    (see ebi_rest.indexed_job_id_cb) that tags the submitted job ID with its
+    sequential index among the caller's EBI submissions.
+    resume_job_id, when given, reattaches to that job instead of resubmitting;
+    returns {"ebi_status": "pending"|"expired", ...} if it hasn't finished.
+    """
     reporter = resolve_reporter(report)
-
-    with open(protein_fa) as fh:
-        asequence = fh.read()
-    with open(genomic_fa) as fh:
-        bsequence = fh.read()
-
-    params = {
-        "email":     email,
-        "asequence": asequence,
-        "bsequence": bsequence,
-        "gff":       "true",  # embed GFF section in output; required by parse_genewise
-    }
-
-    _report(reporter, f"Submitting Genewise job for {os.path.basename(protein_fa)}", stage='genewise_run')
-    job_id = ebi_rest.run_job(ebi_rest.GENEWISE, params,
-                              poll_cb=timed_poll_adapter(reporter, stage='genewise_run'))
-
-    result_bytes = ebi_rest.fetch_result(ebi_rest.GENEWISE, job_id, "out")
     expected = f"{outfile_prefix}.out.txt"
+
+    if resume_job_id:
+        _report(reporter, f"Checking previously-submitted Genewise job for {os.path.basename(protein_fa)}",
+                stage='genewise_run')
+        state, payload = ebi_rest.resume_job(ebi_rest.GENEWISE, resume_job_id, "out")
+        if state == "pending":
+            return {"ebi_status": "pending", "detail": payload}
+        if state == "expired":
+            return {"ebi_status": "expired", "detail": payload}
+        result_bytes = payload
+    else:
+        with open(protein_fa) as fh:
+            asequence = fh.read()
+        with open(genomic_fa) as fh:
+            bsequence = fh.read()
+
+        params = {
+            "email":     email,
+            "asequence": asequence,
+            "bsequence": bsequence,
+            "gff":       "true",  # embed GFF section in output; required by parse_genewise
+        }
+
+        _report(reporter, f"Submitting Genewise job for {os.path.basename(protein_fa)}", stage='genewise_run')
+        poll_cb = ebi_rest.combined_poll_cb(
+            poll_job_id_cb,
+            timed_poll_adapter(reporter, stage='genewise_run'),
+        )
+        job_id = ebi_rest.run_job(ebi_rest.GENEWISE, params, poll_cb=poll_cb)
+        result_bytes = ebi_rest.fetch_result(ebi_rest.GENEWISE, job_id, "out")
+
     with open(expected, "wb") as fh:
         fh.write(result_bytes)
 
@@ -122,8 +143,15 @@ def select_orientation(fwd_out_txt, fwd_genomic_fa,
       winner_score  float score of the winner
       warning       str or None  populated when the winner looks suspiciously poor
     """
-    fwd_score = parse_genewise_score(fwd_out_txt) or 0.0
-    rc_score  = parse_genewise_score(rc_out_txt)  or 0.0
+    # the EBI REST client's output has no "Score NNN bits" header (only the
+    # standalone Genewise binary writes that); read the GFF match-row score first
+    # and only fall back to the header parser for standalone-format output.
+    def _score(out_txt):
+        s = parse_genewise_gff_score(out_txt)
+        return s if s is not None else parse_genewise_score(out_txt) or 0.0
+
+    fwd_score = _score(fwd_out_txt)
+    rc_score  = _score(rc_out_txt)
 
     if fwd_score >= rc_score:
         orientation = '+'
@@ -195,7 +223,8 @@ def write_rc_fasta(genomic_fa, rc_fa_path):
 
 # ── Main entry point ──────────────────────────────────────────────────────────
 
-def main(protein_fasta, genomic_fasta, email, outprefix, report=None):
+def main(protein_fasta, genomic_fasta, email, outprefix, report=None,
+         job_id_cb=None, resume_job_ids=None):
     """
     Full both-strand Genewise run + orientation selection.
 
@@ -206,8 +235,16 @@ def main(protein_fasta, genomic_fasta, email, outprefix, report=None):
       <outprefix>.genewise.out.txt      Winner
       <outprefix>.genewise_genomic.fa   Genomic FASTA in winning orientation
       <outprefix>.genewise_orientation.txt  '+' or 'rc'
+
+    This task makes two sequential EBI submissions (forward orientation at
+    index 0, reverse-complement at index 1). job_id_cb(index, jid) tags each;
+    resume_job_ids is the persisted list from a previous attempt. If the
+    forward job hasn't finished yet, the RC job isn't submitted this pass —
+    returns {"ebi_status": "pending"|"expired", ...} instead, and the next
+    Run/Rerun click picks up where it left off.
     """
     reporter = resolve_reporter(report)
+    resume_job_ids = resume_job_ids or []
 
     # Handle PDB input: extract protein FASTA if needed
     if protein_fasta.endswith('.pdb'):
@@ -229,11 +266,19 @@ def main(protein_fasta, genomic_fasta, email, outprefix, report=None):
     # Run Genewise on both orientations
     _report(reporter, 'running Genewise (forward orientation)…', stage='genewise_fwd')
     fwd_out = run_genewise_client(protein_fasta, genomic_fasta,
-                                  email, outprefix + '.fwd', report=reporter)
+                                  email, outprefix + '.fwd', report=reporter,
+                                  poll_job_id_cb=ebi_rest.indexed_job_id_cb(job_id_cb, 0),
+                                  resume_job_id=resume_job_ids[0] if len(resume_job_ids) > 0 else None)
+    if isinstance(fwd_out, dict):
+        return fwd_out
 
     _report(reporter, 'running Genewise (reverse-complement orientation)…', stage='genewise_rc')
     rc_out  = run_genewise_client(protein_fasta, rc_fa,
-                                  email, outprefix + '.rc', report=reporter)
+                                  email, outprefix + '.rc', report=reporter,
+                                  poll_job_id_cb=ebi_rest.indexed_job_id_cb(job_id_cb, 1),
+                                  resume_job_id=resume_job_ids[1] if len(resume_job_ids) > 1 else None)
+    if isinstance(rc_out, dict):
+        return rc_out
 
     # Select best orientation
     result = select_orientation(fwd_out, genomic_fasta, rc_out, rc_fa)

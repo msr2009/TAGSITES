@@ -33,8 +33,16 @@ def hit_to_dict(j):
 def main(fasta_in, email, workingdir, name, output,
          n, evalue, db, length_percent,
          align_full_seqs, taxid, clients_folder, exclude_paralogs,
-         report=None):
-    """Run BLAST → filter hits → fetch full seqs → clustalo → JSD scoring."""
+         report=None, job_id_cb=None, resume_job_ids=None):
+    """Run BLAST → filter hits → fetch full seqs → clustalo → JSD scoring.
+
+    job_id_cb(index, jid), when given, is called with the EBI job ID for the
+    (single) BLAST submission this task makes, tagged as index 0.
+    resume_job_ids, when given, is the job ID list persisted from a previous
+    attempt; if index 0 holds an ID, reattach to it via ebi_rest.resume_job()
+    instead of resubmitting. Returns {"ebi_status": "pending"|"expired", ...}
+    if the resumed job hasn't finished, instead of raising.
+    """
     reporter = resolve_reporter(report)
 
     seq_name, seq = read_fasta(fasta_in)
@@ -46,26 +54,40 @@ def main(fasta_in, email, workingdir, name, output,
     # BLAST TO FIND ORTHOLOGS
     ###########################
 
-    blast_params = {
-        "email":      email,
-        "program":    "blastp",
-        "stype":      "protein",
-        "sequence":   str(seq),  # Biopython Seq objects must be coerced to str
-        "database":   db,
-        "outformat":  "json",
-        "alignments": n,         # must match scores; 0 produces empty hits list
-        "scores":     n,
-        "exp":        ebi_rest.fmt_exp(evalue),
-    }
-    if str(taxid) not in ("", "1", "1.0"):
-        blast_params["taxids"] = str(taxid)
+    resume_id = (resume_job_ids or [None])[0]
+    if resume_id:
+        _report(reporter, "Checking previously-submitted NCBI BLAST job…", stage="blast_submit")
+        state, payload = ebi_rest.resume_job(ebi_rest.NCBIBLAST, resume_id, "json")
+        if state == "pending":
+            return {"ebi_status": "pending", "detail": payload}
+        if state == "expired":
+            return {"ebi_status": "expired", "detail": payload}
+        blast_json_bytes = payload
+    else:
+        blast_params = {
+            "email":      email,
+            "program":    "blastp",
+            "stype":      "protein",
+            "sequence":   str(seq),  # Biopython Seq objects must be coerced to str
+            "database":   db,
+            "outformat":  "json",
+            "alignments": n,         # must match scores; 0 produces empty hits list
+            "scores":     n,
+            "exp":        ebi_rest.fmt_exp(evalue),
+        }
+        if str(taxid) not in ("", "1", "1.0"):
+            blast_params["taxids"] = str(taxid)
 
-    _report(reporter, "Submitting NCBI BLAST job…", stage="blast_submit")
-    blast_job_id = ebi_rest.run_job(ebi_rest.NCBIBLAST, blast_params,
-                                    poll_cb=timed_poll_adapter(reporter, stage="blast_submit"))
+        _report(reporter, "Submitting NCBI BLAST job…", stage="blast_submit")
+        poll_cb = ebi_rest.combined_poll_cb(
+            ebi_rest.indexed_job_id_cb(job_id_cb, 0),
+            timed_poll_adapter(reporter, stage="blast_submit"),
+        )
+        blast_job_id = ebi_rest.run_job(ebi_rest.NCBIBLAST, blast_params, poll_cb=poll_cb)
 
-    # fetch JSON result and save to the path the rest of the script expects
-    blast_json_bytes = ebi_rest.fetch_result(ebi_rest.NCBIBLAST, blast_job_id, "json")
+        # fetch JSON result and save to the path the rest of the script expects
+        blast_json_bytes = ebi_rest.fetch_result(ebi_rest.NCBIBLAST, blast_job_id, "json")
+
     blast_json_path = f"{out_prefix}.json.json"
     with open(blast_json_path, "wb") as f:
         f.write(blast_json_bytes)

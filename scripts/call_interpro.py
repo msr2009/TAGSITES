@@ -27,25 +27,44 @@ import ebi_rest
 from progress import report as _report, resolve_reporter, timed_poll_adapter
 
 
-def main(fasta_in, email, workingdir, clients_folder, outputfile, report=None):
-    """Submit sequence to InterProScan5, parse TSV result, write output."""
+def main(fasta_in, email, workingdir, clients_folder, outputfile, report=None,
+         job_id_cb=None, resume_job_ids=None):
+    """Submit sequence to InterProScan5, parse TSV result, write output.
+
+    job_id_cb(index, jid) and resume_job_ids follow the same convention as
+    blast_orthologs.main(): this task makes one EBI submission, tagged index 0.
+    """
     reporter = resolve_reporter(report)
     name, seq = read_fasta(fasta_in)
 
-    params = {
-        "email":    email,
-        "stype":    "p",        # EBI iprscan5 uses 'p' for protein, not 'protein'
-        "sequence": str(seq),   # Biopython Seq objects must be coerced to str
-        "goterms":  "true",     # must be strings, not Python bools
-        "pathways": "true",
-    }
+    resume_id = (resume_job_ids or [None])[0]
+    if resume_id:
+        _report(reporter, "Checking previously-submitted InterProScan5 job…", stage="iprscan_submit")
+        state, payload = ebi_rest.resume_job(ebi_rest.IPRSCAN5, resume_id, "tsv")
+        if state == "pending":
+            return {"ebi_status": "pending", "detail": payload}
+        if state == "expired":
+            return {"ebi_status": "expired", "detail": payload}
+        tsv_bytes = payload
+    else:
+        params = {
+            "email":    email,
+            "stype":    "p",        # EBI iprscan5 uses 'p' for protein, not 'protein'
+            "sequence": str(seq),   # Biopython Seq objects must be coerced to str
+            "goterms":  "true",     # must be strings, not Python bools
+            "pathways": "true",
+        }
 
-    _report(reporter, "Submitting InterProScan5 job…", stage="iprscan_submit")
-    job_id = ebi_rest.run_job(ebi_rest.IPRSCAN5, params,
-                              poll_cb=timed_poll_adapter(reporter, stage="iprscan_submit"))
+        _report(reporter, "Submitting InterProScan5 job…", stage="iprscan_submit")
+        poll_cb = ebi_rest.combined_poll_cb(
+            ebi_rest.indexed_job_id_cb(job_id_cb, 0),
+            timed_poll_adapter(reporter, stage="iprscan_submit"),
+        )
+        job_id = ebi_rest.run_job(ebi_rest.IPRSCAN5, params, poll_cb=poll_cb)
 
-    # fetch TSV result and save intermediate file (mirrors old naming: name.interpro.tsv.tsv)
-    tsv_bytes = ebi_rest.fetch_result(ebi_rest.IPRSCAN5, job_id, "tsv")
+        # fetch TSV result and save intermediate file (mirrors old naming: name.interpro.tsv.tsv)
+        tsv_bytes = ebi_rest.fetch_result(ebi_rest.IPRSCAN5, job_id, "tsv")
+
     intermediate = os.path.join(workingdir, f"{name}.interpro.tsv.tsv")
     with open(intermediate, "wb") as f:
         f.write(tsv_bytes)

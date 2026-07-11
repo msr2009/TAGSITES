@@ -3,8 +3,9 @@
 Status file path: {working_dir}/{run_name}.status.json
 Schema per task entry:
     {
-        "status":  "pending | running | success | failed",
-        "job_id":  "ebi-jobId-or-empty",
+        "status":   "pending | running | success | failed",
+        "job_ids":  [list of EBI job IDs, one per sequential EBI submission the task
+                    makes, in call order — empty for tasks with no EBI calls],
         "message": "error message if failed",
         "output":  "/path/to/expected/output/file",
         "stage":   "current high-level step token, e.g. 'blast_submit' (optional)",

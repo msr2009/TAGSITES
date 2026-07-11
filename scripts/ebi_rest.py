@@ -90,3 +90,43 @@ def run_job(base_url, params, poll_cb=None, poll_interval=5, backoff=1.5, max_in
             raise RuntimeError(f"EBI job {job_id} ended with status: {current}")
         # exponential backoff up to max_interval
         interval = min(interval * backoff, max_interval)
+
+
+def resume_job(base_url, job_id, result_type):
+    """Check a previously-submitted job's status once (no polling loop) and act on it.
+
+    Returns a (state, payload) tuple instead of raising, so callers can branch on
+    plain data:
+      ("finished", <result bytes>)      job is done; payload is the fetched result
+      ("pending",  <raw status string>) still QUEUED/RUNNING; try again later
+      ("expired",  <raw status string>) ERROR/FAILURE/NOT_FOUND; the job is gone
+    Use this to reattach to a job submitted in an earlier session instead of
+    resubmitting it from scratch.
+    """
+    status = get_status(base_url, job_id)
+    if status == "FINISHED":
+        return "finished", fetch_result(base_url, job_id, result_type)
+    if status in {"QUEUED", "RUNNING"}:
+        return "pending", status
+    return "expired", status
+
+
+def indexed_job_id_cb(job_id_cb, index):
+    """Wrap a job_id_cb(index, jid) callback into a poll_cb(job_id, status)-shaped one.
+
+    Lets a script tag a freshly-submitted job ID with its sequential position
+    (0, 1, 2, …) among the EBI calls a task makes, so callers pass it straight
+    into run_job()'s poll_cb= without hand-rolling a closure.
+    """
+    if not job_id_cb:
+        return None
+    return lambda jid, status: job_id_cb(index, jid)
+
+
+def combined_poll_cb(*callbacks):
+    """Combine several poll_cb(job_id, status) callbacks into one that calls each in turn."""
+    def _cb(job_id, status):
+        for cb in callbacks:
+            if cb:
+                cb(job_id, status)
+    return _cb

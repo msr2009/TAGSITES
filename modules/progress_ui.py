@@ -109,8 +109,14 @@ def progress_ui():
                                    disabled=True, class_="btn-primary btn-sm"),
             ui.input_action_button("rerun_all", "↻ Re-run All",
                                    disabled=True, class_="btn-outline-warning btn-sm"),
-            ui.download_button("download_results", "⬇ Download Results",
-                               class_="btn-secondary btn-sm"),
+            ui.download_button(
+                "download_results", "⬇ Download Results",
+                class_="btn-secondary btn-sm",
+                title=("Can be downloaded at any time during a run — finished tasks are "
+                       "bundled; in-progress or queued tasks are skipped and can be "
+                       "included by downloading again later."),
+            ),
+            ui.input_switch("auto_download", "Auto-download when finished", value=False),
             class_="save-bar",
         ),
     )

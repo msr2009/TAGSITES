@@ -23,7 +23,7 @@ import run_status as _run_status
 from task_runners import TASK_RUNNERS, afdb_presearch
 from progress import make_status_reporter, report as _progress_report
 
-from modules.progress_logic import display_params, parse_run, status_label
+from modules.progress_logic import all_terminal, display_params, parse_run, status_label
 from modules.setup_ui import label_with_tip
 from modules.json_card import json_upload_card as _json_upload_card
 
@@ -92,6 +92,9 @@ def progress_server(input, output, session, shared_json, shared_results_trigger)
     _click_baseline = {}   # {tid: click_count captured at last action} — plain dict
     _baseline_tick  = reactive.Value(0)  # bumped on each launch to trigger re-sync
 
+    # {tid: resume_seq last shown as a toast} — avoids re-notifying on every 2 s poll
+    _resume_seq_seen = {}
+
     # ── parse JSON whenever the shared path changes ────────────────────────────
 
     @reactive.effect
@@ -120,7 +123,7 @@ def progress_server(input, output, session, shared_json, shared_results_trigger)
                 entry = _run_status.load_status(wd, rn).get(t["id"], {})
                 if not entry:
                     _run_status.update_task(wd, rn, t["id"],
-                                            status="pending", job_id="",
+                                            status="pending", job_ids=[],
                                             message="", output=t["output"])
 
     # ── upload handler ─────────────────────────────────────────────────────────
@@ -136,7 +139,12 @@ def progress_server(input, output, session, shared_json, shared_results_trigger)
     # ── shared task runner (used by both extended tasks) ──────────────────────
 
     def _run_one(task, wd, rn):
-        """Run a single task synchronously, writing status updates to the status file."""
+        """Run a single task synchronously, writing status updates to the status file.
+
+        Before (re)launching, checks for EBI job IDs persisted from a previous
+        attempt (e.g. after reloading a bundle whose task never finished) and
+        passes them to the runner so it can reattach instead of resubmitting.
+        """
         tid      = task["id"]
         analysis = task["analysis"]
         args     = task["args"]
@@ -148,19 +156,61 @@ def progress_server(input, output, session, shared_json, shared_results_trigger)
                                     log=f"ERROR: Unknown analysis type '{analysis}'")
             return
 
+        prev_entry = _run_status.load_status(wd, rn).get(tid, {})
+        # only offer resume IDs for a task that didn't finish last time — an explicit
+        # re-run of an already-successful task should resubmit fresh, not reattach
+        # to the old (already-consumed) job.
+        resume_job_ids = []
+        if prev_entry.get("status") != "success":
+            resume_job_ids = prev_entry.get("job_ids") or []
+        # bumped every attempt so _notify_resume_status can tell "still pending"
+        # apart from "still pending, but from a brand new recheck"
+        resume_seq = int(prev_entry.get("resume_seq", 0)) + 1
+
+        def job_id_cb(index, jid):
+            """Record a freshly-submitted EBI job ID at its sequential index within the task."""
+            ids = list(_run_status.load_status(wd, rn).get(tid, {}).get("job_ids") or [])
+            while len(ids) <= index:
+                ids.append(None)
+            ids[index] = jid
+            _run_status.update_task(wd, rn, tid, job_ids=ids)
+
         log = []
-        _run_status.update_task(wd, rn, tid, status="running", job_id="", log="", stage="")
+        _run_status.update_task(wd, rn, tid, status="running", log="", stage="")
         reporter = make_status_reporter(wd, rn, tid, log)
 
         try:
-            runner(args, report=reporter)
-            _progress_report(reporter, "Done.", stage="done")
-            _run_status.update_task(wd, rn, tid, status="success", output=output)
+            result = runner(args, report=reporter, job_id_cb=job_id_cb, resume_job_ids=resume_job_ids)
+            ebi_status = result.get("ebi_status") if isinstance(result, dict) else None
+            if ebi_status == "pending":
+                _run_status.update_task(wd, rn, tid, status="queued",
+                                        message=f"Still processing at EBI ({result.get('detail')}); "
+                                                "check again later.",
+                                        resume_note="pending", resume_seq=resume_seq)
+            elif ebi_status == "expired":
+                _run_status.update_task(wd, rn, tid, status="failed",
+                                        message="EBI job expired or was not found — please re-run this task.",
+                                        job_ids=[], resume_note="expired", resume_seq=resume_seq)
+            elif output and not os.path.exists(output):
+                # runner returned without raising but never wrote its output file —
+                # treat as a failure rather than reporting a false "success"
+                _run_status.update_task(wd, rn, tid, status="failed",
+                                        message=f"Task completed without error but did not "
+                                                f"produce its output file: {output}",
+                                        resume_note=None, resume_seq=resume_seq)
+            else:
+                _progress_report(reporter, "Done.", stage="done")
+                # only note a "resume" outcome when this attempt actually reattached
+                # to a previously-submitted job, not on an ordinary fresh run
+                note = "resumed" if resume_job_ids else None
+                _run_status.update_task(wd, rn, tid, status="success", output=output,
+                                        resume_note=note, resume_seq=resume_seq)
         except Exception as exc:
             import traceback
             log.append(traceback.format_exc())
             _run_status.update_task(wd, rn, tid, status="failed", message=str(exc),
-                                    log="\n".join(log), stage="failed")
+                                    log="\n".join(log), stage="failed",
+                                    resume_note=None, resume_seq=resume_seq)
 
     # ── run-button state ───────────────────────────────────────────────────────
 
@@ -355,6 +405,50 @@ def progress_server(input, output, session, shared_json, shared_results_trigger)
             _completion_notified_all[0] = True
             _completion_count[0] += 1
             shared_results_trigger.set(_completion_count[0])
+
+    @reactive.effect
+    def _notify_resume_status():
+        """Toast the outcome of an EBI resume check: still running, finished, or expired.
+
+        _run_one() stamps resume_note + resume_seq once per (re)launch attempt;
+        comparing resume_seq against the last one we've shown lets a task get
+        renotified on every new attempt without re-firing on every 2 s status poll.
+        """
+        status = _current_status()
+        for tid, entry in status.items():
+            note = entry.get("resume_note")
+            seq  = entry.get("resume_seq")
+            if not note or seq is None or _resume_seq_seen.get(tid) == seq:
+                continue
+            _resume_seq_seen[tid] = seq
+            label = tid.rsplit("_", 1)[0]
+            if note == "pending":
+                ui.notification_show(f"{label}: still running at EBI — check again later.",
+                                     type="message", duration=6)
+            elif note == "expired":
+                ui.notification_show(f"{label}: no results at EBI (job expired or was not "
+                                     "found) — please re-run this task.",
+                                     type="warning", duration=8)
+            elif note == "resumed":
+                ui.notification_show(f"{label}: finished at EBI — reused the existing result.",
+                                     type="message", duration=5)
+
+    # plain mutable guard — avoids re-firing auto-download on every poll while
+    # the run stays finished
+    _auto_download_notified = [False]
+
+    @reactive.effect
+    async def _auto_download():
+        """Trigger a browser download once every task reaches a terminal status, if enabled."""
+        status = _current_status()
+        tasks  = task_list.get()
+        if not all_terminal(status, tasks):
+            _auto_download_notified[0] = False
+            return
+        if _auto_download_notified[0] or not input.auto_download():
+            return
+        _auto_download_notified[0] = True
+        await session.send_custom_message("tagsites_trigger_download", {})
 
         if single_status == "running":
             _completion_notified_single[0] = False
