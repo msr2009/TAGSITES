@@ -408,11 +408,12 @@ def progress_server(input, output, session, shared_json, shared_results_trigger)
 
     @reactive.effect
     def _notify_resume_status():
-        """Toast the outcome of an EBI resume check: still running, finished, or expired.
+        """Toast the outcome of an EBI resume check: still running or expired.
 
         _run_one() stamps resume_note + resume_seq once per (re)launch attempt;
         comparing resume_seq against the last one we've shown lets a task get
         renotified on every new attempt without re-firing on every 2 s status poll.
+        A "resumed" note (existing result reused) is intentionally silent.
         """
         status = _current_status()
         for tid, entry in status.items():
@@ -429,9 +430,6 @@ def progress_server(input, output, session, shared_json, shared_results_trigger)
                 ui.notification_show(f"{label}: no results at EBI (job expired or was not "
                                      "found) — please re-run this task.",
                                      type="warning", duration=8)
-            elif note == "resumed":
-                ui.notification_show(f"{label}: finished at EBI — reused the existing result.",
-                                     type="message", duration=5)
 
     # plain mutable guard — avoids re-firing auto-download on every poll while
     # the run stays finished
