@@ -129,6 +129,10 @@ def load_data_from_json(json_in, type_dict):
         analysis    = v.get("type", "")
         output_path = v.get("args", {}).get("output", "")
 
+        # reagents tasks feed the Reagents tab, not the Results plots — skip quietly
+        if analysis == "reagents":
+            continue
+
         # skip tasks whose output files haven't been written yet
         if not output_path or not os.path.exists(output_path):
             print(f"Output not found for task '{task}' ({analysis}): {output_path}")
