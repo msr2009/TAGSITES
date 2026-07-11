@@ -871,12 +871,12 @@
     pendingSet.forEach(function (pos) {
       viewer.setStyle({ resi: pos }, { cartoon: { color: "#ffc107" } });
       viewer.addStyle({ resi: pos }, { stick: { colorscheme: "amino", radius: 0.2 } });
-      viewer.addStyle({ resi: pos }, { sphere: { colorscheme: "amino", scale: 0.25 } });
+      viewer.addStyle({ resi: pos }, { sphere: { colorscheme: "amino", scale: 0.4 } });
     });
     committedSet.forEach(function (pos) {
       viewer.setStyle({ resi: pos }, { cartoon: { color: "#28a745" } });
       viewer.addStyle({ resi: pos }, { stick: { colorscheme: "amino", radius: 0.2 } });
-      viewer.addStyle({ resi: pos }, { sphere: { colorscheme: "amino", scale: 0.25 } });
+      viewer.addStyle({ resi: pos }, { sphere: { colorscheme: "amino", scale: 0.4 } });
     });
 
     viewer.render();
