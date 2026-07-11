@@ -115,6 +115,18 @@ def make_bundle(run_json_path):
 
 # ── upload side: detect + extract + rebase ──────────────────────────────────
 
+def _is_junk_entry(name):
+    """True for macOS Finder zip cruft: __MACOSX/ AppleDouble sidecar entries.
+
+    Zips created via Finder's "Compress" action embed a ._<name> resource-fork
+    shadow file next to every real entry (under a top-level __MACOSX/ folder).
+    These shadow files match naming heuristics like "*.run.json" but hold
+    binary data, so they must be excluded from bundle detection and extraction.
+    """
+    base = os.path.basename(name)
+    return name.startswith("__MACOSX/") or base.startswith("._")
+
+
 def is_bundle_zip(path):
     """True if path is a ZIP holding a MANIFEST or exactly one *.run.json."""
     if not path or not zipfile.is_zipfile(path):
@@ -124,6 +136,7 @@ def is_bundle_zip(path):
             names = zf.namelist()
     except Exception:
         return False
+    names = [n for n in names if not _is_junk_entry(n)]
     if MANIFEST_NAME in names:
         return True
     return sum(1 for n in names if n.endswith(".run.json")) == 1
@@ -155,8 +168,8 @@ def extract_and_rebase(zip_path, dest_dir):
                 manifest = {}
         for name in names:
             base = os.path.basename(name)
-            if not base or name == MANIFEST_NAME:
-                continue   # skip directory entries and the manifest itself
+            if not base or name == MANIFEST_NAME or _is_junk_entry(name):
+                continue   # skip directory entries, the manifest, and Finder zip cruft
             with zf.open(name) as src, open(os.path.join(dest_dir, base), "wb") as dst:
                 dst.write(src.read())
             if base.endswith(".run.json"):
