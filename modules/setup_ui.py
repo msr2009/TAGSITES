@@ -263,9 +263,9 @@ def setup_ui():
 
                     # protein file upload
                     compact_file_input("input_file",
-                        label_with_tip("Protein sequence (.fa, .fasta, or .pdb)",
+                        label_with_tip("Protein sequence (.fa, .fasta, .fsa, or .pdb)",
                                        _t.get("input_file", "")),
-                        accept=[".fa", ".fasta", ".pdb"]),
+                        accept=[".fa", ".fasta", ".fsa", ".pdb"]),
 
                     # — or — divider between file upload and paste
                     ui.div(ui.span("— or paste —"), class_="or-divider"),
@@ -296,7 +296,7 @@ def setup_ui():
                     # genomic file upload
                     compact_file_input("input_genomic",
                         label_with_tip("Genomic region FASTA", _t.get("input_genomic", "")),
-                        accept=[".fasta", ".fa"]),
+                        accept=[".fasta", ".fa", ".fsa"]),
 
                     # — or — divider between file upload and paste
                     ui.div(ui.span("— or paste —"), class_="or-divider"),

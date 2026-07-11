@@ -402,7 +402,7 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                 compact_file_input(
                     "pcr_template_file",
                     "Template (FASTA or GenBank)",
-                    accept=[".fa", ".fasta", ".fna", ".gb", ".gbk", ".genbank"],
+                    accept=[".fa", ".fasta", ".fsa", ".fna", ".gb", ".gbk", ".genbank"],
                     multiple=False,
                 ),
                 ui.input_text_area(
