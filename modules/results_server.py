@@ -175,7 +175,7 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
             except FileNotFoundError:
                 ui.notification_show("Uploaded file not found.", type="error", duration=6)
                 return
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, UnicodeDecodeError):
                 ui.notification_show("Could not parse JSON — file may be malformed.",
                                      type="error", duration=6)
                 return
@@ -194,7 +194,7 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
         try:
             with open(path) as f:
                 json_content = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
+        except (FileNotFoundError, json.JSONDecodeError, UnicodeDecodeError):
             return
         await _do_load(json_content)
 
