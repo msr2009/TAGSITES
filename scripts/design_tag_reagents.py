@@ -421,7 +421,7 @@ if __name__ == '__main__':
     parser.add_argument('--flank_max', type=int, default=150,
                         help='Maximum distance (bp) of a genotyping primer from the insert site '
                              '(default: 150)')
-    args = parser.parse_args()
+    args, unknowns = parser.parse_known_args()
 
     protein_length = None
     if args.protein_fasta:

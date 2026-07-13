@@ -17,7 +17,7 @@ _SCRIPTS = Path(__file__).parent
 sys.path.insert(0, str(_SCRIPTS))
 import run_status
 import progress
-from task_registry import task_script, task_hidden, GLOBAL_KEYS
+from task_registry import task_script
 
 
 def _stderr_reader(proc, task_id, working_dir, run_name):
@@ -177,10 +177,17 @@ def main(json_input_file, force=False):
     global_args = json_in["global"]
     tasks       = json_in["tasks"]
 
-    # build the EXCLUDE list: global keys + hidden params from registry + output
-    hidden_params = {p for ttype in tasks.values()
-                       for p in task_hidden(ttype["type"])}
-    EXCLUDE_CLI = list(GLOBAL_KEYS | hidden_params | {"output"})
+    # build the EXCLUDE list: global keys that have no matching CLI flag on any
+    # task script (email/working_dir/run_name/input_file/pdb/genomic_file DO
+    # have matching flags — e.g. blast_orthologs.py's --dir/--working_dir alias —
+    # and every task script accepts+ignores unknown flags via parse_known_args(),
+    # so passing them through is safe), plus hidden UI params that are genuinely
+    # not real CLI flags on any script. Most "hidden" params (e.g. reagents'
+    # genewise, plddt's pdb) ARE required CLI flags on their script — hidden
+    # only means "don't show in the UI form", not "don't pass to the subprocess".
+    NON_CLI_GLOBAL_KEYS = {"scripts_folder", "selected_sites"}
+    NON_CLI_HIDDEN_PARAMS = {"existing_AF2"}
+    EXCLUDE_CLI = list(NON_CLI_GLOBAL_KEYS | NON_CLI_HIDDEN_PARAMS)
 
     task_commands = []
     for task_id, v in tasks.items():
