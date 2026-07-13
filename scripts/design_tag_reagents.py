@@ -34,11 +34,12 @@ Output TSV (one row per residue × guide):
   left_arm          left homology arm: exonic bases uppercase, intronic lowercase
   right_arm         right homology arm: exonic bases uppercase, intronic lowercase
 
-When --insert_sequence is set, a companion <output>.genotyping.tsv is also
-written (one row per residue x amplicon_type: 'external', and for inserts
->= --internal_threshold, '5p_junction'/'3p_junction'), with columns
-residue_index, amino_acid, insert_pos, amplicon_type, fwd_seq, fwd_tm,
-rev_seq, rev_tm, product_size. See reagent_sequences.design_genotyping_primers.
+A companion <output>.genotyping.tsv is always written (genomic sequence is
+always available): one row per residue x amplicon_type. 'external' alone
+when --insert_sequence is empty; plus '5p_junction'/'3p_junction' when a tag
+sequence is given. Columns: residue_index, amino_acid, insert_pos,
+amplicon_type, fwd_seq, fwd_tm, rev_seq, rev_tm, product_size.
+See reagent_sequences.design_genotyping_primers.
 
 Matt Rich, 2025
 """
@@ -135,16 +136,17 @@ def design_reagents(
     pam            : str  IUPAC PAM (default 'NGG')
     guide_length   : int  spacer length (default 20)
     cut_offset     : int  cut distance from PAM (SpCas9=3)
-    insert_sequence : str  default insert/tag DNA sequence. When non-empty, a
-                     genotyping-primer TSV is designed for every site (see
-                     reagent_sequences.design_genotyping_primers) and returned
-                     alongside the reagents DataFrame.
+    insert_sequence : str  default insert/tag DNA sequence. Genotyping primers are
+                     always designed (external pair only when empty; plus 5'/3'
+                     junction pairs when a tag sequence is given). See
+                     reagent_sequences.design_genotyping_primers.
     internal_threshold, primer_opt_tm, product_opt_size, flank_min, flank_max :
                      passed through to design_genotyping_primers.
 
     Returns
     -------
-    (df, genotyping_df) : genotyping_df is None when insert_sequence is empty.
+    (df, genotyping_df) : genotyping_df is a DataFrame of genotyping primer
+                     pairs, one row per residue x amplicon_type.
 
     Raises
     ------
@@ -331,14 +333,15 @@ def design_reagents(
                     min_left, min_right, arm_length)
             )
 
-    genotyping_df = None
-    if insert_sequence:
-        genotyping_df = _design_genotyping_rows(
-            sites, dna, L, insert_sequence.upper(), internal_threshold,
-            primer_opt_tm, product_opt_size, flank_min, flank_max,
-        )
-        _report(reporter, '{} genotyping primer pairs designed'.format(len(genotyping_df)),
-               stage='genotyping_primers')
+    # Genomic sequence is always available here, so genotyping (screening) primers
+    # are always designed: an external pair alone when insert_sequence is empty,
+    # or external + 5'/3' junction pairs when a tag sequence is given.
+    genotyping_df = _design_genotyping_rows(
+        sites, dna, L, insert_sequence.upper(), internal_threshold,
+        primer_opt_tm, product_opt_size, flank_min, flank_max,
+    )
+    _report(reporter, '{} genotyping primer pairs designed'.format(len(genotyping_df)),
+           stage='genotyping_primers')
 
     return df, genotyping_df
 
@@ -402,14 +405,14 @@ if __name__ == '__main__':
                         help='Guide spacer length in nt (default: 20)')
     parser.add_argument('--cut_offset', type=int, default=3,
                         help='Bases upstream of PAM where DSB occurs (SpCas9=3)')
-    # Optional genotyping-primer parameters
+    # Optional genotyping-primer parameters — genotyping primers are always
+    # designed and written to a companion <output>.genotyping.tsv; setting
+    # --insert_sequence additionally designs 5'/3' junction primer pairs.
     parser.add_argument('--insert_sequence', default='',
-                        help='Default insert/tag DNA sequence — when set, designs genotyping '
-                             '(screening) primers for every site and writes a companion '
-                             '<output>.genotyping.tsv')
+                        help='Insert/tag DNA sequence — when set, also designs 5\'/3\' '
+                             'junction genotyping primers spanning the tag boundaries')
     parser.add_argument('--internal_threshold', type=int, default=500,
-                        help='Inserts >= this length (nt) also get internal junction primers '
-                             '(default: 500)')
+                        help='Unused; kept for CLI compatibility')
     parser.add_argument('--primer_opt_tm', type=float, default=60.0,
                         help='primer3 PRIMER_OPT_TM for genotyping primers (default: 60)')
     parser.add_argument('--product_opt_size', type=int, default=200,

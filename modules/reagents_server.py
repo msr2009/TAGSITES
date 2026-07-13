@@ -387,9 +387,6 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                                  type="warning", duration=5)
             return
 
-        # 500 nt is roughly the practical ceiling for a single Sanger read across
-        # the whole insert, so inserts at/above that always get internal primers.
-        internal_threshold = 500
         try:
             primer_opt_tm = float(input.primer_opt_tm())
         except Exception:
@@ -410,7 +407,6 @@ def reagents_server(input, output, session, shared_json, shared_sites):
             try:
                 primers = design_genotyping_primers(
                     left_flank, right_flank, insert,
-                    internal_threshold=internal_threshold,
                     primer_opt_tm=primer_opt_tm,
                     product_opt_size=product_opt_size,
                     flank_min=_GENOTYPING_FLANK_MIN,

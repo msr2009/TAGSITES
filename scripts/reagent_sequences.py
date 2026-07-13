@@ -280,7 +280,12 @@ def _primer3_pair(template, target_start, target_len, excluded_regions,
         'PRIMER_PRODUCT_SIZE_RANGE': [product_size_range],
         'PRIMER_NUM_RETURN': 1,
     }
-    res = primer3.bindings.design_primers(seq_args, global_args)
+    try:
+        res = primer3.bindings.design_primers(seq_args, global_args)
+    except OSError:
+        # region too small/degenerate for primer3's geometry (e.g. a site near
+        # the edge of the genomic record) — equivalent to "no valid design found"
+        return None
     if res.get('PRIMER_PAIR_NUM_RETURNED', 0) < 1:
         return None
     return {
@@ -323,7 +328,10 @@ def _primer3_single(template, region_start, region_len, excluded_region, pick_le
         'PRIMER_PRODUCT_SIZE_RANGE': [product_size_range],
         'PRIMER_NUM_RETURN': 1,
     }
-    res = primer3.bindings.design_primers(seq_args, global_args)
+    try:
+        res = primer3.bindings.design_primers(seq_args, global_args)
+    except OSError:
+        return None
     if res.get('PRIMER_PAIR_NUM_RETURNED', 0) < 1:
         return None
     key = 'PRIMER_LEFT_0_SEQUENCE' if pick_left else 'PRIMER_RIGHT_0_SEQUENCE'
@@ -351,7 +359,10 @@ def _primer3_paired_to_fixed(edited_seq, fixed_seq, fixed_is_forward,
         'PRIMER_PRODUCT_SIZE_RANGE': [product_size_range],
         'PRIMER_NUM_RETURN': 1,
     }
-    res = primer3.bindings.design_primers(seq_args, global_args)
+    try:
+        res = primer3.bindings.design_primers(seq_args, global_args)
+    except OSError:
+        return None
     if res.get('PRIMER_PAIR_NUM_RETURNED', 0) < 1:
         return None
     return {
@@ -371,15 +382,21 @@ def design_genotyping_primers(left_flank, right_flank, insert_sequence,
     left_flank / right_flank: genomic sequence on each side of the insertion site
     (at least flank_max + ~60bp margin recommended).
 
-    Short inserts (< internal_threshold): one external pair spanning the insert,
-    with both primers held flank_min-flank_max bp from the insert.
+    No insert sequence: one external pair spanning the insertion site, with both
+    primers held flank_min-flank_max bp away — verifies the WT locus / detects any
+    size change at the site.
 
-    Long inserts (>= internal_threshold): the external pair above, plus a 5' and
-    3' junction pair. Each junction pair is designed as a genuine primer3 pair —
-    the genomic-side primer is designed first (single-primer mode), then pinned
-    via SEQUENCE_PRIMER/SEQUENCE_PRIMER_REVCOMP so primer3 designs a true,
-    Tm-/dimer-compatible internal partner on the in-silico edited allele sequence
-    (left_flank + insert_sequence + right_flank) — not matched after the fact.
+    Insert sequence given: the external pair above, plus a 5' and 3' junction pair,
+    attempted regardless of insert length. Each junction pair is designed as a
+    genuine primer3 pair — the genomic-side primer is designed first (single-primer
+    mode), then pinned via SEQUENCE_PRIMER/SEQUENCE_PRIMER_REVCOMP so primer3 designs
+    a true, Tm-/dimer-compatible internal partner on the in-silico edited allele
+    sequence (left_flank + insert_sequence + right_flank) — not matched after the fact.
+    A junction pair is simply absent from the result if the insert is too short for
+    primer3 to find a valid internal primer.
+
+    internal_threshold is accepted for backward compatibility but no longer gates
+    junction-primer design (kept to avoid changing the CLI/task interface).
 
     Returns {amplicon_type: {fwd_seq, fwd_tm, rev_seq, rev_tm, product_size}}.
     Amplicon types missing from the dict mean primer3 found no valid design.
@@ -393,13 +410,23 @@ def design_genotyping_primers(left_flank, right_flank, insert_sequence,
     results = {}
 
     # ── External pair: spans the whole insert, primers held off the insert ──
+    # Excluded-region lengths are clamped to the available flank on each side —
+    # primer3 raises OSError if a region extends past the template's end, which
+    # happens for sites near the edge of the genomic record (short left/right flank).
     insert_start = len(left_flank)
+    left_excl_start = max(insert_start - flank_min, 0)
+    left_excl_len   = min(flank_min, len(edited_seq) - left_excl_start)
+    right_excl_start = insert_start + insert_len
+    right_excl_len   = min(flank_min, len(edited_seq) - right_excl_start)
+    excluded_regions = []
+    if left_excl_len > 0:
+        excluded_regions.append([left_excl_start, left_excl_len])
+    if right_excl_len > 0:
+        excluded_regions.append([right_excl_start, right_excl_len])
+
     ext = _primer3_pair(
         edited_seq, insert_start, max(insert_len, 1),
-        excluded_regions=[
-            [max(insert_start - flank_min, 0), flank_min],
-            [insert_start + insert_len, flank_min],
-        ],
+        excluded_regions=excluded_regions,
         primer_opt_tm=primer_opt_tm,
         product_opt_size=product_opt_size,
         product_size_range=[insert_len + 2 * flank_min, insert_len + 2 * flank_max],
@@ -407,7 +434,7 @@ def design_genotyping_primers(left_flank, right_flank, insert_sequence,
     if ext:
         results['external'] = ext
 
-    if insert_len < internal_threshold:
+    if not insert_sequence:
         return results
 
     # ── 5' junction: fixed genomic forward primer, primer3 designs internal reverse ──
