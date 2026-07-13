@@ -11,3 +11,4 @@ shinywidgets
 xmltramp2
 ridgeplot
 reportlab
+primer3-py

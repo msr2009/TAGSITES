@@ -22,9 +22,11 @@ from reagent_sequences import (
     build_ssodn,
     calc_tm,
     check_recut_risk,
+    design_genotyping_primers,
     design_pcr_primers,
     load_tags,
     truncate_arms,
+    truncate_arms_with_tolerance,
 )
 from plasmid_assembly import (
     OLIGO_MAX,
@@ -33,10 +35,11 @@ from plasmid_assembly import (
     SAPTRAP_OVERHANGS,
     build_saptrap_site,
     find_internal_sapi,
+    sapi_amplification_primers,
 )
 
 from modules.json_card import json_upload_card as _json_upload_card
-from modules.ui_helpers import compact_file_input
+from modules.setup_ui import label_with_tip
 
 _TAGS_PATH = Path(__file__).parent.parent / "tables" / "tags.tsv"
 _TAGS = load_tags(_TAGS_PATH) if _TAGS_PATH.exists() else {}
@@ -44,26 +47,15 @@ _TAGS = load_tags(_TAGS_PATH) if _TAGS_PATH.exists() else {}
 # Arm-length defaults by repair type
 _ARM_DEFAULTS = {"ha": 1000, "ssodn": 50, "amplicon": 50, "plasmid": 57}
 
+# Genotyping-primer design window: how far off the insert primers must sit
+_GENOTYPING_FLANK_MIN = 50
+_GENOTYPING_FLANK_MAX = 150
+_GENOTYPING_MARGIN    = 60   # extra room beyond flank_max for primer3 to search
+
 
 def _safe_id(s):
     """Strip non-alphanumeric characters for use in a Shiny input ID."""
     return re.sub(r'[^A-Za-z0-9]', '_', str(s))
-
-
-def _parse_seq_file(path, filename=''):
-    """Return an uppercase DNA string from a FASTA or GenBank file."""
-    from Bio import SeqIO
-    ext = os.path.splitext(filename or path)[1].lower()
-    fmts = (['genbank', 'fasta'] if ext in ('.gb', '.gbk', '.genbank', '.gbff')
-            else ['fasta', 'genbank'])
-    for fmt in fmts:
-        try:
-            recs = list(SeqIO.parse(path, fmt))
-            if recs:
-                return str(recs[0].seq).upper()
-        except Exception:
-            continue
-    raise ValueError("Not a valid FASTA or GenBank file")
 
 
 # ── module server ──────────────────────────────────────────────────────────────
@@ -77,7 +69,7 @@ def reagents_server(input, output, session, shared_json, shared_sites):
     stored_arm_len   = reactive.Value(1000)   # arm_length used when TSV was generated
     reagents_df      = reactive.Value(None)   # full TSV as DataFrame or None
     selected_guides  = reactive.Value({})     # {residue_index (int): set(guide_id)}
-    _template_seq    = reactive.Value("")     # PCR template, persists across repair-type switches
+    genotyping_results = reactive.Value({})   # {residue_index (int): {amplicon_type: {...}}}
 
     # reactive path cell: drives _poll_for_tsv even when reagents_df stays None
     _tsv_path_cache = reactive.Value("")
@@ -91,25 +83,6 @@ def reagents_server(input, output, session, shared_json, shared_sites):
         choices["Custom"] = "Custom…"
         ui.update_select("tag_name", choices=choices,
                          selected=next(iter(_TAGS), "Custom"))
-
-    @reactive.effect
-    def _load_template_file():
-        """Parse an uploaded PCR template file and store the sequence."""
-        try:
-            info = input.pcr_template_file()
-        except Exception:
-            return
-        if not info:
-            return
-        path = info[0]["datapath"]
-        name = info[0]["name"]
-        try:
-            seq = _parse_seq_file(path, name)
-        except Exception as e:
-            ui.notification_show("Could not parse template file: {}".format(e),
-                                 type="error", duration=6)
-            return
-        _template_seq.set(seq)
 
     # ── load run JSON whenever shared path changes ────────────────────────────
 
@@ -279,10 +252,14 @@ def reagents_server(input, output, session, shared_json, shared_sites):
 
     @reactive.calc
     def _guide_content():
-        """Truncate arms and build ASCII diagrams for all selected guides.
+        """Truncate arms, build ASCII diagrams, and flag primer3 fallback use
+        for all selected guides.
 
-        Cached per (sites_df, arm_length) — does not re-run on checkbox changes.
-        Returns dict {guide_id: {left, right, diagram}} or {} on error.
+        Cached per (sites_df, arm_length, repair_type) — does not re-run on
+        checkbox changes. Returns dict {guide_id: {left, right, diagram,
+        used_fallback}} or {} on error. used_fallback reflects whichever
+        primer-design path applies to the current repair_type (amplicon or
+        SapTrap long-arm); False for repair types with no primer3 step.
         """
         df = sites_df()
         if df is None or not _arm_ok():
@@ -291,10 +268,28 @@ def reagents_server(input, output, session, shared_json, shared_sites):
             arm_len = int(input.arm_length())
         except Exception:
             return {}
+        try:
+            repair = input.repair_type()
+        except Exception:
+            repair = ""
+        insert = _insert_seq()
+
+        saptrap_long_arm = repair == "plasmid" and arm_len > OLIGO_MAX
+        if saptrap_long_arm:
+            try:
+                tolerance = float(input.saptrap_arm_tolerance()) / 100.0
+            except Exception:
+                tolerance = 0.2
+            try:
+                saptrap_tm = float(input.saptrap_tm())
+            except Exception:
+                saptrap_tm = 60.0
+
         result = {}
         wt_extra = 10   # extra bp beyond arm_length shown in the WT row
         for _, row in df.iterrows():
             gid = str(row["guide_id"])
+            used_fallback = False
             try:
                 left, right = truncate_arms(
                     str(row["left_arm"]), str(row["right_arm"]), arm_len
@@ -303,11 +298,44 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                 right_wt = str(row["right_arm"])[:(arm_len + wt_extra)]
                 diag = ascii_diagram(row, left, right,
                                      left_wt=left_wt, right_wt=right_wt)
+
+                if repair == "amplicon" and insert:
+                    tm = 60.0
+                    try:
+                        tm = float(input.pcr_tm())
+                    except Exception:
+                        pass
+                    phos = False
+                    try:
+                        phos = bool(input.pcr_phos())
+                    except Exception:
+                        pass
+                    _, _, pcr_meta = design_pcr_primers(
+                        left, right, insert, tm, phos,
+                        int(row["cut_pos"]), int(row["insert_pos"]),
+                    )
+                    used_fallback = pcr_meta["used_fallback"]
+                elif saptrap_long_arm:
+                    wleft, wright = truncate_arms_with_tolerance(
+                        str(row["left_arm"]), str(row["right_arm"]), arm_len, tolerance
+                    )
+                    left_oh5, right_oh5 = SAPTRAP_OVERHANGS["ha5"]
+                    left_oh3, right_oh3 = SAPTRAP_OVERHANGS["ha3"]
+                    _, _, meta5 = sapi_amplification_primers(
+                        wleft, left_oh5, right_oh5, saptrap_tm,
+                        nominal_length=arm_len, tolerance=tolerance, pinned_side='rev',
+                    )
+                    _, _, meta3 = sapi_amplification_primers(
+                        wright, left_oh3, right_oh3, saptrap_tm,
+                        nominal_length=arm_len, tolerance=tolerance, pinned_side='fwd',
+                    )
+                    used_fallback = meta5["used_fallback"] or meta3["used_fallback"]
             except Exception as e:
                 left, right, diag = "", "", str(e)
             result[gid] = {
                 "left": left, "right": right, "diagram": diag,
                 "left_bp": len(left), "right_bp": len(right), "arm_len": arm_len,
+                "used_fallback": used_fallback,
             }
         return result
 
@@ -335,6 +363,69 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                 str(row["spacer"]), str(row["pam_seq"]), str(row["guide_strand"])
             )
         return result
+
+    # ── genotyping primer design (button-triggered) ────────────────────────────
+
+    @reactive.effect
+    @reactive.event(input.design_genotyping)
+    def _design_genotyping():
+        """Design genotyping primers for every currently selected site.
+
+        Site-level (not per-guide): genotyping primers flank the whole
+        homology-arm region and don't depend on which guide is chosen. Uses the
+        stored left_arm/right_arm from the reagents TSV (not the UI arm_length
+        truncation) so there's enough flanking sequence for the design window.
+        """
+        df = sites_df()
+        if df is None:
+            ui.notification_show("No sites selected — choose sites in the Results tab first.",
+                                 type="warning", duration=5)
+            return
+        insert = _insert_seq()
+        if not insert:
+            ui.notification_show("Enter or select an insert/tag sequence first.",
+                                 type="warning", duration=5)
+            return
+
+        # 500 nt is roughly the practical ceiling for a single Sanger read across
+        # the whole insert, so inserts at/above that always get internal primers.
+        internal_threshold = 500
+        try:
+            primer_opt_tm = float(input.primer_opt_tm())
+        except Exception:
+            primer_opt_tm = 60.0
+        try:
+            product_opt_size = int(input.product_opt_size())
+        except Exception:
+            product_opt_size = 200
+
+        w = _GENOTYPING_FLANK_MAX + _GENOTYPING_MARGIN
+        results = {}
+        for rid in sorted(int(r) for r in df["residue_index"].unique()):
+            row = df[df["residue_index"] == rid].iloc[0]
+            left_arm  = str(row["left_arm"])
+            right_arm = str(row["right_arm"])
+            left_flank  = left_arm[-w:]  if len(left_arm)  >= w else left_arm
+            right_flank = right_arm[:w] if len(right_arm) >= w else right_arm
+            try:
+                primers = design_genotyping_primers(
+                    left_flank, right_flank, insert,
+                    internal_threshold=internal_threshold,
+                    primer_opt_tm=primer_opt_tm,
+                    product_opt_size=product_opt_size,
+                    flank_min=_GENOTYPING_FLANK_MIN,
+                    flank_max=_GENOTYPING_FLANK_MAX,
+                )
+            except Exception:
+                primers = {}
+            results[rid] = primers
+
+        genotyping_results.set(results)
+        n_ok = sum(1 for p in results.values() if p)
+        ui.notification_show(
+            "Designed genotyping primers for {}/{} site(s).".format(n_ok, len(results)),
+            duration=5,
+        )
 
     # ── Outputs ───────────────────────────────────────────────────────────────
 
@@ -397,22 +488,12 @@ def reagents_server(input, output, session, shared_json, shared_sites):
             )
 
         if repair == "amplicon":
-            tmpl = _template_seq.get()
-            children = [
-                compact_file_input(
-                    "pcr_template_file",
-                    "Template (FASTA or GenBank)",
-                    accept=[".fa", ".fasta", ".fsa", ".fna", ".gb", ".gbk", ".genbank"],
-                    multiple=False,
-                ),
-                ui.input_text_area(
-                    "pcr_template", "Or paste template sequence",
-                    value=tmpl, rows=3,
-                ),
-            ]
+            tmpl = _insert_seq()
+            children = []
             if not tmpl:
                 children.append(ui.div(
-                    "⚠ A template sequence is required for PCR primer design.",
+                    "⚠ Set the insert sequence using the \"Tag / insert sequence\" "
+                    "dropdown above — it's used as the PCR template.",
                     class_="ts-warn",
                 ))
             children += [
@@ -455,11 +536,24 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                     )
                 children.append(ui.p(mode_msg, class_="section-hint"))
 
-            # ── Tm target (shown only for PCR-arm mode) ───────────────────────
+            # ── Tm target + arm-length tolerance (shown only for PCR-arm mode) ─
             if arm_len is not None and arm_len > OLIGO_MAX:
                 children.append(
                     ui.input_numeric("saptrap_tm", "Primer binding Tm target (°C)",
                                      value=60, min=40, max=80)
+                )
+                children.append(
+                    ui.input_numeric(
+                        "saptrap_arm_tolerance",
+                        label_with_tip(
+                            "Arm length tolerance (%)",
+                            "Lets primer3 shrink or extend the far/outer end of the "
+                            "arm within this percentage of the requested arm length, "
+                            "to find a better-quality primer (Tm, hairpins, GC clamp). "
+                            "The end at the insertion junction always stays exact.",
+                        ),
+                        value=20, min=0, max=50,
+                    )
                 )
 
             # ── optional GenBank output ──────────────────────────────────────
@@ -538,10 +632,14 @@ def reagents_server(input, output, session, shared_json, shared_sites):
             site_label = "{}{}".format(aa, rid)
 
             guide_divs = _build_guide_divs(site_rows, rid, content, recut)
+            genotyping_div = _build_genotyping_div(
+                genotyping_results.get().get(rid), len(_insert_seq())
+            )
 
             panels.append(
                 ui.accordion_panel(
                     site_label,
+                    genotyping_div,
                     *guide_divs,
                     value=str(rid),
                 )
@@ -606,6 +704,54 @@ def reagents_server(input, output, session, shared_json, shared_sites):
         parts.append('</code>')
         return ''.join(parts)
 
+    _AMPLICON_LABELS = {
+        "external": "External (spans insert)",
+        "5p_junction": "5′ junction",
+        "3p_junction": "3′ junction",
+    }
+
+    def _build_genotyping_div(primers, insert_len):
+        """Site-level genotyping-primer display; empty span if none designed yet.
+
+        The external pair binds outside the insert on both sides, so the same
+        primers amplify a shorter product on the WT allele (no insert) than on
+        the edited allele — showing both sizes is the whole point of a
+        genotyping PCR (band-size shift confirms the insertion).  Junction
+        pairs have no WT equivalent (the internal primer doesn't exist in WT
+        template), so only product size is shown for those.
+        """
+        if not primers:
+            return ui.span()
+        rows = []
+        for amplicon_type in ("external", "5p_junction", "3p_junction"):
+            p = primers.get(amplicon_type)
+            if not p:
+                continue
+            if amplicon_type == "external":
+                wt_size = int(p["product_size"]) - insert_len
+                size_text = "{} bp (WT) vs. {} bp (+insert)".format(wt_size, int(p["product_size"]))
+            else:
+                size_text = "{} bp".format(int(p["product_size"]))
+            # flat label/value siblings — matches the param-grid 2-column pattern
+            # used by meta_cells in _build_guide_divs (a wrapping div per pair
+            # would collapse into a single grid cell instead of two columns).
+            rows.append(ui.div(_AMPLICON_LABELS[amplicon_type], class_="param-label"))
+            rows.append(ui.div(
+                ui.tags.code("F: {} (Tm {:.1f})".format(p["fwd_seq"], p["fwd_tm"])),
+                ui.br(),
+                ui.tags.code("R: {} (Tm {:.1f})".format(p["rev_seq"], p["rev_tm"])),
+                ui.span(" — product: " + size_text, style="color:#6c757d"),
+                class_="param-value",
+            ))
+        if not rows:
+            return ui.span()
+        return ui.div(
+            ui.div("Genotyping primers", class_="fw-semibold", style="margin-bottom:0.3rem;"),
+            ui.div(*rows, class_="param-grid"),
+            style="border:1px solid #adb5bd;border-radius:4px;padding:0.5rem 0.75rem;"
+                  "margin-bottom:0.5rem;background:#f8f9fa;",
+        )
+
     def _build_guide_divs(site_rows, rid, content, recut_risk):
         """Build guide-panel divs for one tag site.
 
@@ -655,6 +801,15 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                     "the insert sequence.",
                     class_="ts-warn",
                 ) if recut_risk.get(gid, False) else ui.span()
+            )
+
+            primer_fallback_warning = (
+                ui.div(
+                    "⚠ primer3 could not find a primer within the requested window — "
+                    "fell back to the exact {} bp arm with basic Tm-based primer "
+                    "design.".format(cached.get("arm_len", "?")),
+                    class_="ts-warn",
+                ) if cached.get("used_fallback", False) else ui.span()
             )
 
             # per-guide plasmid-specific warnings (shown inline in the guide card)
@@ -728,6 +883,7 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                 ),
                 arm_clip_warning,
                 recut_warning,
+                primer_fallback_warning,
                 arm_sapi_display,
                 diagram_content,
                 ui.div(*meta_cells, class_="param-grid mt-2"),
@@ -775,7 +931,14 @@ def reagents_server(input, output, session, shared_json, shared_sites):
         )
 
     def _selected_rows():
-        """Yield (row, left_arm, right_arm) for each selected guide."""
+        """Yield (row, left_arm, right_arm) for each selected guide.
+
+        For the SapTrap long-arm (PCR-primer) path, arms are widened on the
+        far/outer side per saptrap_arm_tolerance so sapi_amplification_primers
+        has room to search — the insertion-adjacent boundary is unaffected.
+        All other repair types (and short SapTrap arms) get the plain exact
+        truncation, unchanged.
+        """
         df  = reagents_df.get()
         sel = selected_guides.get()
         if df is None or not sel:
@@ -784,6 +947,16 @@ def reagents_server(input, output, session, shared_json, shared_sites):
             arm_len = int(input.arm_length())
         except Exception:
             return
+        try:
+            repair = input.repair_type()
+        except Exception:
+            repair = ""
+        use_widened = repair == "plasmid" and arm_len > OLIGO_MAX
+        if use_widened:
+            try:
+                tolerance = float(input.saptrap_arm_tolerance()) / 100.0
+            except Exception:
+                tolerance = 0.2
         for rid, gid_set in sel.items():
             for gid in gid_set:
                 matches = df[(df["residue_index"] == rid) & (df["guide_id"] == gid)]
@@ -791,9 +964,14 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                     continue
                 row = matches.iloc[0]
                 try:
-                    left, right = truncate_arms(
-                        str(row["left_arm"]), str(row["right_arm"]), arm_len
-                    )
+                    if use_widened:
+                        left, right = truncate_arms_with_tolerance(
+                            str(row["left_arm"]), str(row["right_arm"]), arm_len, tolerance
+                        )
+                    else:
+                        left, right = truncate_arms(
+                            str(row["left_arm"]), str(row["right_arm"]), arm_len
+                        )
                 except ValueError:
                     continue
                 yield row, left, right
@@ -839,23 +1017,16 @@ def reagents_server(input, output, session, shared_json, shared_sites):
         rn     = run_name.get() or 'run'
         insert = _insert_seq()
         tag    = _insert_tag_name()
-        lines  = ["name\tsequence"]
+        lines  = ["name\tsequence\tnotes"]
         for row, left, right in _selected_rows():
             base = '{}_{}_{}'.format(rn, _guide_label(row), tag)
             cut  = int(row['cut_pos'])
             ins  = int(row['insert_pos'])
             if repair == 'ssodn':
                 seq, _, _ = build_ssodn(left, right, insert, cut, ins, True)
-                lines.append('{}_repair\t{}'.format(base, seq))
+                lines.append('{}_repair\t{}\t'.format(base, seq))
             elif repair == 'amplicon':
-                # prefer text area (may have manual edits), fall back to file-loaded value
-                template = ''
-                try:
-                    template = input.pcr_template().strip().upper()
-                except Exception:
-                    pass
-                if not template:
-                    template = _template_seq.get().strip().upper()
+                template = insert
                 tm = 60.0
                 try:
                     tm = float(input.pcr_tm())
@@ -867,7 +1038,7 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                 except Exception:
                     pass
                 if template:
-                    (_, fwd), (_, rev) = design_pcr_primers(
+                    (_, fwd), (_, rev), meta = design_pcr_primers(
                         left, right, template, tm, phos, cut, ins
                     )
                     fwd_ext = ''
@@ -884,8 +1055,9 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                         fwd = fwd_ext + fwd
                     if rev_ext:
                         rev = rev_ext + rev
-                    lines.append('{}_F\t{}'.format(base, fwd))
-                    lines.append('{}_R\t{}'.format(base, rev))
+                    notes = 'fallback=True' if meta['used_fallback'] else ''
+                    lines.append('{}_F\t{}\t{}'.format(base, fwd, notes))
+                    lines.append('{}_R\t{}\t{}'.format(base, rev, notes))
         return '\n'.join(lines) + '\n' if len(lines) > 1 else None
 
     def _assemble_saptrap_tsv():
@@ -900,17 +1072,27 @@ def reagents_server(input, output, session, shared_json, shared_sites):
             tm = float(input.saptrap_tm())
         except Exception:
             pass
+        tolerance = 0.2
+        try:
+            tolerance = float(input.saptrap_arm_tolerance()) / 100.0
+        except Exception:
+            pass
         do_gb = False
         try:
             do_gb = bool(input.saptrap_genbank())
         except Exception:
             pass
+        try:
+            arm_len = int(input.arm_length())
+        except Exception:
+            arm_len = None
 
         lines = ["name\tsequence\tkind\tnotes"]
         gb_pairs = []   # list of (filename, SeqRecord)
         for row, left, right in _selected_rows():
             oligo_rows, records = build_saptrap_site(
-                row, left, right, tm_target=tm, genbank=do_gb
+                row, left, right, tm_target=tm, genbank=do_gb,
+                arm_length=arm_len, tolerance=tolerance,
             )
             for orow in oligo_rows:
                 lines.append("{}\t{}\t{}\t{}".format(
@@ -924,6 +1106,30 @@ def reagents_server(input, output, session, shared_json, shared_sites):
         tsv_text = '\n'.join(lines) + '\n' if len(lines) > 1 else None
         return tsv_text, gb_pairs
 
+    def _assemble_genotyping_tsv():
+        """[runname]_genotyping-primers.tsv, or None if nothing has been designed."""
+        results = genotyping_results.get()
+        if not results:
+            return None
+        df = reagents_df.get()
+        lines = ["residue_index\tamino_acid\tamplicon_type\tfwd_seq\tfwd_tm\trev_seq\trev_tm\tproduct_size"]
+        for rid in sorted(results):
+            primers = results[rid]
+            if not primers:
+                continue
+            aa = ""
+            if df is not None:
+                match = df[df["residue_index"] == rid]
+                if not match.empty:
+                    aa = str(match.iloc[0]["amino_acid"])
+            for amplicon_type, p in primers.items():
+                lines.append("{}\t{}\t{}\t{}\t{:.2f}\t{}\t{:.2f}\t{}".format(
+                    rid, aa, amplicon_type,
+                    p["fwd_seq"], p["fwd_tm"], p["rev_seq"], p["rev_tm"],
+                    int(p["product_size"]),
+                ))
+        return '\n'.join(lines) + '\n' if len(lines) > 1 else None
+
     def _build_zip():
         """Produce ZIP bytes: always HA + guides TSVs; oligos when applicable."""
         import zipfile as _zf
@@ -934,6 +1140,9 @@ def reagents_server(input, output, session, shared_json, shared_sites):
         with _zf.ZipFile(buf, 'w', _zf.ZIP_DEFLATED) as zf:
             zf.writestr('{}_homology-arms.tsv'.format(rn), _assemble_ha_tsv())
             zf.writestr('{}_guides.tsv'.format(rn),        _assemble_guides_tsv())
+            genotyping_tsv = _assemble_genotyping_tsv()
+            if genotyping_tsv:
+                zf.writestr('{}_genotyping-primers.tsv'.format(rn), genotyping_tsv)
             if repair == 'plasmid':
                 tsv_text, gb_pairs = _assemble_saptrap_tsv()
                 if tsv_text:

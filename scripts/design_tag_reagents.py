@@ -34,10 +34,17 @@ Output TSV (one row per residue × guide):
   left_arm          left homology arm: exonic bases uppercase, intronic lowercase
   right_arm         right homology arm: exonic bases uppercase, intronic lowercase
 
+When --insert_sequence is set, a companion <output>.genotyping.tsv is also
+written (one row per residue x amplicon_type: 'external', and for inserts
+>= --internal_threshold, '5p_junction'/'3p_junction'), with columns
+residue_index, amino_acid, insert_pos, amplicon_type, fwd_seq, fwd_tm,
+rev_seq, rev_tm, product_size. See reagent_sequences.design_genotyping_primers.
+
 Matt Rich, 2025
 """
 
 import sys
+from pathlib import Path
 import pandas as pd
 from Bio import SeqIO
 
@@ -46,6 +53,7 @@ from crispr_util import find_guides, build_frame_lookup, disrupt_pam
 from parse_genewise import parse_genewise, enumerate_insertion_sites, \
     parse_genewise_score, parse_genewise_gff_score, cds_coverage
 from progress import report as _report, resolve_reporter
+from reagent_sequences import design_genotyping_primers
 
 
 def _case_arm(arm_seq, arm_start, frame_lookup):
@@ -54,6 +62,44 @@ def _case_arm(arm_seq, arm_start, frame_lookup):
         ch.upper() if (arm_start + i) in frame_lookup else ch.lower()
         for i, ch in enumerate(arm_seq)
     )
+
+
+def _design_genotyping_rows(sites, dna, L, insert_sequence, internal_threshold,
+                            primer_opt_tm, product_opt_size, flank_min, flank_max):
+    """One row per (residue x amplicon_type) genotyping primer pair.
+
+    Pulls flanking sequence directly from the full genomic record around each
+    site's insert_pos — independent of arm_length, since genotyping primers may
+    need to sit outside the (possibly much shorter) homology arms.
+    """
+    margin = 60   # extra room beyond flank_max so primer3 has a real window to search
+    w = flank_max + margin
+    rows = []
+    for _, site in sites.iterrows():
+        insert_pos = int(site['insert_pos'])
+        left_flank  = dna[max(0, insert_pos - w):insert_pos]
+        right_flank = dna[insert_pos:min(L, insert_pos + w)]
+
+        primers = design_genotyping_primers(
+            left_flank, right_flank, insert_sequence,
+            internal_threshold=internal_threshold,
+            primer_opt_tm=primer_opt_tm,
+            product_opt_size=product_opt_size,
+            flank_min=flank_min, flank_max=flank_max,
+        )
+        for amplicon_type, p in primers.items():
+            rows.append({
+                'residue_index': int(site['residue_index']),
+                'amino_acid':    site['amino_acid'],
+                'insert_pos':    insert_pos,
+                'amplicon_type': amplicon_type,
+                'fwd_seq':       p['fwd_seq'],
+                'fwd_tm':        p['fwd_tm'],
+                'rev_seq':       p['rev_seq'],
+                'rev_tm':        p['rev_tm'],
+                'product_size':  p['product_size'],
+            })
+    return pd.DataFrame(rows)
 
 
 # ── Core logic ────────────────────────────────────────────────────────────────
@@ -67,6 +113,12 @@ def design_reagents(
     pam='NGG',
     guide_length=20,
     cut_offset=3,
+    insert_sequence='',
+    internal_threshold=500,
+    primer_opt_tm=60.0,
+    product_opt_size=200,
+    flank_min=50,
+    flank_max=150,
     report=None,
 ):
     """
@@ -83,6 +135,16 @@ def design_reagents(
     pam            : str  IUPAC PAM (default 'NGG')
     guide_length   : int  spacer length (default 20)
     cut_offset     : int  cut distance from PAM (SpCas9=3)
+    insert_sequence : str  default insert/tag DNA sequence. When non-empty, a
+                     genotyping-primer TSV is designed for every site (see
+                     reagent_sequences.design_genotyping_primers) and returned
+                     alongside the reagents DataFrame.
+    internal_threshold, primer_opt_tm, product_opt_size, flank_min, flank_max :
+                     passed through to design_genotyping_primers.
+
+    Returns
+    -------
+    (df, genotyping_df) : genotyping_df is None when insert_sequence is empty.
 
     Raises
     ------
@@ -269,26 +331,46 @@ def design_reagents(
                     min_left, min_right, arm_length)
             )
 
-    return df
+    genotyping_df = None
+    if insert_sequence:
+        genotyping_df = _design_genotyping_rows(
+            sites, dna, L, insert_sequence.upper(), internal_threshold,
+            primer_opt_tm, product_opt_size, flank_min, flank_max,
+        )
+        _report(reporter, '{} genotyping primer pairs designed'.format(len(genotyping_df)),
+               stage='genotyping_primers')
+
+    return df, genotyping_df
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 def main(genewise, genomic_fasta, output, protein_length=None, n_guides=5,
-         arm_length=1000, pam='NGG', guide_length=20, cut_offset=3, report=None):
+         arm_length=1000, pam='NGG', guide_length=20, cut_offset=3,
+         insert_sequence='', internal_threshold=500, primer_opt_tm=60.0,
+         product_opt_size=200, flank_min=50, flank_max=150, report=None):
     """Entry point for in-process calls from task_runners."""
-    df = design_reagents(
-        genewise_out   = genewise,
-        genomic_fasta  = genomic_fasta,
-        protein_length = protein_length,
-        n_guides       = n_guides,
-        arm_length     = arm_length,
-        pam            = pam,
-        guide_length   = guide_length,
-        cut_offset     = cut_offset,
-        report         = report,
+    df, genotyping_df = design_reagents(
+        genewise_out       = genewise,
+        genomic_fasta      = genomic_fasta,
+        protein_length     = protein_length,
+        n_guides           = n_guides,
+        arm_length         = arm_length,
+        pam                = pam,
+        guide_length       = guide_length,
+        cut_offset         = cut_offset,
+        insert_sequence    = insert_sequence,
+        internal_threshold = internal_threshold,
+        primer_opt_tm      = primer_opt_tm,
+        product_opt_size   = product_opt_size,
+        flank_min          = flank_min,
+        flank_max          = flank_max,
+        report             = report,
     )
     df.to_csv(output, sep='\t', index=False)
+    if genotyping_df is not None:
+        genotyping_out = str(Path(output).with_suffix('')) + '.genotyping.tsv'
+        genotyping_df.to_csv(genotyping_out, sep='\t', index=False)
 
 
 if __name__ == '__main__':
@@ -320,6 +402,25 @@ if __name__ == '__main__':
                         help='Guide spacer length in nt (default: 20)')
     parser.add_argument('--cut_offset', type=int, default=3,
                         help='Bases upstream of PAM where DSB occurs (SpCas9=3)')
+    # Optional genotyping-primer parameters
+    parser.add_argument('--insert_sequence', default='',
+                        help='Default insert/tag DNA sequence — when set, designs genotyping '
+                             '(screening) primers for every site and writes a companion '
+                             '<output>.genotyping.tsv')
+    parser.add_argument('--internal_threshold', type=int, default=500,
+                        help='Inserts >= this length (nt) also get internal junction primers '
+                             '(default: 500)')
+    parser.add_argument('--primer_opt_tm', type=float, default=60.0,
+                        help='primer3 PRIMER_OPT_TM for genotyping primers (default: 60)')
+    parser.add_argument('--product_opt_size', type=int, default=200,
+                        help='primer3 PRIMER_PRODUCT_OPT_SIZE, the optimal amplicon length '
+                             '(default: 200)')
+    parser.add_argument('--flank_min', type=int, default=50,
+                        help='Minimum distance (bp) of a genotyping primer from the insert site '
+                             '(default: 50)')
+    parser.add_argument('--flank_max', type=int, default=150,
+                        help='Maximum distance (bp) of a genotyping primer from the insert site '
+                             '(default: 150)')
     args = parser.parse_args()
 
     protein_length = None
@@ -336,16 +437,27 @@ if __name__ == '__main__':
     print('  arm_length    : {}'.format(args.arm_length), file=sys.stderr)
     print('  n_guides      : {}'.format(args.n_guides), file=sys.stderr)
 
-    df = design_reagents(
-        genewise_out   = args.genewise,
-        genomic_fasta  = args.genomic_fasta,
-        protein_length = protein_length,
-        n_guides       = args.n_guides,
-        arm_length     = args.arm_length,
-        pam            = args.PAM,
-        guide_length   = args.guide_length,
-        cut_offset     = args.cut_offset,
+    df, genotyping_df = design_reagents(
+        genewise_out        = args.genewise,
+        genomic_fasta       = args.genomic_fasta,
+        protein_length      = protein_length,
+        n_guides            = args.n_guides,
+        arm_length          = args.arm_length,
+        pam                 = args.PAM,
+        guide_length        = args.guide_length,
+        cut_offset          = args.cut_offset,
+        insert_sequence     = args.insert_sequence,
+        internal_threshold  = args.internal_threshold,
+        primer_opt_tm       = args.primer_opt_tm,
+        product_opt_size    = args.product_opt_size,
+        flank_min           = args.flank_min,
+        flank_max           = args.flank_max,
     )
 
     df.to_csv(args.output, sep='\t', index=False)
     print('Wrote {} rows to {}'.format(len(df), args.output), file=sys.stderr)
+    if genotyping_df is not None:
+        genotyping_out = str(Path(args.output).with_suffix('')) + '.genotyping.tsv'
+        genotyping_df.to_csv(genotyping_out, sep='\t', index=False)
+        print('Wrote {} genotyping primer rows to {}'.format(len(genotyping_df), genotyping_out),
+              file=sys.stderr)

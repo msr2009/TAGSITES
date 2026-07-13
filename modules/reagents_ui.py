@@ -1,6 +1,7 @@
 """reagents_ui.py — Shiny UI module for the Design Reagents tab."""
 
 from shiny import ui, module
+from modules.setup_ui import label_with_tip
 from modules.ui_helpers import COMPACT_FILE_CSS
 
 
@@ -64,6 +65,10 @@ _STYLE = """
     /* download row */
     .download-row { display: flex; gap: 0.5rem; margin: 0.5rem 0; flex-wrap: wrap; }
 
+    /* tooltip icon */
+    .tip-icon { cursor: help; color: #adb5bd; font-size: 0.75em; margin-left: 3px; }
+    .tooltip-inner { max-width: 320px; }
+
 """
 
 
@@ -118,6 +123,59 @@ def reagents_ui():
                     # Repair-type-specific options rendered from server
                     ui.output_ui("repair_options"),
 
+                    class_="card-body",
+                ),
+                class_="card mb-3",
+            ),
+        ),
+
+        # ── Genotyping primers card ───────────────────────────────────────────
+        ui.div(
+            ui.div(
+                ui.div(
+                    ui.span("Genotyping primers"),
+                    class_="card-header fw-semibold",
+                ),
+                ui.div(
+                    ui.p(
+                        "Design screening PCR primers flanking the insertion site for the "
+                        "currently selected sites, using the tag/insert sequence above.",
+                        class_="section-hint",
+                    ),
+                    ui.div(
+                        "⚠ Set the insert sequence using the \"Tag / insert sequence\" "
+                        "dropdown above (select Custom to paste a sequence).",
+                        class_="ts-warn",
+                    ),
+                    ui.row(
+                        ui.column(
+                            6,
+                            ui.input_numeric(
+                                "primer_opt_tm",
+                                label_with_tip(
+                                    "Optimal primer Tm (°C)",
+                                    "primer3's PRIMER_OPT_TM — the melting temperature primer3 "
+                                    "aims for when picking each primer (searched within ±3°C).",
+                                ),
+                                value=60, min=40, max=80,
+                            ),
+                            ui.input_numeric(
+                                "product_opt_size",
+                                label_with_tip(
+                                    "Optimal product size (bp)",
+                                    "primer3's PRIMER_PRODUCT_OPT_SIZE — the preferred amplicon "
+                                    "length. Acts as a soft target; primer3 still returns the "
+                                    "closest feasible product when the actual size is constrained "
+                                    "(e.g. a short insert forces a smaller product).",
+                                ),
+                                value=200, min=50,
+                            ),
+                        ),
+                    ),
+                    ui.input_action_button(
+                        "design_genotyping", "Design genotyping primers",
+                        class_="btn-primary btn-sm mt-2",
+                    ),
                     class_="card-body",
                 ),
                 class_="card mb-3",

@@ -23,7 +23,12 @@ import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
 from crispr_util import reverse_complement, CODONS, SYN_CODONS
-from reagent_sequences import calc_tm
+from reagent_sequences import (
+    calc_tm,
+    _primer3_anchored_single,
+    _primer3_single,
+    _tm_growth_bind_regions,
+)
 
 # ── constants ──────────────────────────────────────────────────────────────────
 
@@ -295,49 +300,114 @@ def sgrna_oligos(spacer):
 
 # ── PCR amplification primers ──────────────────────────────────────────────────
 
-def sapi_amplification_primers(arm_seq, left_oh, right_oh, tm_target=60.0):
+def sapi_amplification_primers(arm_seq, left_oh, right_oh, tm_target=60.0,
+                               nominal_length=None, tolerance=0.2,
+                               pinned_side='rev'):
     """Design SapI-tailed PCR primers to amplify arm_seq from WT genomic template.
 
     arm_seq should be the MUTATED arm (from the reagents TSV) so that PAM-
     disrupting mutations land in the synthesized primer rather than requiring
-    them to be present in the genomic template.
+    them to be present in the genomic template. When tolerance > 0, arm_seq is
+    expected to be widened beyond nominal_length on the far/outer side only
+    (see reagent_sequences.truncate_arms_with_tolerance) — the insertion-
+    adjacent boundary must never move regardless of widening.
 
-    Primer structure:
-      fwd: 5'-GCTCTTCA-{left_oh}-{first_k_nt_of_arm_seq}-3'
-      rev: 5'-GCTCTTCA-{RC(right_oh)}-{RC(last_k_nt_of_arm_seq)}-3'
+    pinned_side: 'rev' when the LAST base of arm_seq is insertion-adjacent
+    (must be exact — left/5'HA arm case, far/outer end is position 0); 'fwd'
+    when the FIRST base is insertion-adjacent (right/3'HA arm case, far/outer
+    end is the last base). The pinned end is designed exactly at that fixed
+    position via primer3; the opposite (flexible) end is searched within
+    ±tolerance of nominal_length, letting primer3 pick a better-quality
+    primer (Tm, hairpins, GC clamp) than a fixed boundary would allow.
+
+    Primer structure (tail always present regardless of exact/flexible end):
+      fwd: 5'-GCTCTTCA-{left_oh}-{binding_region}-3'
+      rev: 5'-GCTCTTCA-{RC(right_oh)}-{RC(binding_region)}-3'
 
     After SapI digestion the amplicon presents:
       left end : 5'-{left_oh} overhang (top strand)
       right end: 5'-{RC(right_oh)} overhang (bottom strand) — mates with {right_oh}
 
-    The Tm target applies to the arm-binding region only (not the tail).
-    Returns ((fwd_suffix, fwd_seq), (rev_suffix, rev_seq)).
+    Falls back to the old hand-rolled Tm-growth loop, run at exactly
+    nominal_length (not the widened arm_seq), if primer3 finds no valid
+    design for either end.
+
+    Returns ((fwd_suffix, fwd_seq), (rev_suffix, rev_seq), meta), where
+    meta = {"effective_arm_length": int, "used_fallback": bool}.
     """
     arm = arm_seq.upper()
     tail = SAPI_SITE + SAPI_SPR  # GCTCTTCA
+    n = len(arm)
+    if nominal_length is None:
+        nominal_length = n
 
-    # Grow arm-binding regions until Tm >= tm_target or arm exhausted
-    k_fwd = 12
-    while k_fwd < len(arm) and calc_tm(arm[:k_fwd]) < tm_target:
-        k_fwd += 1
+    if pinned_side == 'rev':
+        pinned_pos, pinned_pick_left = n - 1, False
+        flex_pick_left = True
+        lo = max(0, n - int(nominal_length * (1 + tolerance)))
+        hi = max(lo, n - int(round(nominal_length * (1 - tolerance))))
+    else:
+        pinned_pos, pinned_pick_left = 0, True
+        flex_pick_left = False
+        hi = min(n - 1, int(nominal_length * (1 + tolerance)) - 1)
+        lo = min(hi, int(round(nominal_length * (1 - tolerance))) - 1)
+        lo = max(lo, 0)
 
-    k_rev = 12
-    while k_rev < len(arm) and calc_tm(arm[-k_rev:]) < tm_target:
-        k_rev += 1
+    pinned_result = _primer3_anchored_single(arm, pinned_pos, pinned_pick_left, tm_target)
 
-    fwd_bind = arm[:k_fwd]
-    rev_bind  = _rc(arm[-k_rev:])   # RC of 3' end of arm
+    # A too-narrow search window (e.g. tolerance=0, or a short nominal_length)
+    # can't fit even a minimal primer — skip straight to fallback rather than
+    # letting primer3 raise on an unsatisfiable SEQUENCE_INCLUDED_REGION.
+    _MIN_WINDOW = 30
+    region_len = hi - lo + 1
+    if region_len < _MIN_WINDOW:
+        flex_seq = None
+    else:
+        flex_seq = _primer3_single(
+            arm, region_start=lo, region_len=region_len,
+            excluded_region=[pinned_pos, 0], pick_left=flex_pick_left,
+            primer_opt_tm=tm_target,
+        )
+
+    used_fallback = False
+    effective_arm_length = nominal_length
+
+    if pinned_result and flex_seq:
+        # primer3's PRIMER_LEFT/RIGHT_0_SEQUENCE are already final, correctly
+        # oriented oligo sequences (RIGHT is already the reverse-complement
+        # binding to the top strand) — no further RC needed here.
+        pinned_seq = pinned_result[0]
+        if pinned_side == 'rev':
+            fwd_bind, rev_bind = flex_seq, pinned_seq
+            start = arm.find(fwd_bind)
+            effective_arm_length = n - start if start >= 0 else nominal_length
+        else:
+            fwd_bind, rev_bind = pinned_seq, flex_seq
+            binding_template = reverse_complement(rev_bind)   # back to genomic (top-strand) substring for lookup
+            end = arm.find(binding_template)
+            effective_arm_length = (end + len(rev_bind)) if end >= 0 else nominal_length
+    else:
+        used_fallback = True
+        exact_arm = arm[-nominal_length:] if pinned_side == 'rev' else arm[:nominal_length]
+        fwd_bind, rev_bind = _tm_growth_bind_regions(exact_arm, tm_target)
+        effective_arm_length = nominal_length
 
     fwd_seq = tail + left_oh        + fwd_bind
     rev_seq = tail + _rc(right_oh)  + rev_bind
 
-    return ("_F", fwd_seq), ("_R", rev_seq)
+    meta = {"effective_arm_length": effective_arm_length, "used_fallback": used_fallback}
+    return ("_F", fwd_seq), ("_R", rev_seq), meta
 
 
 # ── fragment dispatcher ────────────────────────────────────────────────────────
 
-def build_fragment(seq, left_oh, right_oh, tm_target=60.0):
+def build_fragment(seq, left_oh, right_oh, tm_target=60.0,
+                   nominal_length=None, tolerance=0.2, pinned_side='rev'):
     """Dispatch to annealed-oligo pair or PCR primers based on sequence length.
+
+    nominal_length/tolerance/pinned_side are forwarded to
+    sapi_amplification_primers (PCR-primer branch only; the oligo-pair branch
+    is always exact, no search/fallback concept applies there).
 
     Returns a dict with keys:
       kind   : "oligo_pair" or "primers"
@@ -345,6 +415,7 @@ def build_fragment(seq, left_oh, right_oh, tm_target=60.0):
       bottom : bottom oligo / rev primer sequence (5'→3') — field name "bottom"
       fwd    : alias for top (primers only)  — field name "fwd"
       rev    : alias for bottom (primers only)
+      meta   : {"effective_arm_length", "used_fallback"} — only present for "primers"
     All sequences are returned regardless of which is the primary label.
     """
     if len(seq) <= OLIGO_MAX:
@@ -352,9 +423,12 @@ def build_fragment(seq, left_oh, right_oh, tm_target=60.0):
         return {"kind": "oligo_pair", "top": top, "bottom": bot,
                 "fwd": top, "rev": bot}
     else:
-        (_, fwd), (_, rev) = sapi_amplification_primers(seq, left_oh, right_oh, tm_target)
+        (_, fwd), (_, rev), meta = sapi_amplification_primers(
+            seq, left_oh, right_oh, tm_target,
+            nominal_length=nominal_length, tolerance=tolerance, pinned_side=pinned_side,
+        )
         return {"kind": "primers", "top": fwd, "bottom": rev,
-                "fwd": fwd, "rev": rev}
+                "fwd": fwd, "rev": rev, "meta": meta}
 
 
 # ── GenBank record builder ─────────────────────────────────────────────────────
@@ -498,14 +572,22 @@ def combine_saptrap_records(records_by_type, site_name):
 
 # ── per-site orchestration ─────────────────────────────────────────────────────
 
-def build_saptrap_site(row, left_arm, right_arm, tm_target=60.0, genbank=False):
+def build_saptrap_site(row, left_arm, right_arm, tm_target=60.0, genbank=False,
+                       arm_length=None, tolerance=0.2):
     """Design all SapTrap reagents for one selected guide / tag site.
 
     row       : a row from the .reagents.tsv (pandas Series or dict-like)
-    left_arm  : mutated left arm (already truncated to arm_length)
-    right_arm : mutated right arm (already truncated to arm_length)
+    left_arm  : mutated left arm — exactly arm_length for short (oligo-pair)
+                arms, or widened via truncate_arms_with_tolerance for long
+                (PCR-primer) arms; see reagent_sequences.truncate_arms_with_tolerance
+    right_arm : mutated right arm, same convention as left_arm
     tm_target : Tm target (°C) for PCR primer binding region
     genbank   : if True, also build SeqRecords for ApE export
+    arm_length: the nominal (requested) arm length — used as the search-window
+                center for the PCR-primer path; defaults to len(left_arm)/
+                len(right_arm) if not given (i.e. no widening happened)
+    tolerance : fraction of arm_length the far/outer primer end may search
+                within, when the PCR-primer (long-arm) path is used
 
     Returns (oligo_rows, records) where:
       oligo_rows : list of dicts {name, sequence, kind, notes}
@@ -544,7 +626,10 @@ def build_saptrap_site(row, left_arm, right_arm, tm_target=60.0, genbank=False):
     else:
         dom5_changes = []
 
-    frag5 = build_fragment(left_arm_use, left_oh5, right_oh5, tm_target)
+    left_nominal = arm_length if arm_length is not None else len(left_arm)
+    frag5 = build_fragment(left_arm_use, left_oh5, right_oh5, tm_target,
+                           nominal_length=left_nominal, tolerance=tolerance,
+                           pinned_side='rev')
 
     if frag5["kind"] == "oligo_pair":
         dom5_note = ("SapI site domesticated: " +
@@ -562,12 +647,18 @@ def build_saptrap_site(row, left_arm, right_arm, tm_target=60.0, genbank=False):
     else:
         mut_note = ("PAM-disrupting mutation in rev primer — verify primer covers it"
                     if has_mut else "")
+        meta5 = frag5["meta"]
+        meta5_note = "effective_arm_length={}{}".format(
+            meta5["effective_arm_length"],
+            "; fallback=True" if meta5["used_fallback"] else "",
+        )
         oligo_rows += [
             {"name": "{}_5HA_F".format(site), "sequence": frag5["fwd"],
-             "kind": "primer_fwd", "notes": "SapI-tailed fwd; TGG overhang"},
+             "kind": "primer_fwd", "notes": "SapI-tailed fwd; TGG overhang; " + meta5_note},
             {"name": "{}_5HA_R".format(site), "sequence": frag5["rev"],
              "kind": "primer_rev", "notes": "SapI-tailed rev; GCG overhang" +
-                                            ("; " + mut_note if mut_note else "")},
+                                            ("; " + mut_note if mut_note else "") +
+                                            "; " + meta5_note},
         ]
 
     if genbank:
@@ -583,7 +674,10 @@ def build_saptrap_site(row, left_arm, right_arm, tm_target=60.0, genbank=False):
     else:
         dom3_changes = []
 
-    frag3 = build_fragment(right_arm_use, left_oh3, right_oh3, tm_target)
+    right_nominal = arm_length if arm_length is not None else len(right_arm)
+    frag3 = build_fragment(right_arm_use, left_oh3, right_oh3, tm_target,
+                           nominal_length=right_nominal, tolerance=tolerance,
+                           pinned_side='fwd')
 
     if frag3["kind"] == "oligo_pair":
         dom3_note = ("SapI site domesticated: " +
@@ -601,12 +695,18 @@ def build_saptrap_site(row, left_arm, right_arm, tm_target=60.0, genbank=False):
     else:
         mut_note = ("PAM-disrupting mutation in fwd primer — verify primer covers it"
                     if has_mut else "")
+        meta3 = frag3["meta"]
+        meta3_note = "effective_arm_length={}{}".format(
+            meta3["effective_arm_length"],
+            "; fallback=True" if meta3["used_fallback"] else "",
+        )
         oligo_rows += [
             {"name": "{}_3HA_F".format(site), "sequence": frag3["fwd"],
              "kind": "primer_fwd", "notes": "SapI-tailed fwd; ACG overhang" +
-                                            ("; " + mut_note if mut_note else "")},
+                                            ("; " + mut_note if mut_note else "") +
+                                            "; " + meta3_note},
             {"name": "{}_3HA_R".format(site), "sequence": frag3["rev"],
-             "kind": "primer_rev", "notes": "SapI-tailed rev; GTA overhang"},
+             "kind": "primer_rev", "notes": "SapI-tailed rev; GTA overhang; " + meta3_note},
         ]
 
     if genbank:
@@ -634,6 +734,9 @@ if __name__ == "__main__":
                         help="Homology arm length in bp (default: 500)")
     parser.add_argument("--tm",           type=float, default=60.0,
                         help="Primer binding Tm target °C for PCR arms (default: 60)")
+    parser.add_argument("--tolerance",    type=float, default=0.2,
+                        help="Fraction of arm_length the far/outer PCR primer end may "
+                             "search within, for arms > OLIGO_MAX (default: 0.2)")
     parser.add_argument("--genbank",      action="store_true",
                         help="Write a GenBank file per site for ApE Golden Gate simulation")
     parser.add_argument("--output",       required=True,
@@ -641,16 +744,22 @@ if __name__ == "__main__":
                              " and (with --genbank) {prefix}_{site}_saptrap.gb")
     args = parser.parse_args()
 
-    from reagent_sequences import truncate_arms
+    from reagent_sequences import truncate_arms, truncate_arms_with_tolerance
 
     df = pd.read_csv(args.reagents_tsv, sep="\t")
 
     all_rows = []
     for _, row in df.iterrows():
         try:
-            left, right = truncate_arms(
-                str(row["left_arm"]), str(row["right_arm"]), args.arm_length
-            )
+            if args.arm_length > OLIGO_MAX:
+                left, right = truncate_arms_with_tolerance(
+                    str(row["left_arm"]), str(row["right_arm"]),
+                    args.arm_length, args.tolerance,
+                )
+            else:
+                left, right = truncate_arms(
+                    str(row["left_arm"]), str(row["right_arm"]), args.arm_length
+                )
         except ValueError as e:
             print("WARNING: {} — skipping row".format(e), file=sys.stderr)
             continue
@@ -666,8 +775,14 @@ if __name__ == "__main__":
                       file=sys.stderr)
 
         oligo_rows, records = build_saptrap_site(
-            row, left, right, tm_target=args.tm, genbank=args.genbank
+            row, left, right, tm_target=args.tm, genbank=args.genbank,
+            arm_length=args.arm_length, tolerance=args.tolerance,
         )
+        for orow in oligo_rows:
+            if "fallback=True" in orow.get("notes", ""):
+                print("WARNING: {} — primer3 design failed; fell back to Tm-growth "
+                      "primers at the exact {} bp arm".format(
+                          orow["name"], args.arm_length), file=sys.stderr)
         all_rows.extend(oligo_rows)
 
         if args.genbank and records:

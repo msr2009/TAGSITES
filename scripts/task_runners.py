@@ -227,16 +227,22 @@ def run_reagents(args, report=None, job_id_cb=None, resume_job_ids=None):
             protein_length = len(recs[0].seq)
 
     design_tag_reagents.main(
-        genewise       = genewise_path,
-        genomic_fasta  = _str(args.get("genomic_fasta")),
-        output         = _str(args.get("output")),
-        protein_length = protein_length,
-        n_guides       = _int(args.get("n_guides"), 5),
-        arm_length     = _int(args.get("arm_length"), 1000),
-        pam            = _str(args.get("PAM"), "NGG"),
-        guide_length   = _int(args.get("guide_length"), 20),
-        cut_offset     = _int(args.get("cut_offset"), 3),
-        report         = report,
+        genewise            = genewise_path,
+        genomic_fasta       = _str(args.get("genomic_fasta")),
+        output              = _str(args.get("output")),
+        protein_length      = protein_length,
+        n_guides            = _int(args.get("n_guides"), 5),
+        arm_length          = _int(args.get("arm_length"), 1000),
+        pam                 = _str(args.get("PAM"), "NGG"),
+        guide_length        = _int(args.get("guide_length"), 20),
+        cut_offset          = _int(args.get("cut_offset"), 3),
+        insert_sequence     = _str(args.get("insert_sequence")),
+        internal_threshold  = _int(args.get("internal_threshold"), 500),
+        primer_opt_tm       = _float(args.get("primer_opt_tm"), 60.0),
+        product_opt_size    = _int(args.get("product_opt_size"), 200),
+        flank_min           = _int(args.get("flank_min"), 50),
+        flank_max           = _int(args.get("flank_max"), 150),
+        report              = report,
     )
 
 

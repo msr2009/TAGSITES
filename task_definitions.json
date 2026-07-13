@@ -84,6 +84,9 @@
 			"result_type":   "none",
 			"output_suffix": ".tsv",
 			"selectable":    false,
+			"companions": {
+				"genotyping": ".genotyping.tsv"
+			},
 			"params": {
 				"genomic_fasta": { "default": "",    "tooltip": "FASTA of the genomic region to search (orientation need not be known; run_genewise.py tests both strands automatically)" },
 				"genewise":      { "default": "",    "hidden": true, "tooltip": "path to a pre-computed Genewise .out.txt file (leave empty to run Genewise automatically via the EBI REST API)" },
@@ -91,7 +94,13 @@
 				"arm_length":    { "default": 1000,  "tooltip": "homology arm length in bp on each side of insertion" },
 				"PAM":           { "default": "NGG", "tooltip": "IUPAC PAM sequence (e.g. NGG for SpCas9)" },
 				"guide_length":  { "default": 20,    "tooltip": "guide spacer length in nucleotides" },
-				"cut_offset":    { "default": 3,     "tooltip": "bases upstream of PAM where the DSB occurs (SpCas9=3)" }
+				"cut_offset":    { "default": 3,     "tooltip": "bases upstream of PAM where the DSB occurs (SpCas9=3)" },
+				"insert_sequence":    { "default": "",  "tooltip": "default insert/tag DNA sequence — auto-designs genotyping primers per site when set" },
+				"internal_threshold": { "default": 500, "tooltip": "inserts >= this length (nt) also get internal junction primers" },
+				"primer_opt_tm":       { "default": 60,  "tooltip": "primer3 PRIMER_OPT_TM for genotyping primers" },
+				"product_opt_size":    { "default": 200, "tooltip": "primer3 PRIMER_PRODUCT_OPT_SIZE (optimal amplicon length)" },
+				"flank_min":           { "default": 50,  "tooltip": "minimum distance (bp) of a genotyping primer from the insert site" },
+				"flank_max":           { "default": 150, "tooltip": "maximum distance (bp) of a genotyping primer from the insert site" }
 			}
 		}
 	}

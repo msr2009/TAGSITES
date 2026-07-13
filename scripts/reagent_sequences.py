@@ -17,6 +17,7 @@ import sys
 from html import escape as _esc
 
 from Bio.SeqUtils import MeltingTemp as _mt
+import primer3
 
 sys.path.insert(0, os.path.dirname(__file__))
 from crispr_util import (
@@ -66,6 +67,27 @@ def truncate_arms(left_arm, right_arm, arm_length):
                 arm_length, len(left_arm), len(right_arm))
         )
     return left_arm[-arm_length:], right_arm[:arm_length]
+
+
+def truncate_arms_with_tolerance(left_arm, right_arm, arm_length, tolerance=0.2):
+    """Like truncate_arms, but each arm keeps extra headroom on its far/outer
+    side (up to tolerance * arm_length, bounded by the stored arm length).
+
+    The insertion-adjacent boundary never moves — left_arm still ends exactly
+    at the junction, right_arm still starts exactly at the junction — only the
+    far end gets extra bases so a primer3 search (see
+    plasmid_assembly.sapi_amplification_primers) has room to pick a
+    better-quality primer without ever touching the near/junction end.
+    """
+    widened_len = min(int(arm_length * (1 + tolerance)),
+                      len(left_arm), len(right_arm))
+    if arm_length > widened_len:
+        raise ValueError(
+            'Requested arm_length {} exceeds stored arm length {} / {} — '
+            'rerun the reagents pipeline with a larger arm_length.'.format(
+                arm_length, len(left_arm), len(right_arm))
+        )
+    return left_arm[-widened_len:], right_arm[:widened_len]
 
 
 # ── Tm calculation ────────────────────────────────────────────────────────────
@@ -131,35 +153,98 @@ def build_ssodn(left_arm, right_arm, insert_seq, cut_pos, insert_pos, consider_s
 
 # ── PCR primer design ─────────────────────────────────────────────────────────
 
+def _tm_growth_bind_regions(template, tm_target):
+    """Hand-rolled Tm-growth fallback: grow each binding region from its
+    anchored end until Tm >= tm_target (or the template is exhausted).
+    Returns (fwd_bind, rev_bind_rc) — same as the pre-primer3 implementation.
+    """
+    k_fwd = 12
+    while k_fwd < len(template) and calc_tm(template[:k_fwd]) < tm_target:
+        k_fwd += 1
+    k_rev = 12
+    while k_rev < len(template) and calc_tm(template[-k_rev:]) < tm_target:
+        k_rev += 1
+    return template[:k_fwd], reverse_complement(template[-k_rev:])
+
+
+def _primer3_anchored_single(template, force_pos, pick_left, primer_opt_tm, max_len=36):
+    """Design one primer whose start is pinned exactly at force_pos, letting
+    primer3 choose the other end/length for Tm and primer quality (hairpins,
+    GC clamp) instead of a naive Tm-growth loop.
+
+    Uses primer3-py's true single-sided PRIMER_PICK_LEFT/RIGHT_PRIMER=0 mode
+    (measured ~100x slower per call than an ordinary pair in earlier
+    profiling) rather than the pair-then-discard trick used elsewhere in this
+    module — acceptable here since this is called per user-selected reagent
+    row (a handful of calls), not per genome-wide site.
+
+    Returns (sequence, tm) or None if primer3 found no valid design.
+    """
+    seq_args = {'SEQUENCE_ID': 'design', 'SEQUENCE_TEMPLATE': template}
+    if pick_left:
+        seq_args['SEQUENCE_FORCE_LEFT_START'] = force_pos
+    else:
+        seq_args['SEQUENCE_FORCE_RIGHT_START'] = force_pos
+    global_args = {
+        'PRIMER_OPT_TM': primer_opt_tm,
+        # Wider than the ±3 window used elsewhere in this module — the anchor
+        # constraint already removes most of primer3's search freedom (only
+        # length can vary, not position), so a tight Tm window on top of that
+        # made the fallback fire far more often than warranted (profiled: ~30%
+        # fallback rate at ±3 vs. ~15-20% at ±8 on random test sequences).
+        'PRIMER_MIN_TM': primer_opt_tm - 8,
+        'PRIMER_MAX_TM': primer_opt_tm + 8,
+        'PRIMER_MAX_SIZE': max_len,
+        'PRIMER_PICK_LEFT_PRIMER': 1 if pick_left else 0,
+        'PRIMER_PICK_RIGHT_PRIMER': 0 if pick_left else 1,
+        'PRIMER_PICK_INTERNAL_OLIGO': 0,
+        'PRIMER_NUM_RETURN': 1,
+    }
+    res = primer3.bindings.design_primers(seq_args, global_args)
+    key = 'PRIMER_LEFT_0_SEQUENCE' if pick_left else 'PRIMER_RIGHT_0_SEQUENCE'
+    seq = res.get(key)
+    if not seq:
+        return None
+    tm_key = 'PRIMER_LEFT_0_TM' if pick_left else 'PRIMER_RIGHT_0_TM'
+    return seq, res.get(tm_key)
+
+
 def design_pcr_primers(left_arm, right_arm, template, tm_target, phos,
-                       cut_pos, insert_pos):
+                       cut_pos, insert_pos, max_bind_len=36):
     """Design PCR primers that add homology arms to a tag template.
 
-    Forward primer = left_arm + first K bases of template where Tm(template[:K]) >= tm_target.
-    Reverse primer = RC(right_arm) + RC(last K bases of template).
-    Tm is calculated on the template-binding region only (not the arm overhang).
+    Forward primer = left_arm + a primer3-designed binding region pinned to
+    start exactly at template[0]. Reverse primer = RC(right_arm) + a
+    primer3-designed binding region pinned to end exactly at the last base of
+    template. Both anchors match the arm/template boundary exactly — primer3
+    only picks the binding region's length/Tm/quality (hairpins, GC clamp),
+    replacing the previous naive Tm-growth loop.
+
+    Falls back to the old hand-rolled Tm-growth loop (unconditionally, no
+    anchoring) if primer3 finds no valid design for either side — e.g. a
+    template too short for primer3's minimum primer size.
 
     Phosphorylation (for lambda-exo ssDNA): same strand logic as ssODN.
       cut 5' of insert → phosphorylate forward primer (to produce antisense ssDNA)
       cut at/3' of insert → phosphorylate reverse primer (to produce sense ssDNA)
     /5Phos/ IDT modifier is prepended to the sequence when phos=True.
 
-    Returns ((fwd_suffix, fwd_seq), (rev_suffix, rev_seq)).
+    Returns ((fwd_suffix, fwd_seq), (rev_suffix, rev_seq), meta).
     fwd/rev_suffix are '_F' / '_R' (already include phos tag in seq, not suffix).
+    meta = {"used_fallback": bool}.
     """
     template = template.upper()
+    used_fallback = False
 
-    # Grow template-binding region until Tm >= target (or exhaust template)
-    k_fwd = 12
-    while k_fwd < len(template) and calc_tm(template[:k_fwd]) < tm_target:
-        k_fwd += 1
+    fwd_result = _primer3_anchored_single(template, 0, True, tm_target, max_bind_len)
+    rev_result = _primer3_anchored_single(template, len(template) - 1, False, tm_target, max_bind_len)
 
-    k_rev = 12
-    while k_rev < len(template) and calc_tm(template[-k_rev:]) < tm_target:
-        k_rev += 1
-
-    fwd_bind = template[:k_fwd]
-    rev_bind  = reverse_complement(template[-k_rev:])
+    if fwd_result and rev_result:
+        fwd_bind = fwd_result[0]
+        rev_bind = reverse_complement(rev_result[0])
+    else:
+        used_fallback = True
+        fwd_bind, rev_bind = _tm_growth_bind_regions(template, tm_target)
 
     fwd_seq = left_arm + fwd_bind
     rev_seq = _rc_case(right_arm) + rev_bind   # preserve exonic/intronic case in arm overhang
@@ -173,7 +258,192 @@ def design_pcr_primers(left_arm, right_arm, template, tm_target, phos,
             # want sense ssDNA → phos rev primer
             rev_seq = '/5Phos/' + rev_seq
 
-    return ('_F', fwd_seq), ('_R', rev_seq)
+    return ('_F', fwd_seq), ('_R', rev_seq), {'used_fallback': used_fallback}
+
+
+# ── Genotyping (screening) primer design ─────────────────────────────────────
+
+def _primer3_pair(template, target_start, target_len, excluded_regions,
+                  primer_opt_tm, product_opt_size, product_size_range):
+    """Design one ordinary primer3 pair on template; returns dict or None if none found."""
+    seq_args = {
+        'SEQUENCE_ID': 'design',
+        'SEQUENCE_TEMPLATE': template,
+        'SEQUENCE_TARGET': [target_start, max(target_len, 1)],
+        'SEQUENCE_EXCLUDED_REGION': excluded_regions,
+    }
+    global_args = {
+        'PRIMER_OPT_TM': primer_opt_tm,
+        'PRIMER_MIN_TM': primer_opt_tm - 3,
+        'PRIMER_MAX_TM': primer_opt_tm + 3,
+        'PRIMER_PRODUCT_OPT_SIZE': product_opt_size,
+        'PRIMER_PRODUCT_SIZE_RANGE': [product_size_range],
+        'PRIMER_NUM_RETURN': 1,
+    }
+    res = primer3.bindings.design_primers(seq_args, global_args)
+    if res.get('PRIMER_PAIR_NUM_RETURNED', 0) < 1:
+        return None
+    return {
+        'fwd_seq': res['PRIMER_LEFT_0_SEQUENCE'],
+        'fwd_tm': res['PRIMER_LEFT_0_TM'],
+        'rev_seq': res['PRIMER_RIGHT_0_SEQUENCE'],
+        'rev_tm': res['PRIMER_RIGHT_0_TM'],
+        'product_size': res['PRIMER_PAIR_0_PRODUCT_SIZE'],
+    }
+
+
+def _primer3_single(template, region_start, region_len, excluded_region, pick_left,
+                    primer_opt_tm, product_size_range=None):
+    """Design a single primer (left-only or right-only) on template; returns sequence or None.
+
+    Designed as an ordinary primer3 *pair* (fast — primer3-py's single-sided
+    PRIMER_PICK_LEFT/RIGHT_PRIMER=0 mode is ~100x slower per call, confirmed by
+    profiling) and only the requested side of the pair is kept; the other side
+    is discarded — so the *pair's* product size is irrelevant. product_size_range
+    defaults to an effectively-unconstrained range so a small SEQUENCE_INCLUDED_REGION
+    (smaller than primer3's built-in default product-size options) doesn't spuriously
+    fail; pass an explicit range only if the discarded side's placement actually matters.
+    """
+    seq_args = {
+        'SEQUENCE_ID': 'design',
+        'SEQUENCE_TEMPLATE': template,
+        'SEQUENCE_INCLUDED_REGION': [region_start, region_len],
+        'SEQUENCE_EXCLUDED_REGION': [excluded_region],
+    }
+    if product_size_range is None:
+        # product size must be >= primer3's default max primer size (27);
+        # the pair's product size is otherwise irrelevant since we discard
+        # the unused side.
+        lo = min(27, len(template))
+        product_size_range = [lo, max(lo, len(template))]
+    global_args = {
+        'PRIMER_OPT_TM': primer_opt_tm,
+        'PRIMER_MIN_TM': primer_opt_tm - 3,
+        'PRIMER_MAX_TM': primer_opt_tm + 3,
+        'PRIMER_PRODUCT_SIZE_RANGE': [product_size_range],
+        'PRIMER_NUM_RETURN': 1,
+    }
+    res = primer3.bindings.design_primers(seq_args, global_args)
+    if res.get('PRIMER_PAIR_NUM_RETURNED', 0) < 1:
+        return None
+    key = 'PRIMER_LEFT_0_SEQUENCE' if pick_left else 'PRIMER_RIGHT_0_SEQUENCE'
+    return res.get(key)
+
+
+def _primer3_paired_to_fixed(edited_seq, fixed_seq, fixed_is_forward,
+                             primer_opt_tm, product_opt_size, product_size_range):
+    """Design the true partner primer for a fixed (already-chosen) primer, as a real pair.
+
+    fixed_seq is pinned via SEQUENCE_PRIMER (forward-fixed) or SEQUENCE_PRIMER_REVCOMP
+    (reverse-fixed) so primer3 evaluates real pair metrics (Tm balance, complementarity,
+    product size) against it, rather than combining two independently-designed primers.
+    """
+    seq_args = {'SEQUENCE_ID': 'design', 'SEQUENCE_TEMPLATE': edited_seq}
+    if fixed_is_forward:
+        seq_args['SEQUENCE_PRIMER'] = fixed_seq
+    else:
+        seq_args['SEQUENCE_PRIMER_REVCOMP'] = fixed_seq
+    global_args = {
+        'PRIMER_OPT_TM': primer_opt_tm,
+        'PRIMER_MIN_TM': primer_opt_tm - 10,
+        'PRIMER_MAX_TM': primer_opt_tm + 10,
+        'PRIMER_PRODUCT_OPT_SIZE': product_opt_size,
+        'PRIMER_PRODUCT_SIZE_RANGE': [product_size_range],
+        'PRIMER_NUM_RETURN': 1,
+    }
+    res = primer3.bindings.design_primers(seq_args, global_args)
+    if res.get('PRIMER_PAIR_NUM_RETURNED', 0) < 1:
+        return None
+    return {
+        'fwd_seq': res['PRIMER_LEFT_0_SEQUENCE'],
+        'fwd_tm': res['PRIMER_LEFT_0_TM'],
+        'rev_seq': res['PRIMER_RIGHT_0_SEQUENCE'],
+        'rev_tm': res['PRIMER_RIGHT_0_TM'],
+        'product_size': res['PRIMER_PAIR_0_PRODUCT_SIZE'],
+    }
+
+
+def design_genotyping_primers(left_flank, right_flank, insert_sequence,
+                              internal_threshold=500, primer_opt_tm=60.0,
+                              product_opt_size=200, flank_min=50, flank_max=150):
+    """Design genotyping (screening) PCR primers flanking a CRISPR insertion site.
+
+    left_flank / right_flank: genomic sequence on each side of the insertion site
+    (at least flank_max + ~60bp margin recommended).
+
+    Short inserts (< internal_threshold): one external pair spanning the insert,
+    with both primers held flank_min-flank_max bp from the insert.
+
+    Long inserts (>= internal_threshold): the external pair above, plus a 5' and
+    3' junction pair. Each junction pair is designed as a genuine primer3 pair —
+    the genomic-side primer is designed first (single-primer mode), then pinned
+    via SEQUENCE_PRIMER/SEQUENCE_PRIMER_REVCOMP so primer3 designs a true,
+    Tm-/dimer-compatible internal partner on the in-silico edited allele sequence
+    (left_flank + insert_sequence + right_flank) — not matched after the fact.
+
+    Returns {amplicon_type: {fwd_seq, fwd_tm, rev_seq, rev_tm, product_size}}.
+    Amplicon types missing from the dict mean primer3 found no valid design.
+    """
+    left_flank = left_flank.upper()
+    right_flank = right_flank.upper()
+    insert_sequence = insert_sequence.upper()
+    insert_len = len(insert_sequence)
+    edited_seq = left_flank + insert_sequence + right_flank
+
+    results = {}
+
+    # ── External pair: spans the whole insert, primers held off the insert ──
+    insert_start = len(left_flank)
+    ext = _primer3_pair(
+        edited_seq, insert_start, max(insert_len, 1),
+        excluded_regions=[
+            [max(insert_start - flank_min, 0), flank_min],
+            [insert_start + insert_len, flank_min],
+        ],
+        primer_opt_tm=primer_opt_tm,
+        product_opt_size=product_opt_size,
+        product_size_range=[insert_len + 2 * flank_min, insert_len + 2 * flank_max],
+    )
+    if ext:
+        results['external'] = ext
+
+    if insert_len < internal_threshold:
+        return results
+
+    # ── 5' junction: fixed genomic forward primer, primer3 designs internal reverse ──
+    fwd_region_len = min(len(left_flank), flank_max + 60)
+    fwd_region_start = len(left_flank) - fwd_region_len
+    fwd_fixed = _primer3_single(
+        left_flank, fwd_region_start, fwd_region_len,
+        excluded_region=[len(left_flank) - flank_min, flank_min],
+        pick_left=True, primer_opt_tm=primer_opt_tm,
+    )
+    if fwd_fixed:
+        j5 = _primer3_paired_to_fixed(
+            edited_seq, fwd_fixed, fixed_is_forward=True,
+            primer_opt_tm=primer_opt_tm, product_opt_size=product_opt_size,
+            product_size_range=[flank_min, flank_max + 400],
+        )
+        if j5:
+            results['5p_junction'] = j5
+
+    # ── 3' junction: fixed genomic reverse primer, primer3 designs internal forward ──
+    rev_region_len = min(len(right_flank), flank_max + 60)
+    rev_fixed = _primer3_single(
+        right_flank, 0, rev_region_len,
+        excluded_region=[0, flank_min],
+        pick_left=False, primer_opt_tm=primer_opt_tm,
+    )
+    if rev_fixed:
+        j3 = _primer3_paired_to_fixed(
+            edited_seq, rev_fixed, fixed_is_forward=False,
+            primer_opt_tm=primer_opt_tm, product_opt_size=product_opt_size,
+            product_size_range=[flank_min, flank_max + 400],
+        )
+        if j3:
+            results['3p_junction'] = j3
+
+    return results
 
 
 # ── Translation helper ────────────────────────────────────────────────────────
@@ -467,10 +737,13 @@ if __name__ == '__main__':
             rows.append({'name': '{}_crRNA'.format(site), 'sequence': crrna})
 
         elif args.repair_type == 'amplicon' and args.pcr_template:
-            (_, fwd), (_, rev) = design_pcr_primers(
+            (_, fwd), (_, rev), meta = design_pcr_primers(
                 left, right, args.pcr_template.upper(), args.pcr_tm,
                 args.pcr_phos, cut, ins
             )
+            if meta['used_fallback']:
+                print('WARNING: {} primer3 design failed; fell back to Tm-growth '
+                      'primers'.format(site), file=sys.stderr)
             rows.append({'name': '{}_F'.format(site), 'sequence': fwd})
             rows.append({'name': '{}_R'.format(site), 'sequence': rev})
             rows.append({'name': '{}_crRNA'.format(site), 'sequence': crrna})

@@ -16,6 +16,7 @@ dependencies:
   - shiny
   - shinywidgets
   - xmltramp2       # required by EBI REST clients
+  - primer3-py
   - pytest
   - pip:
     - ridgeplot
