@@ -245,14 +245,24 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
 
     # ── Click/selection handlers ─────────────────────────────────────────────────
 
+    def _click_pos(raw):
+        """Unwrap a [pos] click payload; JS wraps positions in a fresh array each
+        click so re-clicking the same residue still invalidates server-side
+        (py-shiny skips updates when the new value `is` the cached small int).
+        """
+        if raw is None:
+            return None
+        if isinstance(raw, (list, tuple)):
+            raw = raw[0]
+        return int(raw)
+
     @reactive.effect
     @reactive.event(input.residue_click)
     def on_residue_click():
         """Toggle a residue in/out of the pending set."""
-        pos = input.residue_click()
+        pos = _click_pos(input.residue_click())
         if pos is None:
             return
-        pos = int(pos)
         p = set(pending_sites.get())
         if pos in p:
             p.discard(pos)
@@ -265,10 +275,9 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
     @reactive.event(input.residue_dblclick)
     def on_residue_dblclick():
         """Commit a residue on double-click; remove it if already committed."""
-        pos = input.residue_dblclick()
+        pos = _click_pos(input.residue_dblclick())
         if pos is None:
             return
-        pos = int(pos)
         sites = list(shared_sites.get())
         if pos in sites:
             sites.remove(pos)
@@ -284,27 +293,27 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
     @reactive.effect
     @reactive.event(input.struct_click)
     def on_struct_click():
-        """Toggle a residue from 3D structure click."""
-        pos = input.struct_click()
+        """Add a residue to the pending set from a 3D structure click.
+
+        Select-only: deselecting a pending (yellow) site is a sequence-strip
+        action that then propagates here via sync_js_states, so structure
+        clicks never remove an already-pending site.
+        """
+        pos = _click_pos(input.struct_click())
         if pos is None:
             return
-        pos = int(pos)
-        p = set(pending_sites.get())
-        if pos in p:
-            p.discard(pos)
-        else:
-            if pos not in set(shared_sites.get()):
-                p.add(pos)
-        pending_sites.set(p)
+        if pos not in set(shared_sites.get()):
+            p = set(pending_sites.get())
+            p.add(pos)
+            pending_sites.set(p)
 
     @reactive.effect
     @reactive.event(input.struct_dblclick)
     def on_struct_dblclick():
         """Commit a residue from 3D double-click; remove it if already committed."""
-        pos = input.struct_dblclick()
+        pos = _click_pos(input.struct_dblclick())
         if pos is None:
             return
-        pos = int(pos)
         sites = list(shared_sites.get())
         if pos in sites:
             sites.remove(pos)

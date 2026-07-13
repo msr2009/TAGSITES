@@ -406,6 +406,13 @@ def progress_server(input, output, session, shared_json, shared_results_trigger)
             _completion_count[0] += 1
             shared_results_trigger.set(_completion_count[0])
 
+        if single_status == "running":
+            _completion_notified_single[0] = False
+        elif single_status == "success" and not _completion_notified_single[0]:
+            _completion_notified_single[0] = True
+            _completion_count[0] += 1
+            shared_results_trigger.set(_completion_count[0])
+
     @reactive.effect
     def _notify_resume_status():
         """Toast the outcome of an EBI resume check: still running or expired.
@@ -447,13 +454,6 @@ def progress_server(input, output, session, shared_json, shared_results_trigger)
             return
         _auto_download_notified[0] = True
         await session.send_custom_message("tagsites_trigger_download", {})
-
-        if single_status == "running":
-            _completion_notified_single[0] = False
-        elif single_status == "success" and not _completion_notified_single[0]:
-            _completion_notified_single[0] = True
-            _completion_count[0] += 1
-            shared_results_trigger.set(_completion_count[0])
 
     @reactive.effect
     @reactive.event(input.run_analysis)

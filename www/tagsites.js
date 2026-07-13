@@ -80,6 +80,14 @@
     }
   }
 
+  // Wrap a residue position in a fresh array so re-clicking the SAME position
+  // still invalidates server-side: py-shiny's reactive Value skips updates
+  // when the new value `is` the old one, and CPython caches small ints, so a
+  // bare repeated int silently fails to re-trigger the click handler.
+  function shinySetPos(inputId, pos) {
+    shinySet(inputId, [pos]);
+  }
+
   // Full x-range: [0.5, n+0.5] where n = sequence length.
   function fullRange() {
     var n = seqArray.length || 1;
@@ -754,7 +762,7 @@
       }
 
       if (!inf || !inDataArea(cx, inf)) return;
-      shinySet(inputNames.residue_click, xToPos(cx, inf));
+      shinySetPos(inputNames.residue_click, xToPos(cx, inf));
     });
 
     // ── Dblclick: seq strip → commit residue, elsewhere → reset zoom ────────────
@@ -771,7 +779,7 @@
       if (cy >= layout.legendTop && cy <= layout.legendTop + LEGEND_H) return;
 
       if (cy >= layout.seqTop && inf && inDataArea(cx, inf)) {
-        shinySet(inputNames.residue_dblclick, xToPos(cx, inf));
+        shinySetPos(inputNames.residue_dblclick, xToPos(cx, inf));
       } else {
         currentRange = null;
         render();
@@ -809,11 +817,11 @@
       var now = Date.now();
       if (structLastPos === pos && now - structLastTime < DBL_CLICK_MS) {
         structLastPos = null;
-        shinySet(inputNames.residue_dblclick, pos);
+        shinySetPos(inputNames.struct_dblclick, pos);
       } else {
         structLastPos  = pos;
         structLastTime = now;
-        shinySet(inputNames.residue_click, pos);
+        shinySetPos(inputNames.struct_click, pos);
       }
     });
 
