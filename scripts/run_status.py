@@ -20,8 +20,16 @@ this file so they share the same resume/skip-completed logic.
 import json
 import os
 import threading
+import time
 
 _lock = threading.Lock()
+
+# save_status's tmp-then-replace is atomic on local disks, but on the network
+# mounts this app is often run from (SMB/NFS), a concurrent writer can leave a
+# brief window where the file looks missing or half-written to a reader on
+# another process. Retry a few times before giving up.
+_READ_RETRIES = 5
+_READ_RETRY_DELAY = 0.05
 
 
 def status_path(working_dir, run_name):
@@ -30,12 +38,22 @@ def status_path(working_dir, run_name):
 
 
 def load_status(working_dir, run_name):
-    """Load the status file; return empty dict if the file doesn't exist yet."""
+    """Load the status file; return empty dict if it doesn't exist yet.
+
+    Retries briefly on FileNotFoundError/JSONDecodeError to ride out a
+    concurrent writer on network filesystems where replace isn't atomic.
+    """
     path = status_path(working_dir, run_name)
-    if not os.path.exists(path):
-        return {}
-    with open(path) as f:
-        return json.load(f)
+    for attempt in range(_READ_RETRIES):
+        if not os.path.exists(path):
+            return {}
+        try:
+            with open(path) as f:
+                return json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            if attempt == _READ_RETRIES - 1:
+                return {}
+            time.sleep(_READ_RETRY_DELAY)
 
 
 def save_status(working_dir, run_name, status_dict):
