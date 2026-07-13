@@ -21,6 +21,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).parent.parent
 SCRIPTS = str(REPO_ROOT / "scripts") + "/"
+sys.path.insert(0, str(REPO_ROOT / "modules"))
 
 
 # ── Genewise both-strand selection ────────────────────────────────────────────
@@ -55,8 +56,10 @@ def test_run_genewise_selects_forward_for_src1(DATA, email, tmp_path):
     orientation = orientation_file.read_text().strip()
     assert orientation == "+", f"expected '+', got '{orientation}'"
 
-    from parse_genewise import parse_genewise_score
-    score = parse_genewise_score(winner)
+    # the EBI REST Genewise API doesn't write a "Score NNN bits" header line
+    # (only the standalone binary does) — use the GFF-aware parser instead
+    from parse_genewise import parse_genewise_gff_score
+    score = parse_genewise_gff_score(winner)
     assert score > 500, f"winner score unexpectedly low: {score}"
 
 
@@ -259,3 +262,124 @@ def test_get_species_taxonomy_c_elegans(email):
     assert "Caenorhabditis elegans" in result or "6239" in result, (
         f"Expected C. elegans name or ID in result; got: {result[:200]}"
     )
+
+
+# ── Full pipeline, all task types ─────────────────────────────────────────────
+
+@pytest.mark.network
+def test_full_pipeline_all_tasks(DATA, email, tmp_path):
+    """
+    Run every task type (blast, plddt, modifications, domains, scores, reagents)
+    for snb-1 through run_tag_sites_from_json.py and check each output file's
+    format matches what utils/results.py's loader expects.
+    """
+    if not email:
+        pytest.skip("No EBI e-mail provided (set TAGSITES_EMAIL or --email).")
+
+    import shutil
+    import pandas as pd
+    from task_registry import task_defaults, task_output_suffix, companion_path
+    from setup_logic import build_global_block, build_task_entry, build_reagents_entry, build_run_json
+    import run_status
+    import run_tag_sites_from_json
+
+    working_dir = str(tmp_path / "full") + "/"
+    os.makedirs(working_dir)
+    run_name = "snb-1"
+
+    prot_fa = working_dir + "snb-1.fa"
+    genomic_fa = working_dir + "snb-1_genomic.fa"
+    genewise_out = working_dir + "snb-1.genewise.out.txt"
+    shutil.copy(DATA / "snb-1.fa", prot_fa)
+    shutil.copy(DATA / "snb-1_genomic.fa", genomic_fa)
+    shutil.copy(DATA / "snb-1.genewise.out.txt", genewise_out)
+
+    global_block = build_global_block(
+        email=email, run_name=run_name, working_dir=working_dir,
+        input_file=prot_fa, genomic_file=genomic_fa,
+    )
+
+    blast_args = {**task_defaults("blast"), "taxid": 6239, "db": "uniprotkb", "max_hits": 5}
+    plddt_args = {**task_defaults("plddt"), "species_taxid": 6239}
+    mods_args = task_defaults("modifications")
+    domains_args = task_defaults("domains")
+    scores_args = {**task_defaults("scores"),
+                   "scores_file": str(REPO_ROOT / "tables" / "hydrophobicity_kyle-doolittle.tsv")}
+
+    task_entries = [
+        build_task_entry("BLAST_blast", "blast", blast_args,
+                         task_output_suffix("blast"), working_dir, run_name),
+        build_task_entry("PLDDT_plddt", "plddt", plddt_args,
+                         task_output_suffix("plddt"), working_dir, run_name),
+        build_task_entry("MODS_modifications", "modifications", mods_args,
+                         task_output_suffix("modifications"), working_dir, run_name),
+        build_task_entry("DOMAINS_domains", "domains", domains_args,
+                         task_output_suffix("domains"), working_dir, run_name),
+        build_task_entry("SCORES_scores", "scores", scores_args,
+                         task_output_suffix("scores"), working_dir, run_name),
+    ]
+
+    reagents_entry = build_reagents_entry(
+        defaults={**task_defaults("reagents"), "genewise": genewise_out, "n_guides": 3, "arm_length": 200},
+        genomic_path=genomic_fa, out_suffix=task_output_suffix("reagents"),
+        working_dir=working_dir, run_name=run_name,
+    )
+
+    run_json = build_run_json(global_block, task_entries, reagents_entry)
+    json_path = working_dir + f"{run_name}.run.json"
+    with open(json_path, "w") as f:
+        json.dump(run_json, f, indent=4)
+
+    run_tag_sites_from_json.main(json_path)
+
+    # every task must report success in the status file
+    status = run_status.load_status(working_dir, run_name)
+    for task_id in run_json["tasks"]:
+        assert status.get(task_id, {}).get("status") == "success", (
+            f"{task_id} did not complete successfully: {status.get(task_id)}"
+        )
+
+    # blast: non-empty JSD + isoforms companion (if present)
+    blast_out = run_json["tasks"]["BLAST_blast"]["args"]["output"]
+    blast_lines = [l for l in Path(blast_out).read_text().splitlines() if l.strip()]
+    assert len(blast_lines) > 0, "blast JSD output is empty"
+    isoforms_path = companion_path(blast_out, "blast", "isoforms")
+    if isoforms_path and os.path.exists(isoforms_path):
+        iso_df = pd.read_csv(isoforms_path, sep="\t",
+                             names=["source", "start", "stop", "description"])
+        assert set(iso_df.columns) == {"source", "start", "stop", "description"}
+
+    # plddt: headerless 2-col TSV + sasa companion
+    plddt_out = run_json["tasks"]["PLDDT_plddt"]["args"]["output"]
+    plddt_df = pd.read_csv(plddt_out, sep="\t", header=None, comment="#")
+    assert plddt_df.shape[1] == 2, "plddt output should be a 2-column TSV"
+    pd.to_numeric(plddt_df[1])  # values must be numeric
+    sasa_path = companion_path(plddt_out, "plddt", "sasa")
+    if sasa_path and os.path.exists(sasa_path):
+        # utils/results.py's loader only reads columns 0 (position) and 1 (SASA
+        # value) positionally — extract_from_pdb.py's sasa file has a 3rd
+        # (one-letter amino acid) column, which is fine as long as 0/1 are numeric.
+        sasa_df = pd.read_csv(sasa_path, sep="\t", header=None, comment="#")
+        assert sasa_df.shape[1] >= 2
+        pd.to_numeric(sasa_df[0])
+        pd.to_numeric(sasa_df[1])
+
+    # modifications + domains: headerless 4-col TSV
+    for task_id in ("MODS_modifications", "DOMAINS_domains"):
+        out_path = run_json["tasks"][task_id]["args"]["output"]
+        df = pd.read_csv(out_path, sep="\t",
+                         names=["source", "start", "stop", "description"])
+        assert set(df.columns) == {"source", "start", "stop", "description"}
+
+    # scores: headerless 2-col TSV (position, score)
+    scores_out = run_json["tasks"]["SCORES_scores"]["args"]["output"]
+    scores_df = pd.read_csv(scores_out, sep="\t", header=None)
+    assert scores_df.shape[1] == 2, "scores output should be a 2-column TSV"
+    pd.to_numeric(scores_df[1])
+
+    # reagents: existing format contract
+    reagents_out = run_json["tasks"]["REAGENTS_reagents"]["args"]["output"]
+    reagents_df = pd.read_csv(reagents_out, sep="\t")
+    assert len(reagents_df) > 0, "reagents TSV is empty"
+    assert "spacer" in reagents_df.columns
+    assert "left_arm" in reagents_df.columns

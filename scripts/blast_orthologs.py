@@ -30,6 +30,62 @@ def hit_to_dict(j):
     }
 
 
+def group_hits_by_species(raw_hits, query_species, seq_len, evalue, length_percent,
+                          exclude_paralogs, n):
+    """Filter raw BLAST hits by evalue/length, then group by species (best hit per species
+    when exclude_paralogs=True; all matching hits otherwise). Stops once n species are seen.
+    """
+    blast_hits = {query_species: []}
+    for h in raw_hits:
+        d_hit = hit_to_dict(h)
+
+        if length_percent != 0:
+            if d_hit["evalue"] > evalue:
+                continue
+            if (d_hit["length"] / float(seq_len) < length_percent
+                    or d_hit["length"] / float(seq_len) > 1 / length_percent):
+                continue
+
+        if exclude_paralogs:
+            # store all hits from query species; best hit per other species
+            if d_hit["species"] == query_species:
+                blast_hits[query_species].append(d_hit)
+            else:
+                if d_hit["species"] not in blast_hits:
+                    blast_hits[d_hit["species"]] = [d_hit]
+                elif blast_hits[d_hit["species"]][0]["evalue"] > d_hit["evalue"]:
+                    blast_hits[d_hit["species"]] = [d_hit]
+        else:
+            if d_hit["species"] in blast_hits:
+                blast_hits[d_hit["species"]].append(d_hit)
+            else:
+                blast_hits[d_hit["species"]] = [d_hit]
+
+        if len(blast_hits) >= n:
+            break
+
+    return blast_hits
+
+
+def parse_dbfetch_fasta_record(raw_text):
+    """Parse one raw dbfetch FASTA response into (header_word, sequence)."""
+    name = raw_text.split("\n")[0].split()[0]
+    seq  = "".join(ln for ln in raw_text.split("\n") if not ln.startswith(">"))
+    return name, seq
+
+
+def ensure_query_in_alignment_set(fasta_str_list, input_match, seq_name, seq):
+    """If no hit exactly matched the query, insert the query itself at the front.
+
+    Returns (fasta_str_list, input_match) — the alignment set Clustal Omega receives
+    must contain the query sequence so conservation scoring has a reference row.
+    """
+    if input_match == "":
+        fasta_str_list = [">{}\n{}\n".format(seq_name, seq)] + fasta_str_list[1:]
+        input_match = seq_name
+    return fasta_str_list, input_match
+
+
 def main(fasta_in, email, workingdir, name, output,
          n, evalue, db, length_percent,
          align_full_seqs, taxid, clients_folder, exclude_paralogs,
@@ -120,36 +176,8 @@ def main(fasta_in, email, workingdir, name, output,
         _report(reporter, "No additional isoforms detected (single-isoform gene).",
                 stage="isoforms")
 
-    blast_hits = {query_species: []}
-    for h in blast_output["hits"]:
-        d_hit = hit_to_dict(h)
-
-        # apply evalue and length filters
-        if length_percent != 0:
-            if d_hit["evalue"] > evalue:
-                continue
-            if (d_hit["length"] / float(len(seq)) < length_percent
-                    or d_hit["length"] / float(len(seq)) > 1 / length_percent):
-                continue
-
-        if exclude_paralogs:
-            # store all hits from query species; best hit per other species
-            if d_hit["species"] == query_species:
-                blast_hits[query_species].append(d_hit)
-            else:
-                if d_hit["species"] not in blast_hits:
-                    blast_hits[d_hit["species"]] = [d_hit]
-                elif blast_hits[d_hit["species"]][0]["evalue"] > d_hit["evalue"]:
-                    blast_hits[d_hit["species"]] = [d_hit]
-        else:
-            if d_hit["species"] in blast_hits:
-                blast_hits[d_hit["species"]].append(d_hit)
-            else:
-                blast_hits[d_hit["species"]] = [d_hit]
-
-        # stop once we have enough species
-        if len(blast_hits) >= n:
-            break
+    blast_hits = group_hits_by_species(blast_output["hits"], query_species, len(seq),
+                                       evalue, length_percent, exclude_paralogs, n)
 
     ###########################
     # GET FULL SEQS OF HITS
@@ -177,8 +205,7 @@ def main(fasta_in, email, workingdir, name, output,
             """Fetch one UniProt FASTA; return (acc, header_word, seq_str) or (acc, None, None)."""
             try:
                 raw = ebi_rest.dbfetch("uniprotkb", acc, "fasta", "raw").decode("utf-8")
-                name = raw.split("\n")[0].split()[0]
-                seq  = "".join(ln for ln in raw.split("\n") if not ln.startswith(">"))
+                name, seq = parse_dbfetch_fasta_record(raw)
                 return acc, name, seq
             except Exception as e:
                 return acc, None, str(e)
@@ -218,8 +245,8 @@ def main(fasta_in, email, workingdir, name, output,
     # if no exact match to input, insert our query sequence at the front
     if input_match == "":
         _report(reporter, "no exact match to input; using best BLAST hit as query", stage="dbfetch")
-        fasta_str_list = [">{}\n{}\n".format(seq_name, seq)] + fasta_str_list[1:]
-        input_match = seq_name
+    fasta_str_list, input_match = ensure_query_in_alignment_set(
+        fasta_str_list, input_match, seq_name, seq)
 
     ###########################
     # ALIGN WITH CLUSTAL OMEGA (via EBI REST)

@@ -36,6 +36,25 @@ import ebi_rest
 from progress import report as _report, resolve_reporter, timed_poll_adapter
 
 
+def checksum_lookup_response_to_accession(resp_json):
+    """Extract the first matching UniProt accession from a checksum-search response, or None."""
+    results = resp_json.get("results", [])
+    if results:
+        return results[0]["primaryAccession"]
+    return None
+
+
+def blast_tsv_line_to_afdb_hit(line):
+    """Parse one raw NCBIBLAST-TSV data line into an AFDB candidate hit dict."""
+    l = line.strip().split("\t")
+    return {"accession": l[2], "percent_id": float(l[7]), "evalue": float(l[9])}
+
+
+def is_afdb_not_found(pdb_text):
+    """EBI dbfetch returns a plain-text 'ERROR ...' message when an AFDB accession isn't found."""
+    return "ERROR" in pdb_text[:50]
+
+
 def _uniprot_checksum_lookup(seq, taxid=None):
     """Query UniProt REST API for an exact sequence match by CRC64 checksum.
 
@@ -51,10 +70,7 @@ def _uniprot_checksum_lookup(seq, taxid=None):
         timeout=15,
     )
     resp.raise_for_status()
-    results = resp.json().get("results", [])
-    if results:
-        return results[0]["primaryAccession"]
-    return None
+    return checksum_lookup_response_to_accession(resp.json())
 
 
 def search_AFDB(fasta_in, email, workingdir, name, taxid, evalue, percentid,
@@ -119,10 +135,10 @@ def search_AFDB(fasta_in, email, workingdir, name, taxid, evalue, percentid,
                 _report(reporter, "no BLAST hits found for AFDB lookup", stage="afdb_nohit")
                 return 1
 
-            l = lines[1].strip().split("\t")
-            match_id        = float(l[7])
-            match_eval      = float(l[9])
-            match_accession = l[2]
+            hit = blast_tsv_line_to_afdb_hit(lines[1])
+            match_id        = hit["percent_id"]
+            match_eval      = hit["evalue"]
+            match_accession = hit["accession"]
 
     # try to download AlphaFold model for the matched accession
     if match_id >= percentid and match_eval <= evalue and match_accession != "":
@@ -135,7 +151,7 @@ def search_AFDB(fasta_in, email, workingdir, name, taxid, evalue, percentid,
             return 1
 
         # the EBI dbfetch returns an error message as plain text when not found
-        if "ERROR" in pdb_text[:50]:
+        if is_afdb_not_found(pdb_text):
             _report(reporter, f"PDB not found in AFDB for {match_accession}",
                     stage="afdb_fetch", level="warning")
             return 1

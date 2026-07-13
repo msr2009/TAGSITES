@@ -27,6 +27,21 @@ import ebi_rest
 from progress import report as _report, resolve_reporter, timed_poll_adapter
 
 
+def iprscan_tsv_to_domains(tsv_text):
+    """Parse raw InterProScan5 TSV text into (source, start, stop, description) rows.
+
+    Keeps only source(col3), start(col6), stop(col7), description(col5); rows with
+    fewer than 8 tab-separated fields are malformed and skipped.
+    """
+    rows = []
+    for line in tsv_text.splitlines():
+        l = line.strip().split("\t")
+        if len(l) < 8:
+            continue
+        rows.append((l[3], l[6], l[7], l[5]))
+    return rows
+
+
 def main(fasta_in, email, workingdir, clients_folder, outputfile, report=None,
          job_id_cb=None, resume_job_ids=None):
     """Submit sequence to InterProScan5, parse TSV result, write output.
@@ -69,13 +84,9 @@ def main(fasta_in, email, workingdir, clients_folder, outputfile, report=None,
     with open(intermediate, "wb") as f:
         f.write(tsv_bytes)
 
-    # parse and reformat: keep source(col3), start(col6), stop(col7), description(col5)
     with open(outputfile, "w") as f_out:
-        for line in open(intermediate):
-            l = line.strip().split("\t")
-            if len(l) < 8:
-                continue
-            print("\t".join([l[3], l[6], l[7], l[5]]), file=f_out)
+        for row in iprscan_tsv_to_domains(tsv_bytes.decode()):
+            print("\t".join(row), file=f_out)
 
 
 if __name__ == "__main__":
