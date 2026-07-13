@@ -6,6 +6,16 @@ __pycache__/
 # macOS
 .DS_Store
 
+# Editor swap/backup files (vim)
+*.un~
+*~
+
+# Jupyter
+.ipynb_checkpoints/
+
+# SMB temp files
+.smbdelete*
+
 # Run output directories (user data, not app code)
 USERDATA/
 LON2/
