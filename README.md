@@ -85,8 +85,7 @@ to upload a sequence, configure analyses, and submit a run.
 
 ## Run from the command line
 
-The pipeline can be driven entirely via a JSON config file — useful for batch processing or
-testing.
+The pipeline can be driven entirely via a JSON config file.
 
 ```bash
 conda activate tagsites
@@ -96,6 +95,28 @@ python scripts/run_tag_sites_from_json.py -i <run.json>
 A minimal example JSON (using pre-computed Genewise output so no network is needed) is at
 `tests/data/example_run.json` in the cloned repository (not included in the downloaded zip).
 Outputs land in the directory specified by `global.working_dir`.
+
+### Running many proteins at once (batch)
+
+For many proteins, use `scripts/batch_run_tag_sites.py`. It takes a manifest (CSV/TSV, one row
+per protein: `run_name`, `input_file`, and optional `pdb`, `genomic_file`, `working_dir`, `email`
+columns) and a shared task-template JSON (same shape as `params/worm_default.json`, defining which
+analyses to run and their parameters for every protein), builds a run JSON per protein, and runs
+them with bounded concurrency so EBI's REST API isn't hit with too many simultaneous submissions.
+
+```bash
+conda activate tagsites
+python scripts/batch_run_tag_sites.py \
+    --manifest proteins.tsv \
+    --params params/worm_default.json \
+    --email you@example.edu \
+    --output-root ./batch_runs \
+    --max-concurrent 3
+```
+
+A minimal example manifest is at `tests/data/batch_manifest_example.tsv`. Re-running the same
+command skips proteins/tasks that already completed successfully; pass `--force` to re-run
+everything.
 
 ---
 
