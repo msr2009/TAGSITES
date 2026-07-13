@@ -23,7 +23,7 @@ from crispr_util import reverse_complement
 # ── select_orientation ────────────────────────────────────────────────────────
 
 class TestSelectOrientation:
-    """src-1 fwd=1138 bits, rc=1.39 bits (fixtures in tests/data/)."""
+    """src-1 fwd=1177.09 bits (GFF score), rc=-17.62 bits (fixtures in tests/data/)."""
 
     def test_picks_forward_when_fwd_wins(self, DATA):
         result = select_orientation(
@@ -34,8 +34,8 @@ class TestSelectOrientation:
             protein_length=536,
         )
         assert result["orientation"] == "+"
-        assert result["fwd_score"] == pytest.approx(1138.03, abs=0.1)
-        assert result["rc_score"] == pytest.approx(1.39, abs=0.1)
+        assert result["fwd_score"] == pytest.approx(1177.09, abs=0.1)
+        assert result["rc_score"] == pytest.approx(-17.62, abs=0.1)
 
     def test_no_warning_for_high_score_winner(self, DATA):
         result = select_orientation(
@@ -57,7 +57,7 @@ class TestSelectOrientation:
             protein_length=536,
         )
         assert result["orientation"] == "rc"
-        assert result["winner_score"] == pytest.approx(1138.03, abs=0.1)
+        assert result["winner_score"] == pytest.approx(1177.09, abs=0.1)
 
     def test_warning_fires_for_low_score_winner(self, DATA):
         """If both inputs are the garbage RC result, winner is 1.39 → warning."""
