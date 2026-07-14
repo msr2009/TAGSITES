@@ -171,6 +171,7 @@ dependencies:
   - pyobjc-framework-cocoa=10.2=py312h74abf1d_0
   - pyparsing=3.1.2=pyhd8ed1ab_0
   - pysocks=1.7.1=pyha2e5f31_6
+  - pytest
   - python=3.12.3=h1411813_0_cpython
   - python-dateutil=2.9.0=pyhd8ed1ab_0
   - python-fastjsonschema=2.19.1=pyhd8ed1ab_0
