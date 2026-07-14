@@ -297,7 +297,8 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                 left_wt  = str(row["left_arm"])[-(arm_len + wt_extra):]
                 right_wt = str(row["right_arm"])[:(arm_len + wt_extra)]
                 diag = ascii_diagram(row, left, right,
-                                     left_wt=left_wt, right_wt=right_wt)
+                                     left_wt=left_wt, right_wt=right_wt,
+                                     insert_seq=insert if repair == "ssodn" else None)
 
                 if repair == "amplicon" and insert:
                     tm = 60.0

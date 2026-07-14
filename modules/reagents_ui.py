@@ -30,8 +30,11 @@ _STYLE = """
     .accordion-body   { padding: 0.5rem 0.75rem; }
     .card-body        { padding: 0.45rem 0.75rem; }
     .card             { margin-bottom: 0.4rem; }
-    .reagents-accordion .accordion-button { background: #e9ecef; color: #212529; }
-    .reagents-accordion .accordion-button:not(.collapsed) { background: #dee2e6; }
+    .reagents-accordion .accordion-button { background: #cfe2ff; color: #212529; }
+    .reagents-accordion .accordion-button:not(.collapsed) { background: #9ec5fe; }
+
+    /* Output parameters / Genotyping primers card headers — same blue as the accordions */
+    .reagents-panel-header { background: #cfe2ff !important; color: #212529; }
 
     /* guide sub-panels */
     .guide-panel { border: 1px solid #adb5bd; border-radius: 4px;
@@ -89,7 +92,7 @@ def reagents_ui():
             ui.div(
                 ui.div(
                     ui.span("Output parameters"),
-                    class_="card-header fw-semibold",
+                    class_="card-header fw-semibold reagents-panel-header",
                 ),
                 ui.div(
                     # Tag / insert sequence — select is static to preserve selection;
@@ -134,7 +137,7 @@ def reagents_ui():
             ui.div(
                 ui.div(
                     ui.span("Genotyping primers"),
-                    class_="card-header fw-semibold",
+                    class_="card-header fw-semibold reagents-panel-header",
                 ),
                 ui.div(
                     ui.p(

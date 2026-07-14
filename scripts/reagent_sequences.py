@@ -557,7 +557,7 @@ def _build_aa_line(seq_raw, local_ins):
 
 # ── ASCII diagram ─────────────────────────────────────────────────────────────
 
-def ascii_diagram(guide_row, left_arm, right_arm, left_wt=None, right_wt=None):
+def ascii_diagram(guide_row, left_arm, right_arm, left_wt=None, right_wt=None, insert_seq=None):
     """Return an HTML string for embedding in a <pre> block.
 
     Rows (top to bottom):
@@ -569,6 +569,11 @@ def ascii_diagram(guide_row, left_arm, right_arm, left_wt=None, right_wt=None):
 
     left_wt / right_wt: stored arms trimmed to arm_length+10 for WT display context.
     If omitted, same as left_arm / right_arm (no extra context shown).
+
+    insert_seq: ssODN tag/insert sequence. When given, the literal insert is
+    spliced into the repair-template row (uppercase) between the two arms,
+    and the arm bases in that row are shown lowercase — except any
+    PAM-disruption mutation within the arm, which stays uppercase and red.
     """
     insert_pos    = int(guide_row['insert_pos'])
     cut_pos       = int(guide_row['cut_pos'])
@@ -582,6 +587,10 @@ def ascii_diagram(guide_row, left_arm, right_arm, left_wt=None, right_wt=None):
     # a PAM mutation exists when method is syn_1 or mut_1 (not insertion or none)
     mutated = recut_method in ('syn_1', 'mut_1')
     dist    = abs(cut_pos - insert_pos)
+
+    insert_seq  = insert_seq.upper() if insert_seq else ''
+    ins_len     = len(insert_seq)
+    ssodn_mode  = bool(insert_seq)
 
     # Display window is based on the WT arms (wider than truncated repair arms)
     l_wt = left_wt if left_wt is not None else left_arm
@@ -615,7 +624,6 @@ def ascii_diagram(guide_row, left_arm, right_arm, left_wt=None, right_wt=None):
     # ── Row 2: translation — computed first so stop codons can be forced uppercase
     wt_raw_base = l_show + r_show
     aa_raw, wt_raw = _build_aa_line(wt_raw_base, local_ins)
-    aa_line = pfx + _esc(aa_raw)
 
     # ── Row 1: WT sequence ────────────────────────────────────────────────────
     # wt_raw may differ from wt_raw_base at stop codon positions (forced uppercase)
@@ -627,7 +635,6 @@ def ascii_diagram(guide_row, left_arm, right_arm, left_wt=None, right_wt=None):
             wt_parts.append('<span style="color:#4a90d9">{}</span>'.format(_esc(base)))
         else:
             wt_parts.append(_esc(ch))
-    wt_line = ''.join(wt_parts)
 
     # ── Row 3: repair template ────────────────────────────────────────────────
     # Context bases (outside the arm) shown in dim gray; arm bases shown normally
@@ -647,12 +654,14 @@ def ascii_diagram(guide_row, left_arm, right_arm, left_wt=None, right_wt=None):
         if in_ctx:
             rep_parts.append('<span style="color:#bbb">{}</span>'.format(_esc(arm_ch)))
         elif _in_pam(i) and mutated:
-            rep_parts.append('<span style="color:#c0392b">{}</span>'.format(_esc(arm_ch)))
+            disp = arm_ch.upper() if ssodn_mode else arm_ch
+            rep_parts.append('<span style="color:#c0392b">{}</span>'.format(_esc(disp)))
         elif _in_pam(i):
-            rep_parts.append('<span style="color:#4a90d9">{}</span>'.format(_esc(arm_ch)))
+            disp = arm_ch.lower() if ssodn_mode else arm_ch
+            rep_parts.append('<span style="color:#4a90d9">{}</span>'.format(_esc(disp)))
         else:
-            rep_parts.append(_esc(arm_ch))
-    rep_line = ''.join(rep_parts)
+            disp = arm_ch.lower() if ssodn_mode else arm_ch
+            rep_parts.append(_esc(disp))
 
     # ── Row 4: annotation (^ insert, | cut) ──────────────────────────────────
     # Both markers are shifted left by 0.5ch so they appear between two bases
@@ -669,7 +678,6 @@ def ascii_diagram(guide_row, left_arm, right_arm, left_wt=None, right_wt=None):
             ann_parts.append('<span style="{}">|</span>'.format(_HALF))
         else:
             ann_parts.append(' ')
-    ann_line = ''.join(ann_parts)
 
     # ── Row 5: guide line ─────────────────────────────────────────────────────
     guide_slots = [''] * win_len
@@ -698,6 +706,22 @@ def ascii_diagram(guide_row, left_arm, right_arm, left_wt=None, right_wt=None):
             if 0 <= p < win_len:
                 guide_slots[p] = '<span style="color:#888">&lt;</span>'
 
+    # ── Splice the literal insert into the display, between the two arms ────────
+    # Inserting fresh tokens before index local_ins in every row keeps all five
+    # rows column-aligned: each row gains exactly ins_len display positions.
+    if ins_len:
+        aa_raw = aa_raw[:local_ins] + (' ' * ins_len) + aa_raw[local_ins:]
+        wt_parts[1 + local_ins:1 + local_ins] = [
+            '<span style="color:#bbb">-</span>'
+        ] * ins_len
+        rep_parts[1 + local_ins:1 + local_ins] = [_esc(ch) for ch in insert_seq]
+        ann_parts[1 + local_ins:1 + local_ins] = [' '] * ins_len
+        guide_slots[local_ins:local_ins] = [''] * ins_len
+
+    aa_line   = pfx + _esc(aa_raw)
+    wt_line   = ''.join(wt_parts)
+    rep_line  = ''.join(rep_parts)
+    ann_line  = ''.join(ann_parts)
     guide_line = pfx + ''.join(s if s else ' ' for s in guide_slots)
 
     # ── Footer ────────────────────────────────────────────────────────────────

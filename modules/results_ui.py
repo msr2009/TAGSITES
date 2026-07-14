@@ -59,12 +59,9 @@ def results_ui():
             col_widths=(7, 5),
         ),
 
-        # ── Chosen tag sites: chips | Add highlighted | N-term | C-term | Add suggested | Clear ──
+        # ── Chosen tag sites: chips | N-term | C-term | Add suggested | Clear ──
         ui.div(
             ui.output_ui("chosen_sites_display"),
-            ui.input_action_button("add_highlighted_button",
-                                   "Add highlighted",
-                                   class_="btn btn-success btn-sm ts-sites-btn"),
             ui.input_action_button("add_nterm_button",
                                    "Add N-term",
                                    class_="btn btn-outline-primary btn-sm ts-sites-btn"),

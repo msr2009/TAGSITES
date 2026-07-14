@@ -60,12 +60,12 @@ _STYLE = """
     .card        { margin-bottom: 0.4rem; }
 
     /* setup accordion panels */
-    .accordion-button { background: #f8f9fa !important; color: #212529; }
-    .accordion-button:not(.collapsed) { background: #f8f9fa !important; }
+    .accordion-button { background: #cfe2ff !important; color: #212529; }
+    .accordion-button:not(.collapsed) { background: #9ec5fe !important; }
 
     /* task accordion */
-    .task-accordion .accordion-button { background: #e9ecef !important; color: #212529; }
-    .task-accordion .accordion-button:not(.collapsed) { background: #dee2e6 !important; }
+    .task-accordion .accordion-button { background: #cfe2ff !important; color: #212529; }
+    .task-accordion .accordion-button:not(.collapsed) { background: #9ec5fe !important; }
     .task-type-badge {
         font-size: 0.7rem; font-weight: 400; color: #6c757d;
         background: #e9ecef; border-radius: 3px; padding: 1px 5px;
@@ -293,6 +293,24 @@ def setup_ui():
                 ),
 
                 ui.div(
+                    # auto-fetch genomic sequence from Ensembl
+                    ui.div(
+                        ui.tags.label("Auto-fetch from Ensembl", class_="form-label"),
+                        ui.div(
+                            ui.input_text("genomic_gene_symbol", "",
+                                          placeholder="Gene symbol (e.g. unc-18)"),
+                            ui.input_numeric("genomic_flank_bp", "Flank (bp)",
+                                             value=2000, min=100, max=10000),
+                            ui.input_action_button("fetch_genomic_btn", "Fetch",
+                                                   class_="btn-sm btn-outline-primary"),
+                            style="display:flex; gap:0.4rem; align-items:flex-end;",
+                        ),
+                        ui.output_ui("fetch_genomic_status"),
+                        style="margin-bottom: 0.5rem;",
+                    ),
+
+                    ui.div(ui.span("— or upload/paste —"), class_="or-divider"),
+
                     # genomic file upload
                     compact_file_input("input_genomic",
                         label_with_tip("Genomic region FASTA", _t.get("input_genomic", "")),
@@ -389,7 +407,7 @@ def setup_ui():
         ui.div(
             # left: save + status
             ui.div(
-                ui.input_action_button("save_analysis", "💾 Save Analysis",
+                ui.input_action_button("save_analysis", "5 · 💾 Save Analysis",
                     disabled=True, class_="btn-success btn-sm"),
                 ui.output_text("save_status"),
                 style="display:flex; align-items:center; gap:0.75rem;",

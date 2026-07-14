@@ -20,6 +20,7 @@ DEFAULT_SPECIES = {
     "Danio rerio":              7955,
     "Drosophila melanogaster":  7227,
     "Caenorhabditis elegans":   6239,
+    "Xenopus tropicalis":       8364,
     "Saccharomyces cerevisiae": 559292,
     "Escherichia coli":         562,
     "Other (search...)":        None,

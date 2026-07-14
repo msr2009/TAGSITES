@@ -383,3 +383,31 @@ def test_full_pipeline_all_tasks(DATA, email, tmp_path):
     assert len(reagents_df) > 0, "reagents TSV is empty"
     assert "spacer" in reagents_df.columns
     assert "left_arm" in reagents_df.columns
+
+
+# ── Ensembl genomic sequence auto-fetch ───────────────────────────────────────
+
+@pytest.mark.network
+def test_fetch_genomic_sequence_worm_unc18():
+    """Live-fetch C. elegans unc-18 and confirm expected coordinates + flank length."""
+    from fetch_genomic_sequence import fetch_genomic_sequence
+
+    fasta_text, meta = fetch_genomic_sequence(taxid=6239, gene_symbol="unc-18", flank_bp=500)
+
+    assert meta["species"] == "caenorhabditis_elegans"
+    assert meta["gene_id"] == "WBGene00006757"
+    assert fasta_text.startswith(">")
+    seq = "".join(fasta_text.splitlines()[1:])
+    assert len(seq) > 0
+
+
+@pytest.mark.network
+def test_fetch_genomic_sequence_ecoli_assembly_qualified_slug():
+    """Live-fetch E. coli thrA to confirm the assembly-qualified species slug path works."""
+    from fetch_genomic_sequence import fetch_genomic_sequence
+
+    fasta_text, meta = fetch_genomic_sequence(taxid=562, gene_symbol="thrA", flank_bp=300)
+
+    assert meta["species"] == "escherichia_coli_str_k_12_substr_mg1655_gca_000005845"
+    assert meta["gene_id"] == "b0002"
+    assert fasta_text.startswith(">")

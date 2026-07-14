@@ -4,6 +4,7 @@ Thin reactive layer: reads user inputs, delegates data construction to
 setup_logic.py, writes the run JSON, and publishes its path via shared_json.
 """
 
+import asyncio
 import json
 import os
 import requests
@@ -30,9 +31,11 @@ from modules.setup_logic import (
 )
 from scripts.site_selection_util import get_sequence, save_fasta, extract_bfactors_from_pdb
 
-# ebi_rest lives in scripts/; make it importable regardless of working dir
+# ebi_rest / fetch_genomic_sequence live in scripts/; make them importable
+# regardless of working dir
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 import ebi_rest
+from fetch_genomic_sequence import fetch_genomic_sequence
 
 _ROOT = Path(__file__).parent.parent
 _PARAMS_DIR = _ROOT / "params"
@@ -324,6 +327,66 @@ def setup_server(input, output, session, shared_json):
                 "margin-top:0.4rem; background:#f8f9fa;"
             ),
         )
+
+    # ── genomic sequence auto-fetch (Ensembl) ─────────────────────────────────
+
+    _genomic_fetch_status = reactive.Value("")
+
+    @reactive.effect
+    def _prefill_genomic_gene_symbol():
+        """Prefill the auto-fetch gene-symbol box from the selected UniProt hit's gene name."""
+        hit = _selected_hit()
+        if hit and hit.get("gene"):
+            ui.update_text("genomic_gene_symbol", value=hit["gene"])
+
+    @reactive.effect
+    @reactive.event(input.fetch_genomic_btn)
+    def _fetch_genomic():
+        """Fetch genomic FASTA from Ensembl and populate the paste textarea.
+
+        Never blocks saving on failure — manual upload/paste remain usable.
+        """
+        taxid  = organism_taxid()
+        symbol = input.genomic_gene_symbol().strip()
+        if not taxid:
+            ui.notification_show("Select an organism first.", type="warning", duration=5)
+            return
+        if not symbol:
+            ui.notification_show("Enter a gene symbol first.", type="warning", duration=5)
+            return
+        try:
+            flank_bp = int(input.genomic_flank_bp())
+        except Exception:
+            flank_bp = 2000
+
+        try:
+            fasta_text, meta = fetch_genomic_sequence(taxid, symbol, flank_bp=flank_bp)
+        except Exception as e:
+            _genomic_fetch_status.set("")
+            ui.notification_show(f"Genomic fetch failed: {e}", type="error", duration=8)
+            return
+
+        ui.update_text_area("genomic_seq_paste", value=fasta_text)
+        status = f"Fetched {meta['gene_id']} ({meta['species']}) {meta['region']}"
+        _genomic_fetch_status.set(status)
+        ui.notification_show(status, type="message", duration=6)
+
+        if meta["ambiguous"]:
+            ui.notification_show(
+                f"'{symbol}' matched {len(meta['candidates'])} genes; chose "
+                f"{meta['gene_id']} (longest genomic span, most likely the "
+                f"complete gene model). Verify this is the gene you meant — "
+                f"other matches: {', '.join(meta['candidates'])}.",
+                type="warning", duration=10,
+            )
+
+    @render.ui
+    def fetch_genomic_status():
+        """Show the last successful auto-fetch's summary line."""
+        status = _genomic_fetch_status()
+        if not status:
+            return None
+        return ui.div(status, class_="section-hint")
 
     # ── PDB pLDDT validity check ──────────────────────────────────────────────
 
@@ -1006,7 +1069,7 @@ def setup_server(input, output, session, shared_json):
 
     @reactive.effect
     @reactive.event(input.save_analysis)
-    def _save_analysis():
+    async def _save_analysis():
         """Write the run JSON and publish its path via shared_json.
 
         Protein-source precedence: UniProt hit > uploaded file > pasted sequence.
@@ -1134,3 +1197,7 @@ def setup_server(input, output, session, shared_json):
 
         _skip_next_load[0] = True
         shared_json.set(out_path)
+
+        # give the save a moment to register before jumping to the Progress tab
+        await asyncio.sleep(0.5)
+        ui.update_navs("main_tabs", selected="progress", session=session.root_scope())

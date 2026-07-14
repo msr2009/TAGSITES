@@ -18,8 +18,8 @@ _STYLE = """
     .card             { margin-bottom: 0.4rem; }
 
     /* task accordion */
-    .task-accordion .accordion-button { background: #e9ecef; color: #212529; }
-    .task-accordion .accordion-button:not(.collapsed) { background: #dee2e6; }
+    .task-accordion .accordion-button { background: #cfe2ff; color: #212529; }
+    .task-accordion .accordion-button:not(.collapsed) { background: #9ec5fe; }
 
     /* badge chips in accordion titles */
     .task-type-badge {

@@ -6,15 +6,13 @@
  * zoom, hover tooltips, and a clickable legend.
  *
  * Display hierarchy (sequence strip) by cell width:
- *   ≥ 9px  → bold ClustalX-colored letter (white when pending/committed)
- *   < 9px  → filled ClustalX color box (pending/committed override with amber/green)
+ *   ≥ 9px  → bold ClustalX-colored letter (white when committed)
+ *   < 9px  → filled ClustalX color box (committed override with green)
  *
  * Click/dblclick behavior:
- *   click anywhere in data area  → toggle pending residue  (residue_click)
- *   dblclick in sequence strip   → commit residue          (residue_dblclick)
+ *   click anywhere in data area  → add residue to committed sites (residue_click)
  *   dblclick in plot panels      → reset zoom to full range
- *
- * 3Dmol uses a timer-based single/double-click detector (no native dblclick).
+ *   click on 3D structure        → add residue to committed sites (struct_click)
  */
 
 (function () {
@@ -25,7 +23,6 @@
   var viewer = null;
   var seqArray = [];
   var inputNames = {};
-  var pendingSet = new Set();
   var committedSet = new Set();
   var perResidueColors = [];
   var currentBg = "transparent";
@@ -37,11 +34,6 @@
   var plotTitle     = "";
   var plotYMax      = 1.1;  // fixed y ceiling for the line panel
   var legendHitBoxes = [];  // [{name, x0, y0, x1, y1}] — rebuilt on each render
-
-  // 3D-viewer click timer
-  var structLastPos  = null;
-  var structLastTime = 0;
-  var DBL_CLICK_MS   = 350;
 
   // Zoom/pan state — null means full range
   var currentRange = null;
@@ -529,19 +521,18 @@
       var w    = x1 - x0;
       if (w < 0.5) continue;
 
-      var isPending   = pendingSet.has(pos);
       var isCommitted = committedSet.has(pos);
       var baseColor   = CLUSTALX_COLORS[aa] || "#555555";
 
       if (cellW >= LETTER_THRESHOLD) {
         // letter mode
-        var bgColor = isPending ? "#ffc107" : isCommitted ? "#28a745" : "#ffffff";
+        var bgColor = isCommitted ? "#28a745" : "#ffffff";
         ctx.fillStyle = bgColor;
         ctx.fillRect(x0, top, w, LETTER_H);
         ctx.strokeStyle = "#e0e0e0";
         ctx.lineWidth   = 0.5;
         ctx.strokeRect(x0, top, w, LETTER_H);
-        var letterColor = (isPending || isCommitted) ? "#ffffff" : baseColor;
+        var letterColor = isCommitted ? "#ffffff" : baseColor;
         var fontSize    = Math.min(14, Math.max(8, w * 0.75));
         ctx.fillStyle    = letterColor;
         ctx.font         = "bold " + fontSize + "px 'Courier New', monospace";
@@ -550,7 +541,7 @@
         ctx.fillText(aa, cx, top + LETTER_H / 2);
       } else {
         // box mode
-        var boxColor = isPending ? "#ffc107" : isCommitted ? "#28a745" : baseColor;
+        var boxColor = isCommitted ? "#28a745" : baseColor;
         ctx.fillStyle = boxColor;
         ctx.fillRect(x0, top + 1, Math.max(w - 0.5, 0.5), LETTER_H - 2);
       }
@@ -765,25 +756,19 @@
       shinySetPos(inputNames.residue_click, xToPos(cx, inf));
     });
 
-    // ── Dblclick: seq strip → commit residue, elsewhere → reset zoom ────────────
+    // ── Dblclick: reset zoom to full range (legend dblclick is a no-op) ─────────
 
     canvas.addEventListener("dblclick", function (e) {
       if (wasDrag) { wasDrag = false; return; }
       var rect   = canvas.getBoundingClientRect();
-      var cx     = e.clientX - rect.left;
       var cy     = e.clientY - rect.top;
       var inf    = getCanvasInfo();
       var layout = getPanelLayout(inf ? inf.cssH : 520);
 
-      // legend dblclick → no-op (single click already handles toggle)
       if (cy >= layout.legendTop && cy <= layout.legendTop + LEGEND_H) return;
 
-      if (cy >= layout.seqTop && inf && inDataArea(cx, inf)) {
-        shinySetPos(inputNames.residue_dblclick, xToPos(cx, inf));
-      } else {
-        currentRange = null;
-        render();
-      }
+      currentRange = null;
+      render();
     });
   }
 
@@ -810,19 +795,9 @@
     viewer.addModel(pdbStr, "pdb");
     viewer.setStyle({}, { cartoon: { color: "spectrum" } });
 
-    // single/double-click via timer (3Dmol has no native dblclick)
     viewer.setClickable({}, true, function (atom) {
       if (!atom || atom.resi == null) return;
-      var pos = parseInt(atom.resi);
-      var now = Date.now();
-      if (structLastPos === pos && now - structLastTime < DBL_CLICK_MS) {
-        structLastPos = null;
-        shinySetPos(inputNames.struct_dblclick, pos);
-      } else {
-        structLastPos  = pos;
-        structLastTime = now;
-        shinySetPos(inputNames.struct_click, pos);
-      }
+      shinySetPos(inputNames.struct_click, parseInt(atom.resi));
     });
 
     viewer.setHoverable({}, true,
@@ -876,11 +851,6 @@
       }
     }
 
-    pendingSet.forEach(function (pos) {
-      viewer.setStyle({ resi: pos }, { cartoon: { color: "#ffc107" } });
-      viewer.addStyle({ resi: pos }, { stick: { colorscheme: "amino", radius: 0.2 } });
-      viewer.addStyle({ resi: pos }, { sphere: { colorscheme: "amino", scale: 0.4 } });
-    });
     committedSet.forEach(function (pos) {
       viewer.setStyle({ resi: pos }, { cartoon: { color: "#28a745" } });
       viewer.addStyle({ resi: pos }, { stick: { colorscheme: "amino", radius: 0.2 } });
@@ -973,7 +943,6 @@
     rangeFeatures = msg.rangeFeatures || [];
     seqArray      = (msg.seq || "").split("");
     hiddenTracks  = new Set();
-    pendingSet.clear();
     committedSet.clear();
     perResidueColors = [];
     currentRange     = null;
@@ -1004,7 +973,6 @@
   });
 
   Shiny.addCustomMessageHandler("tagsites_set_states", function (msg) {
-    pendingSet   = new Set(msg.pending);
     committedSet = new Set(msg.committed);
     render();
     applyViewerColors();

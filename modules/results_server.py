@@ -96,9 +96,6 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
     # canonical on-disk path (not the Shiny upload temp path) — used for saves
     json_path = reactive.Value(None)
 
-    # ── Selection state ─────────────────────────────────────────────────────────
-    pending_sites = reactive.Value(set())  # amber — highlighted but not committed
-
     # ── Load results ────────────────────────────────────────────────────────────
 
     async def _do_load(json_content):
@@ -150,7 +147,6 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
 
         # restore previously saved site selection (or start fresh)
         saved = json_content["global"].get("selected_sites", [])
-        pending_sites.set(set())
         shared_sites.set(sorted(int(s) for s in saved))
 
     @reactive.effect
@@ -217,11 +213,9 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
     def _input_names():
         """Build the dict of namespaced Shiny input IDs to send to JS."""
         return {
-            "residue_click":    session.ns("residue_click"),
-            "residue_dblclick": session.ns("residue_dblclick"),
-            "struct_click":     session.ns("struct_click"),
-            "struct_dblclick":  session.ns("struct_dblclick"),
-            "remove_site":      session.ns("remove_site"),
+            "residue_click": session.ns("residue_click"),
+            "struct_click":  session.ns("struct_click"),
+            "remove_site":   session.ns("remove_site"),
         }
 
     async def _send_plot(aa_df, range_df, meta, title):
@@ -259,81 +253,22 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
     @reactive.effect
     @reactive.event(input.residue_click)
     def on_residue_click():
-        """Toggle a residue in/out of the pending set."""
+        """Add a residue to the committed (green) site list."""
         pos = _click_pos(input.residue_click())
         if pos is None:
             return
-        p = set(pending_sites.get())
-        if pos in p:
-            p.discard(pos)
-        else:
-            if pos not in set(shared_sites.get()):
-                p.add(pos)
-        pending_sites.set(p)
-
-    @reactive.effect
-    @reactive.event(input.residue_dblclick)
-    def on_residue_dblclick():
-        """Commit a residue on double-click; remove it if already committed."""
-        pos = _click_pos(input.residue_dblclick())
-        if pos is None:
-            return
-        sites = list(shared_sites.get())
-        if pos in sites:
-            sites.remove(pos)
-            shared_sites.set(sites)
-        else:
-            p = set(pending_sites.get())
-            p.discard(pos)
-            pending_sites.set(p)
-            sites.append(pos)
-            sites.sort()
-            shared_sites.set(sites)
+        sites = sorted(set(shared_sites.get()) | {pos})
+        shared_sites.set(sites)
 
     @reactive.effect
     @reactive.event(input.struct_click)
     def on_struct_click():
-        """Add a residue to the pending set from a 3D structure click.
-
-        Select-only: deselecting a pending (yellow) site is a sequence-strip
-        action that then propagates here via sync_js_states, so structure
-        clicks never remove an already-pending site.
-        """
+        """Add a residue to the committed (green) site list from a 3D structure click."""
         pos = _click_pos(input.struct_click())
         if pos is None:
             return
-        if pos not in set(shared_sites.get()):
-            p = set(pending_sites.get())
-            p.add(pos)
-            pending_sites.set(p)
-
-    @reactive.effect
-    @reactive.event(input.struct_dblclick)
-    def on_struct_dblclick():
-        """Commit a residue from 3D double-click; remove it if already committed."""
-        pos = _click_pos(input.struct_dblclick())
-        if pos is None:
-            return
-        sites = list(shared_sites.get())
-        if pos in sites:
-            sites.remove(pos)
-            shared_sites.set(sites)
-        else:
-            p = set(pending_sites.get())
-            p.discard(pos)
-            pending_sites.set(p)
-            sites.append(pos)
-            sites.sort()
-            shared_sites.set(sites)
-
-    @reactive.effect
-    @reactive.event(input.add_highlighted_button)
-    def on_add_highlighted():
-        """Commit all pending residues at once."""
-        new_sites = set(pending_sites.get())
-        sites = sorted(set(shared_sites.get()) | new_sites)
+        sites = sorted(set(shared_sites.get()) | {pos})
         shared_sites.set(sites)
-        pending_sites.set(set())
 
     @reactive.effect
     @reactive.event(input.add_nterm_button)
@@ -365,9 +300,8 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
     @reactive.effect
     @reactive.event(input.clear_highlights_button)
     def on_clear():
-        """Clear all committed and pending tag sites."""
+        """Clear all committed tag sites."""
         shared_sites.set([])
-        pending_sites.set(set())
 
     @reactive.effect
     @reactive.event(input.remove_site)
@@ -384,9 +318,8 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
 
     @reactive.effect
     async def sync_js_states():
-        """Push pending + committed state to both JS surfaces."""
+        """Push committed state to both JS surfaces."""
         await session.send_custom_message("tagsites_set_states", {
-            "pending":   sorted(pending_sites.get()),
             "committed": sorted(shared_sites.get()),
         })
 
