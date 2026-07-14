@@ -46,7 +46,9 @@ dependencies:
   - packaging=26.2=pyhc364b38_0
   - pandas=3.0.3=py312h8e27051_0
   - pip=26.1.2=pyh8b19718_0
+  - plotly=6.9.0=pyhd8ed1ab_0
   - pluggy=1.6.0=pyhf9edf01_1
+  - primer3-py=2.3.0=py312h390fdb6_1
   - pygments=2.20.0=pyhd8ed1ab_0
   - pysocks=1.7.1=pyha55dd90_7
   - pytest=9.1.1=pyhc364b38_2
