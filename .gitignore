@@ -29,3 +29,6 @@ foo/
 # Saved parameter presets (user-specific, not defaults)
 params/*.json
 !params/worm_default.json
+
+# wormtagdb provenance research cache (large, regenerable downloads)
+data/cache/

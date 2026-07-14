@@ -316,9 +316,14 @@ def plot_results(aa_df, range_df, title="Results Plot"):
         )
     fig.update_yaxes(title_text="Score", row=1, col=1, fixedrange=True)
 
-    # row 2: range/categorical data — filled rectangles per annotation
+    # row 2: range/categorical data — filled rectangles per annotation, one
+    # color per unique (source, description) so e.g. "Signal peptide" and
+    # "Transmembrane" (both Phobius) are visually distinguishable, not just
+    # all-Phobius-is-purple.
     height = 2
     y_positions = {"Phobius": 2, "Pfam": 4, "modification": 6}
+    color_map = _annotation_color_map(range_df)
+    legend_seen = set()
     for _, row in range_df.iterrows():
         source = row["source"]
         if source not in y_positions:
@@ -326,15 +331,19 @@ def plot_results(aa_df, range_df, title="Results Plot"):
         start, stop, desc = row["start"], row["stop"], row["description"]
         y0 = y_positions[source] - height * 0.3
         y1 = y_positions[source] + height * 0.3
-        color = DOMAIN_SOURCE_COLORS.get(source, "#888888")
+        key = (str(source), str(desc))
+        color = color_map.get(key, DOMAIN_SOURCE_COLORS.get(source, "#888888"))
+        first_of_label = key not in legend_seen
+        legend_seen.add(key)
         fig.add_trace(
             go.Scatter(
                 x=[start, stop, stop, start, start],
                 y=[y0, y0, y1, y1, y0],
                 mode="lines", fill="toself",
                 fillcolor=color, line=dict(color=color),
-                name=f"{desc}: {start}-{stop}",
-                showlegend=False,
+                name=f"{desc} ({source})",
+                legendgroup=f"{source}|{desc}",
+                showlegend=first_of_label,
                 hovertemplate=f"{source}: {desc} ({start}-{stop})<extra></extra>",
             ),
             row=2, col=1

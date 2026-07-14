@@ -20,3 +20,4 @@ dependencies:
   - pytest
   - pip:
     - ridgeplot
+    - kaleido==0.2.1

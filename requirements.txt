@@ -12,3 +12,4 @@ xmltramp2
 ridgeplot
 reportlab
 primer3-py
+kaleido==0.2.1

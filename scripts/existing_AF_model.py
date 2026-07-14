@@ -115,8 +115,8 @@ def search_AFDB(fasta_in, email, workingdir, name, taxid, evalue, percentid,
                 "sequence":   seq,
                 "database":   "uniprotkb",
                 "outformat":  "tsv",
-                "alignments": 1,
-                "scores":     1,
+                "alignments": 5,
+                "scores":     5,
                 "exp":        "1e-5",
             }
             if str(taxid) not in ("", "1", "1.0"):
@@ -195,5 +195,9 @@ if __name__ == "__main__":
 
     args, unknowns = parser.parse_known_args()
 
-    search_AFDB(args.FASTA_IN, args.EMAIL, args.WORKINGDIR, args.NAME,
-                args.TAXID, args.EVALUE, args.PERCENTID, args.CLIENTS_FOLDER)
+    result = search_AFDB(args.FASTA_IN, args.EMAIL, args.WORKINGDIR, args.NAME,
+                          args.TAXID, args.EVALUE, args.PERCENTID, args.CLIENTS_FOLDER)
+    # search_AFDB returns 1 (not 0/None) when no AFDB model was found; propagate
+    # that as the process exit code so callers (run_tag_sites_from_json.py) can
+    # tell "no match" apart from "successfully found and downloaded a model".
+    sys.exit(1 if result == 1 else 0)
