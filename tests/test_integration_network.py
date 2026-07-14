@@ -411,3 +411,56 @@ def test_fetch_genomic_sequence_ecoli_assembly_qualified_slug():
     assert meta["species"] == "escherichia_coli_str_k_12_substr_mg1655_gca_000005845"
     assert meta["gene_id"] == "b0002"
     assert fasta_text.startswith(">")
+
+
+@pytest.mark.network
+def test_fetch_genomic_sequence_brca1_full_genewise_coverage(email, tmp_path):
+    """
+    End-to-end validation of the Ensembl auto-fetch pipeline: fetch BRCA1's
+    genomic sequence (a case where xref_symbol returns both the real ENSG id
+    and a duplicate LRG_ id), fetch the canonical UniProt protein, and confirm
+    Genewise aligns the two with ~100% CDS coverage — i.e. the fetched genomic
+    region contains the complete gene body, not a truncated/wrong locus.
+    """
+    if not email:
+        pytest.skip("No EBI e-mail provided (set TAGSITES_EMAIL or --email).")
+
+    import requests
+    from fetch_genomic_sequence import fetch_genomic_sequence
+
+    fasta_text, meta = fetch_genomic_sequence(taxid=9606, gene_symbol="BRCA1", flank_bp=2000)
+    assert meta["gene_id"] == "ENSG00000012048", "should resolve to the real gene, not LRG_292"
+    assert meta["ambiguous"] is False, "LRG_ duplicate should already be filtered out"
+
+    genomic_fa = tmp_path / "brca1_genomic.fa"
+    genomic_fa.write_text(fasta_text)
+
+    resp = requests.get("https://rest.uniprot.org/uniprotkb/P38398.fasta", timeout=30)
+    resp.raise_for_status()
+    protein_fa = tmp_path / "brca1_protein.fa"
+    protein_fa.write_text(resp.text)
+    protein_len = len("".join(resp.text.splitlines()[1:]))
+
+    outprefix = tmp_path / "brca1_gw"
+    ret = subprocess.call(
+        [
+            sys.executable,
+            str(REPO_ROOT / "scripts" / "run_genewise.py"),
+            "--protein_fasta", str(protein_fa),
+            "--genomic_fasta", str(genomic_fa),
+            "--email", email,
+            "--outprefix", str(outprefix),
+        ]
+    )
+    assert ret == 0, "run_genewise.py exited with non-zero status"
+
+    winner = Path(str(outprefix) + ".genewise.out.txt")
+    assert winner.exists(), "winner .genewise.out.txt not written"
+
+    from parse_genewise import parse_genewise, parse_genewise_gff_score, cds_coverage
+    score = parse_genewise_gff_score(winner)
+    assert score > 1000, f"winner score unexpectedly low: {score}"
+
+    cds_df = parse_genewise(str(winner))
+    coverage = cds_coverage(cds_df, protein_len)
+    assert coverage > 0.99, f"expected ~100% CDS coverage, got {coverage:.2%}"
