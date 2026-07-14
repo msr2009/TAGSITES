@@ -187,6 +187,7 @@ def setup_server(input, output, session, shared_json):
         taxid = DEFAULT_SPECIES[name]
         if taxid is None:   # "Other (search...)" sentinel — wait for search result
             _search_hits.set([])
+            organism_taxid.set("")   # clear stale taxid from a previously selected preset
             return
         organism_taxid.set(str(taxid))
 
@@ -540,7 +541,8 @@ def setup_server(input, output, session, shared_json):
             _uniprot_hits.set([])
             _selected_hit.set(None)
             _selected_pdb.set("")
-            ui.notification_show("No UniProt hits found.", type="warning", duration=4)
+            scope_msg = f" (scoped to taxonomy_id {tid})" if tid else ""
+            ui.notification_show(f"No UniProt hits found{scope_msg}.", type="warning", duration=4)
             return
 
         # prefer reviewed (SwissProt) entries when available — they have curated isoform
