@@ -9,6 +9,17 @@
   color: #666;
 }
 
+.ts-genomic-spinner,
+.ts-uniprot-spinner {
+  display: none;
+  align-items: center;
+}
+
+.ts-genomic-fetch-btn:disabled,
+.ts-uniprot-search-btn:disabled {
+  cursor: wait;
+}
+
 /* ── Native canvas plot (line tracks + features + sequence strip) ────────────── */
 
 

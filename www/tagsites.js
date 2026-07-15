@@ -1056,6 +1056,34 @@
     });
   });
 
+  // Disable a "Fetch"/"Search" button and show its spinner while the (blocking,
+  // synchronous) server-side call is in flight, so repeat clicks can't queue up.
+  // doneMessage is sent by the server once the call finishes (success or failure).
+  function wireBlockingButton(btnClass, wrapClass, spinnerClass, doneMessage) {
+    document.addEventListener("click", function (e) {
+      var btn = e.target.closest(btnClass);
+      if (!btn) return;
+      var container = btn.closest(wrapClass);
+      btn.disabled = true;
+      var spinner = container && container.querySelector(spinnerClass);
+      if (spinner) spinner.style.display = "flex";
+    });
+
+    Shiny.addCustomMessageHandler(doneMessage, function (msg) {
+      document.querySelectorAll(btnClass).forEach(function (btn) {
+        btn.disabled = false;
+      });
+      document.querySelectorAll(spinnerClass).forEach(function (el) {
+        el.style.display = "none";
+      });
+    });
+  }
+
+  wireBlockingButton(".ts-genomic-fetch-btn", ".ts-genomic-fetch-wrap",
+                      ".ts-genomic-spinner", "tagsites_genomic_fetch_done");
+  wireBlockingButton(".ts-uniprot-search-btn", ".ts-uniprot-search-wrap",
+                      ".ts-uniprot-spinner", "tagsites_uniprot_search_done");
+
   Shiny.addCustomMessageHandler("tagsites_trigger_download", function (msg) {
     var link = document.getElementById("progress-download_results");
     if (link) link.click();

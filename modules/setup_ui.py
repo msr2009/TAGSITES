@@ -246,8 +246,16 @@ def setup_ui():
                             placeholder="e.g.  TP53  or  P04637",
                             width="100%"),
                         ui.input_action_button("uniprot_search_btn", "Search",
-                            class_="btn-sm btn-outline-secondary"),
-                        class_="uniprot-search-row",
+                            class_="btn-sm btn-outline-secondary ts-uniprot-search-btn"),
+                        ui.div(
+                            ui.tags.span(
+                                class_="spinner-border spinner-border-sm text-secondary",
+                                role="status",
+                                **{"aria-hidden": "true"},
+                            ),
+                            class_="ts-uniprot-spinner",
+                        ),
+                        class_="uniprot-search-row ts-uniprot-search-wrap",
                     ),
                     # result filters — applied at display time
                     ui.div(
@@ -302,10 +310,19 @@ def setup_ui():
                             ui.input_numeric("genomic_flank_bp", "Flank (bp)",
                                              value=2000, min=100, max=10000),
                             ui.input_action_button("fetch_genomic_btn", "Fetch",
-                                                   class_="btn-sm btn-outline-primary"),
+                                                   class_="btn-sm btn-outline-primary ts-genomic-fetch-btn"),
+                            ui.div(
+                                ui.tags.span(
+                                    class_="spinner-border spinner-border-sm text-secondary",
+                                    role="status",
+                                    **{"aria-hidden": "true"},
+                                ),
+                                class_="ts-genomic-spinner",
+                            ),
                             style="display:flex; gap:0.4rem; align-items:flex-end;",
                         ),
                         ui.output_ui("fetch_genomic_status"),
+                        class_="ts-genomic-fetch-wrap",
                         style="margin-bottom: 0.5rem;",
                     ),
 

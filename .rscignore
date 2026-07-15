@@ -4,6 +4,7 @@ tests/
 # Dev / docs
 CLAUDE.md
 environment.yml
+.claude/
 
 # User data output directories
 data/

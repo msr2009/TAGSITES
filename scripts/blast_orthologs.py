@@ -9,7 +9,7 @@ import os
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from site_selection_util import read_fasta
+from site_selection_util import read_fasta, resolve_taxids
 
 # ensure scripts/ is importable when called from the app
 sys.path.insert(0, str(Path(__file__).parent))
@@ -89,6 +89,7 @@ def ensure_query_in_alignment_set(fasta_str_list, input_match, seq_name, seq):
 def main(fasta_in, email, workingdir, name, output,
          n, evalue, db, length_percent,
          align_full_seqs, taxid, clients_folder, exclude_paralogs,
+         taxid_file=None,
          report=None, job_id_cb=None, resume_job_ids=None):
     """Run BLAST → filter hits → fetch full seqs → clustalo → JSD scoring.
 
@@ -98,7 +99,10 @@ def main(fasta_in, email, workingdir, name, output,
     attempt; if index 0 holds an ID, reattach to it via ebi_rest.resume_job()
     instead of resubmitting. Returns {"ebi_status": "pending"|"expired", ...}
     if the resumed job hasn't finished, instead of raising.
+    taxid_file, when given, supplies additional taxids (one per line) merged
+    with the manually-entered taxid string.
     """
+    taxid = resolve_taxids(taxid, taxid_file)
     reporter = resolve_reporter(report)
 
     seq_name, seq = read_fasta(fasta_in)
@@ -131,8 +135,8 @@ def main(fasta_in, email, workingdir, name, output,
             "scores":     n,
             "exp":        ebi_rest.fmt_exp(evalue),
         }
-        if str(taxid) not in ("", "1", "1.0"):
-            blast_params["taxids"] = str(taxid)
+        if taxid:
+            blast_params["taxids"] = taxid
 
         _report(reporter, "Submitting NCBI BLAST job…", stage="blast_submit")
         poll_cb = ebi_rest.combined_poll_cb(
@@ -372,4 +376,5 @@ if __name__ == "__main__":
 
     main(args.FASTA_IN, args.EMAIL, args.WORKINGDIR, args.NAME, args.OUTPUT,
          args.MAX_HITS, args.EVALUE, args.DB, args.LENGTH, args.FULLSEQS,
-         args.TAXID, args.CLIENTS_FOLDER, args.EXCLUDE_PARALOGS)
+         args.TAXID, args.CLIENTS_FOLDER, args.EXCLUDE_PARALOGS,
+         taxid_file=args.TAX_FILE)

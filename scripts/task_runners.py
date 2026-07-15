@@ -131,6 +131,7 @@ def run_blast(args, report=None, job_id_cb=None, resume_job_ids=None):
         length_percent = _float(args.get("length"), 0),
         align_full_seqs= _bool(args.get("align_full_seqs"), True),
         taxid          = _str(args.get("taxid"), "1"),
+        taxid_file     = _str(args.get("taxid_file")) or None,
         clients_folder = str(_SCRIPTS) + "/",
         exclude_paralogs = _bool(args.get("exclude_paralogs"), False),
         report         = report,

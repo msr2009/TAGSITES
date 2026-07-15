@@ -40,11 +40,19 @@ from fetch_genomic_sequence import fetch_genomic_sequence
 _ROOT = Path(__file__).parent.parent
 _PARAMS_DIR = _ROOT / "params"
 _TABLES_DIR = _ROOT / "tables"
+_TAXID_LISTS_DIR = _ROOT / "taxid_lists"
 
 
 def _table_choices(ext="*.tsv"):
     """Return {absolute_path_str: display_name} for files in tables/ matching ext."""
     return {str(f): f.stem for f in sorted(_TABLES_DIR.glob(ext))}
+
+
+def _taxid_file_choices():
+    """Return {absolute_path_str: display_name} for taxid list files in taxid_lists/."""
+    choices = {"": "(none)"}
+    choices.update({str(f): f.stem for f in sorted(_TAXID_LISTS_DIR.glob("*.txt"))})
+    return choices
 
 
 # ── widget builders ───────────────────────────────────────────────────────────
@@ -55,6 +63,10 @@ def _make_param_widget(widget_id, param, value, tip, choices=None):
     if param == "scores_file":
         file_choices = _table_choices("*.tsv")
         selected = value if value in file_choices else next(iter(file_choices), "")
+        return ui.input_select(widget_id, label=lbl, choices=file_choices, selected=selected)
+    if param == "taxid_file":
+        file_choices = _taxid_file_choices()
+        selected = value if value in file_choices else ""
         return ui.input_select(widget_id, label=lbl, choices=file_choices, selected=selected)
     if choices:
         selected = value if value in choices else choices[0]
@@ -342,7 +354,7 @@ def setup_server(input, output, session, shared_json):
 
     @reactive.effect
     @reactive.event(input.fetch_genomic_btn)
-    def _fetch_genomic():
+    async def _fetch_genomic():
         """Fetch genomic FASTA from Ensembl and populate the paste textarea.
 
         Never blocks saving on failure — manual upload/paste remain usable.
@@ -366,6 +378,8 @@ def setup_server(input, output, session, shared_json):
             _genomic_fetch_status.set("")
             ui.notification_show(f"Genomic fetch failed: {e}", type="error", duration=8)
             return
+        finally:
+            await session.send_custom_message("tagsites_genomic_fetch_done", {})
 
         ui.update_text_area("genomic_seq_paste", value=fasta_text)
         status = f"Fetched {meta['gene_id']} ({meta['species']}) {meta['region']}"
@@ -461,7 +475,7 @@ def setup_server(input, output, session, shared_json):
 
     @reactive.effect
     @reactive.event(input.uniprot_search_btn)
-    def _uniprot_search():
+    async def _uniprot_search():
         """Search UniProt for proteins by gene name or accession, scoped by organism if set.
 
         Strategy:
@@ -473,6 +487,12 @@ def setup_server(input, output, session, shared_json):
         3. For each hit, also expand curated isoforms via ALTERNATIVE PRODUCTS comment
            (e.g. TP53's 9 manually curated isoforms all live inside P04637).
         """
+        try:
+            await _uniprot_search_impl()
+        finally:
+            await session.send_custom_message("tagsites_uniprot_search_done", {})
+
+    async def _uniprot_search_impl():
         q = input.uniprot_query().strip() if "uniprot_query" in input else ""
         if not q:
             return

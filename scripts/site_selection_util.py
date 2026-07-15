@@ -225,6 +225,35 @@ def read_fasta(fasta_in):
 	for record in SeqIO.parse(fasta_in, "fasta"):
 		return [record.id.strip(","), record.seq.strip("*")]
 
+def resolve_taxids(taxid, taxid_file):
+	"""
+	Merge a manually-entered taxid (comma-separated) with taxids loaded from
+	taxid_file (one per line, '#' comments allowed). Dedupes, preserves order,
+	drops the "any species" sentinel ("", "1", "1.0").
+
+	Parameters:
+	- taxid (str): manually-entered taxid or comma-separated list
+	- taxid_file (str): path to a file of taxids, or None/"" if unused
+
+	Returns:
+	- str: comma-joined taxid list, or "" if none given
+	"""
+
+	parts = [p.strip() for p in str(taxid).split(",") if p.strip() not in ("", "1", "1.0")]
+
+	if taxid_file:
+		with open(taxid_file) as f:
+			parts += [ln.split("#")[0].strip() for ln in f if ln.split("#")[0].strip()]
+
+	seen = set()
+	deduped = []
+	for p in parts:
+		if p not in seen:
+			seen.add(p)
+			deduped.append(p)
+
+	return ",".join(deduped)
+
 def check_input_type(inputfile):
 	"""
 	determines whether input is PDB or FASTA.

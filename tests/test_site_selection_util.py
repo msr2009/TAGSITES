@@ -3,7 +3,8 @@ test_site_selection_util.py — offline unit tests for scripts/site_selection_ut
 
 Tests cover the pure/deterministic functions only (no network, no external binaries):
   sequence_type, translate_seq, three_to_one, remove_lowercase,
-  check_input_type, uniprot_accession_regex, ncbiblast_call, read_fasta.
+  check_input_type, uniprot_accession_regex, ncbiblast_call, read_fasta,
+  resolve_taxids.
 """
 
 import pytest
@@ -18,6 +19,7 @@ from site_selection_util import (
     uniprot_accession_regex,
     ncbiblast_call,
     read_fasta,
+    resolve_taxids,
 )
 
 
@@ -227,3 +229,56 @@ class TestReadFasta:
         # snb-1.fa does not have a trailing '*', but if it did it should be stripped
         name, seq = read_fasta(DATA / "snb-1.fa")
         assert not str(seq).endswith("*")
+
+
+# ── resolve_taxids ────────────────────────────────────────────────────────────
+
+class TestResolveTaxids:
+
+    def test_manual_taxid_only(self):
+        assert resolve_taxids("9606", None) == "9606"
+
+    def test_manual_taxid_list(self):
+        assert resolve_taxids("9606,10090", None) == "9606,10090"
+
+    def test_sentinel_any_species_dropped(self):
+        assert resolve_taxids("1", None) == ""
+        assert resolve_taxids("1.0", None) == ""
+        assert resolve_taxids("", None) == ""
+
+    def test_no_taxid_no_file_returns_empty(self):
+        assert resolve_taxids("", None) == ""
+
+    def test_file_only(self, tmp_path):
+        f = tmp_path / "taxids.txt"
+        f.write_text("9606\n10090\n7955\n")
+        assert resolve_taxids("", str(f)) == "9606,10090,7955"
+
+    def test_file_ignores_blank_lines(self, tmp_path):
+        f = tmp_path / "taxids.txt"
+        f.write_text("9606\n\n10090\n\n")
+        assert resolve_taxids("", str(f)) == "9606,10090"
+
+    def test_file_strips_comments(self, tmp_path):
+        f = tmp_path / "taxids.txt"
+        f.write_text("9606\t# Homo sapiens\n10090  # Mus musculus\n# full-line comment\n")
+        assert resolve_taxids("", str(f)) == "9606,10090"
+
+    def test_manual_and_file_merged(self, tmp_path):
+        f = tmp_path / "taxids.txt"
+        f.write_text("10090\n7955\n")
+        assert resolve_taxids("9606", str(f)) == "9606,10090,7955"
+
+    def test_duplicates_deduped_preserving_first_occurrence(self, tmp_path):
+        f = tmp_path / "taxids.txt"
+        f.write_text("9606\n10090\n")
+        assert resolve_taxids("10090,9606", str(f)) == "10090,9606"
+
+    def test_manual_sentinel_dropped_but_file_kept(self, tmp_path):
+        f = tmp_path / "taxids.txt"
+        f.write_text("9606\n")
+        assert resolve_taxids("1", str(f)) == "9606"
+
+    def test_no_taxid_file_arg(self):
+        # taxid_file="" (falsy) behaves like None -- no file read attempted
+        assert resolve_taxids("9606", "") == "9606"
