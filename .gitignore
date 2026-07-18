@@ -30,5 +30,27 @@ foo/
 params/*.json
 !params/worm_default.json
 
-# wormtagdb provenance research cache (large, regenerable downloads)
-data/cache/
+# Run output directory — contents are regenerable pipeline outputs;
+# keep the directory itself tracked (empty) so it exists after a fresh clone.
+data/*
+!data/.gitkeep
+
+# External tool clone with its own git repo — not tracked here
+webservice-clients/
+
+# Orphaned downloaded reference file, unused by app code
+mmcif_pdbx_v50.dic
+
+# Scratch/temp files
+tmp.*
+tmp_*
+
+# Local shinyapps.io deployment tool state
+rsconnect-python/
+
+# Scratch test fixtures (explicitly named to be removed)
+FORTESTING_DELETEWHENREADY/
+
+# Research/scratch notebooks
+notebooks/
+scripts/uniprot_species/speclist_testing.ipynb
