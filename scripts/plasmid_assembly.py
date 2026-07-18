@@ -747,18 +747,24 @@ if __name__ == "__main__":
     from reagent_sequences import truncate_arms, truncate_arms_with_tolerance
 
     df = pd.read_csv(args.reagents_tsv, sep="\t")
+    has_wt = "left_arm_wt" in df.columns and "right_arm_wt" in df.columns
 
     all_rows = []
     for _, row in df.iterrows():
+        wt_kwargs = dict(
+            left_arm_wt=row["left_arm_wt"] if has_wt else None,
+            right_arm_wt=row["right_arm_wt"] if has_wt else None,
+        )
         try:
             if args.arm_length > OLIGO_MAX:
                 left, right = truncate_arms_with_tolerance(
                     str(row["left_arm"]), str(row["right_arm"]),
-                    args.arm_length, args.tolerance,
+                    args.arm_length, args.tolerance, **wt_kwargs,
                 )
             else:
                 left, right = truncate_arms(
-                    str(row["left_arm"]), str(row["right_arm"]), args.arm_length
+                    str(row["left_arm"]), str(row["right_arm"]), args.arm_length,
+                    **wt_kwargs,
                 )
         except ValueError as e:
             print("WARNING: {} — skipping row".format(e), file=sys.stderr)

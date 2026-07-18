@@ -25,6 +25,7 @@ from reagent_sequences import (
     design_genotyping_primers,
     design_pcr_primers,
     load_tags,
+    reconstruct_wt_arms,
     truncate_arms,
     truncate_arms_with_tolerance,
 )
@@ -248,6 +249,28 @@ def reagents_server(input, output, session, shared_json, shared_sites):
         except Exception:
             return False
 
+    def _wt_arms_for_row(row):
+        """Return (wt_left, wt_right, wt_is_true) for a reagents row.
+
+        Prefers the genuine left_arm_wt/right_arm_wt TSV columns; falls back to
+        reconstructing WT arms from the recorded mutation for older TSVs. These
+        feed truncate_arms/truncate_arms_with_tolerance so a recut-blocking
+        mutation farther than arm_length from the junction still gets included
+        rather than truncated away. wt_is_true is False when reconstruction
+        failed and only the mutated arms are available.
+        """
+        if "left_arm_wt" in row and "right_arm_wt" in row:
+            return str(row["left_arm_wt"]), str(row["right_arm_wt"]), True
+        recon = reconstruct_wt_arms(
+            str(row["left_arm"]), str(row["right_arm"]),
+            int(row["insert_pos"]),
+            str(row.get("recut_block_method", "") or ""),
+            str(row.get("mutation_desc", "") or ""),
+        )
+        if recon is not None:
+            return recon[0], recon[1], True
+        return str(row["left_arm"]), str(row["right_arm"]), False
+
     # ── pre-compute guide content (diagrams + truncated arms) ─────────────────
 
     @reactive.calc
@@ -291,14 +314,25 @@ def reagents_server(input, output, session, shared_json, shared_sites):
             gid = str(row["guide_id"])
             used_fallback = False
             try:
+                wt_left_src, wt_right_src, wt_is_true = _wt_arms_for_row(row)
+
+                # wt arms let truncate_arms extend an arm past arm_len when a
+                # recut-blocking mutation sits farther out than the requested
+                # length — otherwise it would get silently truncated away.
                 left, right = truncate_arms(
-                    str(row["left_arm"]), str(row["right_arm"]), arm_len
+                    str(row["left_arm"]), str(row["right_arm"]), arm_len,
+                    left_arm_wt=wt_left_src if wt_is_true else None,
+                    right_arm_wt=wt_right_src if wt_is_true else None,
                 )
-                left_wt  = str(row["left_arm"])[-(arm_len + wt_extra):]
-                right_wt = str(row["right_arm"])[:(arm_len + wt_extra)]
+                # the WT display window must be at least as wide as the (possibly
+                # mutation-extended) repair arm it's shown alongside, or the
+                # diagram's column alignment breaks.
+                left_wt  = wt_left_src[-max(arm_len + wt_extra, len(left)):]
+                right_wt = wt_right_src[:max(arm_len + wt_extra, len(right))]
                 diag = ascii_diagram(row, left, right,
                                      left_wt=left_wt, right_wt=right_wt,
-                                     insert_seq=insert if repair == "ssodn" else None)
+                                     insert_seq=insert if repair == "ssodn" else None,
+                                     wt_is_true=wt_is_true)
 
                 if repair == "amplicon" and insert:
                     tm = 60.0
@@ -318,7 +352,9 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                     used_fallback = pcr_meta["used_fallback"]
                 elif saptrap_long_arm:
                     wleft, wright = truncate_arms_with_tolerance(
-                        str(row["left_arm"]), str(row["right_arm"]), arm_len, tolerance
+                        str(row["left_arm"]), str(row["right_arm"]), arm_len, tolerance,
+                        left_arm_wt=wt_left_src if wt_is_true else None,
+                        right_arm_wt=wt_right_src if wt_is_true else None,
                     )
                     left_oh5, right_oh5 = SAPTRAP_OVERHANGS["ha5"]
                     left_oh3, right_oh3 = SAPTRAP_OVERHANGS["ha3"]
@@ -960,14 +996,21 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                 if matches.empty:
                     continue
                 row = matches.iloc[0]
+                wt_left_src, wt_right_src, wt_is_true = _wt_arms_for_row(row)
+                wt_kwargs = dict(
+                    left_arm_wt=wt_left_src if wt_is_true else None,
+                    right_arm_wt=wt_right_src if wt_is_true else None,
+                )
                 try:
                     if use_widened:
                         left, right = truncate_arms_with_tolerance(
-                            str(row["left_arm"]), str(row["right_arm"]), arm_len, tolerance
+                            str(row["left_arm"]), str(row["right_arm"]), arm_len, tolerance,
+                            **wt_kwargs,
                         )
                     else:
                         left, right = truncate_arms(
-                            str(row["left_arm"]), str(row["right_arm"]), arm_len
+                            str(row["left_arm"]), str(row["right_arm"]), arm_len,
+                            **wt_kwargs,
                         )
                 except ValueError:
                     continue

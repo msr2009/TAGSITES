@@ -215,16 +215,25 @@ def build_frame_lookup(cds_df, dna):
 
 # ── PAM disruption ────────────────────────────────────────────────────────────
 
-def disrupt_pam(seq, pam, pam_fwd_start, strand, frame_lookup):
+def disrupt_pam(seq, pam, pam_fwd_start, strand, frame_lookup,
+                seed_len=15, min_seed_mm=2):
     """
-    Return a minimally mutated copy of *seq* in which the guide PAM is
-    disrupted (Cas9 can no longer re-cut after HDR), along with a description
-    of the change and the method used.
+    Return a mutated copy of *seq* in which the guide can no longer be re-cut
+    after HDR, along with a description and the method used.  Every mutation is
+    protein-preserving (synonymous or intronic); if re-cutting cannot be blocked
+    without changing the protein the guide is rejected (returns None) so the
+    caller can discard it.
 
     Ladder (applied in order, returns on first success):
-      1. One synonymous codon change that disrupts the PAM (coding only).
-      2. Any single base change within the PAM: intronic positions preferred
-         (no amino acid change), then coding positions (non-synonymous).
+      1. 'syn_1'    — one synonymous codon change that disrupts the PAM.
+      2. 'mut_1'    — one silent (intronic) single-base change within the PAM.
+      3. 'syn_seed' — synonymous codon change(s) placing >= min_seed_mm mismatches
+                      within the seed_len nt of the protospacer proximal to the PAM
+                      (blocks Cas9 re-binding without touching the PAM).
+
+    Non-synonymous PAM changes are never made: if none of the above succeed
+    (only possible when the seed has too little synonymous freedom, e.g. a run of
+    Trp/Met codons), the function returns None and the guide should be discarded.
 
     Parameters
     ----------
@@ -233,15 +242,16 @@ def disrupt_pam(seq, pam, pam_fwd_start, strand, frame_lookup):
     pam_fwd_start : int  0-based start of the PAM in fwd seq coords
     strand        : str  '+' or '-' (guide strand)
     frame_lookup  : dict output of build_frame_lookup()
+    seed_len      : int  protospacer seed length (bp proximal to PAM)
+    min_seed_mm   : int  synonymous mismatches required in the seed for 'syn_seed'
 
     Returns
     -------
     (mutated_seq, description, method) on success, or None if impossible.
-    method is one of 'syn_1', 'mut_1', or None.
+    method is one of 'syn_1', 'mut_1', 'syn_seed'.
     """
     pam_len = len(pam)
     pam_positions = list(range(pam_fwd_start, pam_fwd_start + pam_len))
-    BASES = 'ACGT'
 
     # Helper: apply a set of base substitutions {pos: new_base} to seq
     def _apply(changes):
@@ -259,7 +269,7 @@ def disrupt_pam(seq, pam, pam_fwd_start, strand, frame_lookup):
             if cs not in codons_in_pam:
                 codons_in_pam[cs] = info
 
-    # ── Step 1: single synonymous codon change ────────────────────────────────
+    # ── Step 1: single synonymous codon change disrupting the PAM ─────────────
     for cs, info in codons_in_pam.items():
         orig_codon = info['codon']
         aa = info['aa']
@@ -276,24 +286,85 @@ def disrupt_pam(seq, pam, pam_fwd_start, strand, frame_lookup):
                 desc = '{}>{} at genomic pos {}'.format(orig_codon, alt, cs)
                 return (new_seq, desc, 'syn_1')
 
-    # ── Step 2: any single base change within the PAM ────────────────────────
-    # Prefer intronic positions (no coding consequence) over coding positions.
-    ordered = sorted(pam_positions, key=lambda p: 0 if p not in frame_lookup else 1)
-    for pos in ordered:
+    # ── Step 2: single silent (intronic) base change within the PAM ───────────
+    # Coding PAM positions are skipped here — any coding PAM base change would be
+    # non-synonymous; those are handled protein-preservingly via the seed instead.
+    for pos in pam_positions:
+        if pos in frame_lookup:
+            continue   # coding → skip (non-synonymous)
         orig = seq[pos].upper()
-        for base in BASES:
+        for base in 'ACGT':
             if base == orig:
                 continue
             new_seq = _apply({pos: base})
             if _pam_disrupted(new_seq, pam, pam_fwd_start, pam_len, strand):
-                info = frame_lookup.get(pos)
-                if info and not info['split']:
-                    alt_codon = list(info['codon'])
-                    alt_codon[info['pos_in_codon']] = base
-                    desc = 'pos {} {}>{} (non-synonymous: {}>{})'.format(
-                        pos, orig, base, info['codon'], ''.join(alt_codon))
-                else:
-                    desc = 'pos {} {}>{}'.format(pos, orig, base)
+                desc = 'pos {} {}>{} (intronic)'.format(pos, orig, base)
                 return (new_seq, desc, 'mut_1')
 
-    return None  # no solution found
+    # ── Step 3: synonymous mismatches in the protospacer seed ─────────────────
+    return _disrupt_seed(seq, pam_fwd_start, pam_len, strand,
+                         frame_lookup, seed_len, min_seed_mm)
+
+
+def _disrupt_seed(seq, pam_fwd_start, pam_len, strand, frame_lookup,
+                  seed_len, min_mm):
+    """Introduce >= min_mm synonymous mismatches within the seed_len bp of the
+    protospacer proximal to the PAM.  Returns (mutated_seq, desc, 'syn_seed') or
+    None if that many synonymous mismatches can't be placed (e.g. Trp/Met run).
+
+    Seed positions are enumerated nearest-to-PAM first so mismatches are placed
+    as close to the PAM as possible (most disruptive to Cas9 re-binding).
+    """
+    pam_end = pam_fwd_start + pam_len
+    # protospacer seed positions (fwd coords), nearest the PAM first
+    if strand == '+':
+        seed_positions = list(range(pam_fwd_start - 1, pam_fwd_start - 1 - seed_len, -1))
+    else:
+        seed_positions = list(range(pam_end, pam_end + seed_len))
+    seed_positions = [p for p in seed_positions if 0 <= p < len(seq)]
+    seed_set = set(seed_positions)
+
+    # coding, non-split codons overlapping the seed, ordered by proximity to PAM
+    codons = []
+    seen = set()
+    for p in seed_positions:
+        info = frame_lookup.get(p)
+        if info and not info['split'] and info['codon_start'] not in seen:
+            seen.add(info['codon_start'])
+            codons.append(info)
+
+    changes = {}          # pos → new base
+    mm_positions = set()   # seed positions actually changed
+    descs = []
+    for info in codons:
+        if len(mm_positions) >= min_mm:
+            break
+        cs = info['codon_start']
+        orig_codon, aa = info['codon'], info['aa']
+        # pick the synonymous alt adding the most NEW seed mismatches (fewest total edits on ties)
+        best = None   # (n_new_seed_mm, -n_total_changes, alt, codon_changes)
+        for alt in SYN_CODONS.get(aa, []):
+            if alt == orig_codon:
+                continue
+            cchanges = {cs + k: alt[k] for k in range(3) if orig_codon[k] != alt[k]}
+            new_mm = [p for p in cchanges if p in seed_set and p not in mm_positions]
+            if not new_mm:
+                continue
+            cand = (len(new_mm), -len(cchanges), alt, cchanges)
+            if best is None or cand[:2] > best[:2]:
+                best = cand
+        if best is None:
+            continue
+        _, _, alt, cchanges = best
+        changes.update(cchanges)
+        mm_positions.update(p for p in cchanges if p in seed_set)
+        descs.append('{}>{} at genomic pos {}'.format(orig_codon, alt, cs))
+
+    if len(mm_positions) < min_mm:
+        return None
+    new_seq = list(seq)
+    for pos, base in changes.items():
+        new_seq[pos] = base
+    desc = 'seed syn ({} mismatches in {} nt proximal to PAM): {}'.format(
+        len(mm_positions), seed_len, '; '.join(descs))
+    return (''.join(new_seq), desc, 'syn_seed')

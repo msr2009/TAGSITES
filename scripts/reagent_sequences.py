@@ -52,24 +52,56 @@ def load_tags(tags_path):
 
 # ── Arm handling ──────────────────────────────────────────────────────────────
 
-def truncate_arms(left_arm, right_arm, arm_length):
+def _farthest_mutation_reach(arm, arm_wt, side):
+    """bp from the junction-adjacent boundary to the farthest-out base that
+    differs between arm and arm_wt (case-insensitive — case encodes exon/intron,
+    not edits). Returns 0 if arm_wt is not given, or the two are identical.
+
+    side='left': junction is at the arm's end, so reach = distance from the
+    leftmost (farthest) mismatch to the end.
+    side='right': junction is at the arm's start, so reach = distance from the
+    start to the rightmost (farthest) mismatch.
+    """
+    if not arm_wt or len(arm_wt) != len(arm):
+        return 0
+    diffs = [i for i in range(len(arm)) if arm[i].upper() != arm_wt[i].upper()]
+    if not diffs:
+        return 0
+    return (len(arm) - min(diffs)) if side == 'left' else (max(diffs) + 1)
+
+
+def truncate_arms(left_arm, right_arm, arm_length, left_arm_wt=None, right_arm_wt=None):
     """Truncate precomputed arms to arm_length bp from the insertion junction.
 
     Takes from the 3' end of left_arm and 5' end of right_arm so that the bases
     closest to the insertion site (including PAM-disrupting mutations) are retained.
-    Raises ValueError when arm_length exceeds the stored arm length.
+
+    A recut-blocking mutation is not always within arm_length of the junction
+    (e.g. the tag insert sits right at the cut site while the PAM it needs to
+    disrupt lies farther out). When left_arm_wt/right_arm_wt are supplied, the
+    arm on that side is extended out to the mutation instead of truncating it
+    away — the homology arm then starts at the mutation, not at arm_length, so
+    the returned arm (and the resulting repair template / primer) can be
+    longer than arm_length on that side. Without wt arms, this floor can't be
+    computed and truncation is exact, as before.
+
+    Raises ValueError when the required length (arm_length, or farther if a
+    mutation demands it) exceeds the stored arm length.
     """
-    max_len = min(len(left_arm), len(right_arm))
-    if arm_length > len(left_arm) or arm_length > len(right_arm):
+    left_needed  = max(arm_length, _farthest_mutation_reach(left_arm, left_arm_wt, 'left'))
+    right_needed = max(arm_length, _farthest_mutation_reach(right_arm, right_arm_wt, 'right'))
+    if left_needed > len(left_arm) or right_needed > len(right_arm):
         raise ValueError(
-            'Requested arm_length {} exceeds stored arm length {} / {} — '
-            'rerun the reagents pipeline with a larger arm_length.'.format(
-                arm_length, len(left_arm), len(right_arm))
+            'Requested arm_length {} (extended to {}/{} to reach a recut-blocking '
+            'mutation) exceeds stored arm length {} / {} — rerun the reagents '
+            'pipeline with a larger arm_length.'.format(
+                arm_length, left_needed, right_needed, len(left_arm), len(right_arm))
         )
-    return left_arm[-arm_length:], right_arm[:arm_length]
+    return left_arm[-left_needed:], right_arm[:right_needed]
 
 
-def truncate_arms_with_tolerance(left_arm, right_arm, arm_length, tolerance=0.2):
+def truncate_arms_with_tolerance(left_arm, right_arm, arm_length, tolerance=0.2,
+                                 left_arm_wt=None, right_arm_wt=None):
     """Like truncate_arms, but each arm keeps extra headroom on its far/outer
     side (up to tolerance * arm_length, bounded by the stored arm length).
 
@@ -78,16 +110,24 @@ def truncate_arms_with_tolerance(left_arm, right_arm, arm_length, tolerance=0.2)
     far end gets extra bases so a primer3 search (see
     plasmid_assembly.sapi_amplification_primers) has room to pick a
     better-quality primer without ever touching the near/junction end.
+
+    As in truncate_arms, a recut-blocking mutation farther than arm_length from
+    the junction (detected via left_arm_wt/right_arm_wt) pushes that side's
+    length out to the mutation, independent of the tolerance headroom.
     """
-    widened_len = min(int(arm_length * (1 + tolerance)),
-                      len(left_arm), len(right_arm))
-    if arm_length > widened_len:
+    left_needed  = max(arm_length, _farthest_mutation_reach(left_arm, left_arm_wt, 'left'))
+    right_needed = max(arm_length, _farthest_mutation_reach(right_arm, right_arm_wt, 'right'))
+    if left_needed > len(left_arm) or right_needed > len(right_arm):
         raise ValueError(
-            'Requested arm_length {} exceeds stored arm length {} / {} — '
-            'rerun the reagents pipeline with a larger arm_length.'.format(
-                arm_length, len(left_arm), len(right_arm))
+            'Requested arm_length {} (extended to {}/{} to reach a recut-blocking '
+            'mutation) exceeds stored arm length {} / {} — rerun the reagents '
+            'pipeline with a larger arm_length.'.format(
+                arm_length, left_needed, right_needed, len(left_arm), len(right_arm))
         )
-    return left_arm[-widened_len:], right_arm[:widened_len]
+    base_widened = int(arm_length * (1 + tolerance))
+    widened_left  = min(max(base_widened, left_needed), len(left_arm))
+    widened_right = min(max(base_widened, right_needed), len(right_arm))
+    return left_arm[-widened_left:], right_arm[:widened_right]
 
 
 # ── Tm calculation ────────────────────────────────────────────────────────────
@@ -101,6 +141,56 @@ def calc_tm(seq):
         return float(_mt.Tm_NN(seq))
     except Exception:
         return 0.0
+
+
+# ── WT arm reconstruction (legacy-TSV fallback) ──────────────────────────────
+
+_SYN_DESC_RE = re.compile(r'^([ACGTacgt]{3})>[ACGTacgt]{3} at genomic pos (\d+)$')
+_MUT_DESC_RE = re.compile(r'^pos (\d+) ([ACGTacgt])>[ACGTacgt]')
+
+
+def reconstruct_wt_arms(left_arm, right_arm, insert_pos, method, mutation_desc):
+    """Rebuild the pre-mutation (WT) arms by reverting the recorded PAM edit.
+
+    Fallback for reagent TSVs written before the left_arm_wt/right_arm_wt columns
+    existed. The mutated arms plus the mutation_desc string fully determine the WT
+    bases: syn_1 records the original codon and its genomic position; mut_1 records
+    a single genomic position and original base. Genomic→arm mapping uses insert_pos
+    (right_arm starts at insert_pos; left_arm ends there).
+
+    Returns (left_wt, right_wt). When there is no mutation to revert the arms are
+    already WT and returned unchanged; returns None only if the description can't
+    be parsed (caller then keeps legacy PAM-only behaviour).
+    """
+    if method in ('none', 'insertion', ''):
+        return left_arm, right_arm   # no PAM edit → arms are already WT
+    if method not in ('syn_1', 'mut_1'):
+        # multi-change methods (e.g. syn_seed) aren't reconstructable from the
+        # description here — but they only appear in newer TSVs that carry the
+        # left_arm_wt/right_arm_wt columns, so this path isn't reached for them.
+        return None
+
+    reverts = []   # (genomic_pos, original_base)
+    m = _SYN_DESC_RE.match(mutation_desc or '')
+    if m:
+        orig_codon, cs = m.group(1).upper(), int(m.group(2))
+        reverts = [(cs + k, orig_codon[k]) for k in range(3)]
+    else:
+        m = _MUT_DESC_RE.match(mutation_desc or '')
+        if not m:
+            return None
+        reverts = [(int(m.group(1)), m.group(2).upper())]
+
+    left_gstart = insert_pos - len(left_arm)   # genomic coord of left_arm[0]
+    lchars, rchars = list(left_arm), list(right_arm)
+    for gpos, orig in reverts:
+        li = gpos - left_gstart
+        if 0 <= li < len(lchars):
+            lchars[li] = orig.lower() if lchars[li].islower() else orig.upper()
+        ri = gpos - insert_pos
+        if 0 <= ri < len(rchars):
+            rchars[ri] = orig.lower() if rchars[ri].islower() else orig.upper()
+    return ''.join(lchars), ''.join(rchars)
 
 
 # ── Recut risk check ─────────────────────────────────────────────────────────
@@ -557,23 +647,31 @@ def _build_aa_line(seq_raw, local_ins):
 
 # ── ASCII diagram ─────────────────────────────────────────────────────────────
 
-def ascii_diagram(guide_row, left_arm, right_arm, left_wt=None, right_wt=None, insert_seq=None):
+def ascii_diagram(guide_row, left_arm, right_arm, left_wt=None, right_wt=None,
+                  insert_seq=None, wt_is_true=False):
     """Return an HTML string for embedding in a <pre> block.
 
     Rows (top to bottom):
       1. WT genomic sequence (PAM restored, blue; extends into wt context)
       2. Translation (single-letter AA centered in each coding triplet)
-      3. Repair template (arm with PAM mutations; mutated PAM red, context dimmed)
+      3. Repair template (arm with mutations red; unmutated PAM blue; context dimmed)
       4. Annotation (^ insert site green+bold, | cut site)
       5. Guide (>>>> PAM for + strand; PAM <<<< for - strand)
 
-    left_wt / right_wt: stored arms trimmed to arm_length+10 for WT display context.
-    If omitted, same as left_arm / right_arm (no extra context shown).
+    left_wt / right_wt: WT (pre-mutation) arms trimmed to arm_length+10 for the WT
+    display row and context.  If omitted, same as left_arm / right_arm.
+
+    wt_is_true: True when left_wt/right_wt are the genuine unmutated arms (the
+    left_arm_wt/right_arm_wt TSV columns).  In that case the repair row highlights
+    every base that differs from WT — catching synonymous PAM-disrupting codon
+    changes that alter a base outside the 3 bp PAM.  When False (older TSVs with no
+    WT columns), it falls back to reddening the PAM positions when a mutation was
+    recorded, and the WT row is only accurate at the PAM (legacy behaviour).
 
     insert_seq: ssODN tag/insert sequence. When given, the literal insert is
     spliced into the repair-template row (uppercase) between the two arms,
     and the arm bases in that row are shown lowercase — except any
-    PAM-disruption mutation within the arm, which stays uppercase and red.
+    mutation within the arm, which stays uppercase and red.
     """
     insert_pos    = int(guide_row['insert_pos'])
     cut_pos       = int(guide_row['cut_pos'])
@@ -651,9 +749,16 @@ def ascii_diagram(guide_row, left_arm, right_arm, left_wt=None, right_wt=None, i
     for i, ch in enumerate(wt_raw):
         in_ctx = i < left_ctx or i >= local_ins + len(right_arm)
         arm_ch = _arm_ch(i)
+        # a base is "mutated" if it differs from WT (case-insensitive: case encodes
+        # exon/intron, not edits).  With genuine WT arms this catches synonymous
+        # changes outside the PAM; otherwise fall back to the recorded PAM mutation.
+        if wt_is_true:
+            is_mut = (not in_ctx) and arm_ch.upper() != wt_raw[i].upper()
+        else:
+            is_mut = (not in_ctx) and _in_pam(i) and mutated
         if in_ctx:
             rep_parts.append('<span style="color:#bbb">{}</span>'.format(_esc(arm_ch)))
-        elif _in_pam(i) and mutated:
+        elif is_mut:
             disp = arm_ch.upper() if ssodn_mode else arm_ch
             rep_parts.append('<span style="color:#c0392b">{}</span>'.format(_esc(disp)))
         elif _in_pam(i):
@@ -767,9 +872,14 @@ if __name__ == '__main__':
 
     df   = pd.read_csv(args.reagents_tsv, sep='\t')
     rows = []
+    has_wt = 'left_arm_wt' in df.columns and 'right_arm_wt' in df.columns
     for _, row in df.iterrows():
         try:
-            left, right = truncate_arms(row['left_arm'], row['right_arm'], args.arm_length)
+            left, right = truncate_arms(
+                row['left_arm'], row['right_arm'], args.arm_length,
+                left_arm_wt=row['left_arm_wt'] if has_wt else None,
+                right_arm_wt=row['right_arm_wt'] if has_wt else None,
+            )
         except ValueError as e:
             print('WARNING: {}'.format(e), file=sys.stderr)
             continue

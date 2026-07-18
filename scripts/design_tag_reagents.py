@@ -10,9 +10,15 @@ Pipeline:
   3. Find all guide cut sites in the genomic sequence (both strands)
   4. For each (residue × guide) pair within arm_length of the cut:
        - Build left and right homology arms centered on the insertion site
-       - Mutate the arm containing the PAM to abrogate re-cutting
-       - Mutation ladder: (a) 1 synonymous codon change, (b) 1 minimal base
-         change within the PAM (intronic preferred, then non-synonymous)
+       - Block re-cutting with protein-preserving edits only. Ladder:
+         (a) insertion within the PAM seed already blocks re-cutting;
+         (b) 1 synonymous codon change disrupting the PAM;
+         (c) 1 silent intronic base change within the PAM;
+         (d) synonymous codon change(s) placing >=2 mismatches in the 15 nt
+             protospacer seed proximal to the PAM.
+         Guides that can't be blocked without a non-synonymous change (or whose
+         PAM lies outside both arms) are discarded, and the next-closest guide
+         is tried in their place.
 
 Output TSV (one row per residue × guide):
   residue_index     1-based protein residue number
@@ -29,10 +35,12 @@ Output TSV (one row per residue × guide):
   cut_pos           0-based DSB position in fwd coords
   distance          |cut_pos - insert_pos| (bp)
   pam_in_arm        'left' / 'right' / 'both' / 'none'
-  recut_block_method  'syn_1' / 'mut_1' / 'insertion' / 'none'
+  recut_block_method  'insertion' / 'syn_1' / 'mut_1' / 'syn_seed'
   mutation_desc     human-readable description of the PAM mutation
   left_arm          left homology arm: exonic bases uppercase, intronic lowercase
   right_arm         right homology arm: exonic bases uppercase, intronic lowercase
+  left_arm_wt       left arm before PAM disruption (WT); same case encoding
+  right_arm_wt      right arm before PAM disruption (WT); same case encoding
 
 A companion <output>.genotyping.tsv is always written (genomic sequence is
 always available): one row per residue x amplicon_type. 'external' alone
@@ -217,16 +225,18 @@ def design_reagents(
         # Sort guides by distance of their cut to the insertion site
         scored = sorted(guides, key=lambda g: abs(g['cut_pos'] - insert_pos))
 
-        # Keep up to n_guides that are within arm_length of the insertion
-        selected = []
+        # Keep up to n_guides guides (nearest first) whose re-cutting can be
+        # blocked without changing the protein.  Guides that can't be blocked
+        # protein-preservingly are discarded, so we keep scanning past them
+        # until n_guides survive (or we run out of guides within arm_length).
+        _SEED = 15
+        n_kept = 0
         for g in scored:
             if abs(g['cut_pos'] - insert_pos) > arm_length:
-                continue
-            selected.append(g)
-            if len(selected) >= n_guides:
+                break   # sorted ascending → no closer guides remain
+            if n_kept >= n_guides:
                 break
 
-        for g in selected:
             cut_pos       = g['cut_pos']
             pam_fwd_start = g['pam_fwd_start']
             distance      = abs(cut_pos - insert_pos)
@@ -255,7 +265,6 @@ def design_reagents(
             # Any insertion within the 15 bp protospacer seed region immediately
             # 5' of the PAM (on the guide strand) prevents Cas9 from re-binding.
             # PAM mutations are only needed when the insert falls outside this window.
-            _SEED = 15
             if g['strand'] == '+':
                 # seed region = 15 bp 5' of PAM + PAM itself (fwd coords)
                 insertion_blocks = (pam_fwd_start - _SEED <= insert_pos < pam_end)
@@ -263,7 +272,6 @@ def design_reagents(
                 # seed region = PAM + 15 bp 3' of PAM (= 15 bp 5' on − strand)
                 insertion_blocks = (pam_fwd_start <= insert_pos < pam_end + _SEED)
 
-            # Attempt PAM disruption
             recut_method  = 'none'
             mutation_desc = ''
             left_arm  = left_arm_raw
@@ -273,23 +281,36 @@ def design_reagents(
                 recut_method  = 'insertion'
                 mutation_desc = 'insert within {} bp seed region of PAM; re-cutting impossible'.format(_SEED)
 
-            elif pam_arm in ('left', 'right', 'both') and pam_arm != 'none':
+            elif pam_arm == 'none':
+                # PAM lies outside both homology arms → no protein-preserving edit
+                # can protect this allele from re-cutting.  Discard the guide.
+                continue
+
+            else:
                 # disrupt_pam works on the full genomic sequence and returns a
-                # modified copy; we then re-extract the arms from it.
+                # modified copy; we then re-extract the arms from it.  A None
+                # result means re-cutting can't be blocked without a
+                # non-synonymous change → discard the guide.
                 result = disrupt_pam(dna, pam, pam_fwd_start,
-                                     g['strand'], frame_lookup)
-                if result is not None:
-                    mutated_seq, desc, method = result
-                    left_arm  = mutated_seq[left_start:insert_pos]
-                    right_arm = mutated_seq[insert_pos:right_end]
-                    recut_method  = method
-                    mutation_desc = desc
-                else:
-                    mutation_desc = 'PAM disruption not possible with available synonymous changes'
+                                     g['strand'], frame_lookup, seed_len=_SEED)
+                if result is None:
+                    continue
+                mutated_seq, desc, method = result
+                left_arm  = mutated_seq[left_start:insert_pos]
+                right_arm = mutated_seq[insert_pos:right_end]
+                recut_method  = method
+                mutation_desc = desc
 
             # encode exonic vs intronic in arm case (uppercase = coding, lowercase = intronic)
             left_arm  = _case_arm(left_arm, left_start, frame_lookup)
             right_arm = _case_arm(right_arm, insert_pos, frame_lookup)
+
+            # also emit the unmutated (WT) arms so the reagents display can show a
+            # true wild-type row and highlight every mutated base by diffing — not
+            # just the PAM positions (a synonymous PAM-disrupting codon change often
+            # alters a base outside the 3 bp PAM).
+            left_arm_wt  = _case_arm(left_arm_raw, left_start, frame_lookup)
+            right_arm_wt = _case_arm(right_arm_raw, insert_pos, frame_lookup)
 
             rows.append({
                 'residue_index':       int(site['residue_index']),
@@ -310,7 +331,10 @@ def design_reagents(
                 'mutation_desc':       mutation_desc,
                 'left_arm':            left_arm,
                 'right_arm':           right_arm,
+                'left_arm_wt':         left_arm_wt,
+                'right_arm_wt':        right_arm_wt,
             })
+            n_kept += 1
 
     df = pd.DataFrame(rows)
 
