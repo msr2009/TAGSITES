@@ -125,7 +125,7 @@ def main(infile, email, workingdir, name, inputtype, clients_folder,
 
 
 	#protein properties calls
-	hydro_call = "python calculate_protein_scores.py -f {}/{}.fa -s kyle-doolittle.tsv -o {}/{}.hydrophob.tsv".format(workingdir, name, workingdir, name)
+	hydro_call = "python calculate_protein_scores.py -f {}/{}.fa -s kyte-doolittle.tsv -o {}/{}.hydrophob.tsv".format(workingdir, name, workingdir, name)
 	commands.append(hydro_call)
 
 	print("#################\nRUNNING ANALYSES\n#################")

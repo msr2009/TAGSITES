@@ -344,31 +344,219 @@ def extract_bfactors_from_pdb(pdb_file):
 	return bf
 
 
-def calc_sasa_shrakerupley(pdb_file, max_sasa_dict=None):
+def _compute_rsasa(struct, max_sasa_dict=None):
+	"""
+	shared helper: compute relative SASA (0-1) per residue using Shrake-Rupley.
+	returns list of [resnum (int), rsasa (float), res_name (str)], in chain/residue order.
+	"""
 
 	#these are from Tien 2013
 	if not max_sasa_dict:
-		max_sasa = {
+		max_sasa_dict = {
 			'ALA': 121.0, 'ARG': 265.0, 'ASN': 187.0, 'ASP': 187.0, 'CYS': 148.0,
 			'GLN': 214.0, 'GLU': 214.0, 'GLY': 97.0, 'HIS': 216.0, 'ILE': 195.0,
 			'LEU': 191.0, 'LYS': 230.0, 'MET': 203.0, 'PHE': 228.0, 'PRO': 154.0,
 			'SER': 143.0, 'THR': 163.0, 'TRP': 264.0, 'TYR': 255.0, 'VAL': 165.0
 		}
 
-	parser = PDBParser()
-	struct = parser.get_structure("foo", pdb_file)
 	sr = ShrakeRupley()
 	sr.compute(struct, level="R")
 
-	sasa_list = []
-
+	rsasa_list = []
 	for chain in struct.get_chains():
 		for residue in chain:
 			res_id = residue.get_id()
 			res_name = residue.get_resname()
-			chain_id = chain.get_id()
+			rsasa_list.append([res_id[1], residue.sasa/max_sasa_dict[res_name], res_name])
 
-			# Get SASA for the residue
-			sasa_list.append([str(res_id[1]), str(residue.sasa/max_sasa[res_name]), res_name])
+	return rsasa_list
 
-	return sasa_list
+
+def calc_sasa_shrakerupley(pdb_file, max_sasa_dict=None):
+
+	parser = PDBParser()
+	struct = parser.get_structure("foo", pdb_file)
+	rsasa = _compute_rsasa(struct, max_sasa_dict)
+
+	# preserve original string-typed return signature
+	return [[str(resnum), str(val), res_name] for resnum, val, res_name in rsasa]
+
+
+def _dilate_and_merge_patches(seed_patches, rep_atoms, atom_to_idx, ns, dilation_radius):
+	"""
+	grow each seed-based patch to include any spatially nearby residue (no exposure
+	or hydrophobicity filter — the peptide backbone is part of the interface even
+	when a sidechain points inward), then merge patches whose footprints now overlap.
+
+	Parameters:
+	- seed_patches (list): [{"seed_members": [idx, ...]}, ...] (residue indices)
+	- rep_atoms (list): representative atom per residue index, or None
+	- atom_to_idx (dict): Bio.PDB Atom -> residue index
+	- ns (Bio.PDB.NeighborSearch): search built over atom_to_idx's atoms
+	- dilation_radius (float): distance (Angstroms) to grow the footprint by; 0 = no dilation
+
+	Returns:
+	- list: [{"seed_members": set(idx), "members": set(idx)}, ...], overlapping patches merged
+	"""
+	dilated = []
+	for p in seed_patches:
+		seed_members = set(p["seed_members"])
+		members = set(seed_members)
+		if dilation_radius > 0:
+			for i in seed_members:
+				atom = rep_atoms[i]
+				if atom is None:
+					continue
+				neighbors = ns.search(atom.coord, dilation_radius, level="A")
+				members.update(atom_to_idx[a] for a in neighbors)
+		dilated.append({"seed_members": seed_members, "members": members})
+
+	# merge any patches whose dilated footprints now overlap
+	merged_again = True
+	while merged_again:
+		merged_again = False
+		for a in range(len(dilated)):
+			for b in range(a + 1, len(dilated)):
+				if dilated[a]["members"] & dilated[b]["members"]:
+					dilated[a]["members"]      |= dilated[b]["members"]
+					dilated[a]["seed_members"] |= dilated[b]["seed_members"]
+					del dilated[b]
+					merged_again = True
+					break
+			if merged_again:
+				break
+
+	return dilated
+
+
+def calc_hydrophobic_patches(pdb_file, hydro_scores, rsasa_cutoff=0.20, dist_cutoff=8.0,
+							  dilation_radius=8.0, min_seed_size=3, max_sasa_dict=None):
+	"""
+	identify hydrophobic patches on the solvent-exposed surface of a structure.
+
+	method: Lijnzaad, Berendsen & Argos (1996), "A method for detecting hydrophobic
+	patches on protein surfaces", Proteins 26:192-203. Surface-exposed hydrophobic
+	residues ("seeds") are treated as nodes in a spatial graph (edges = CB-CB, or CA
+	for Gly, within dist_cutoff); connected components of that graph are patch cores.
+	Cores with fewer than min_seed_size seed residues are dropped as noise. Surviving
+	cores are then dilated: any residue within dilation_radius of a seed member joins
+	the patch's reported footprint regardless of its own exposure/hydrophobicity, since
+	a residue with an interior-pointing sidechain can still have its backbone at the
+	interface. Patches whose dilated footprints overlap are merged.
+
+	Parameters:
+	- pdb_file (str): PDB file (e.g. AlphaFold model)
+	- hydro_scores (dict): per-amino-acid hydrophobicity scores, one-letter keys
+		(e.g. loaded from tables/hydrophobicity_kyte-doolittle.tsv via
+		calculate_protein_scores.load_scores)
+	- rsasa_cutoff (float): minimum relative SASA to call a residue "surface" (default 0.20)
+	- dist_cutoff (float): distance (Angstroms) for seed-to-seed core edges (default 8.0)
+	- dilation_radius (float): distance (Angstroms) to grow each core's footprint by;
+		0 = no dilation, i.e. patch == core (default 8.0)
+	- min_seed_size (int): minimum seed-residue count for a core to be reported (default 3)
+	- max_sasa_dict (dict): optional override for per-residue-type max SASA (Tien 2013 default)
+
+	Returns:
+	- list: per-residue continuous "surface hydrophobic exposure" score, min-max normalized
+		to [0, 1], aligned to residue order
+	- list: patches, each a dict {"members": [resnum, ...] (dilated footprint),
+		"seed_members": [resnum, ...] (core only), "total_hydro": float,
+		"total_area_A2": float (absolute exposed area of seed members)}
+	"""
+
+	parser = PDBParser()
+	struct = parser.get_structure("foo", pdb_file)
+	rsasa_list = _compute_rsasa(struct, max_sasa_dict)
+
+	residues = PDB.Selection.unfold_entities(struct, "R")
+	resnums   = [r[0] for r in rsasa_list]
+	res_names = [r[2] for r in rsasa_list]
+	rsasa = np.array([r[1] for r in rsasa_list])
+	hydro = np.array([hydro_scores.get(three_to_one(name), 0.0) for name in res_names])
+
+	if not max_sasa_dict:
+		max_sasa_dict = {
+			'ALA': 121.0, 'ARG': 265.0, 'ASN': 187.0, 'ASP': 187.0, 'CYS': 148.0,
+			'GLN': 214.0, 'GLU': 214.0, 'GLY': 97.0, 'HIS': 216.0, 'ILE': 195.0,
+			'LEU': 191.0, 'LYS': 230.0, 'MET': 203.0, 'PHE': 228.0, 'PRO': 154.0,
+			'SER': 143.0, 'THR': 163.0, 'TRP': 264.0, 'TYR': 255.0, 'VAL': 165.0
+		}
+	abs_area = np.array([rsasa[i] * max_sasa_dict[res_names[i]] for i in range(len(residues))])
+
+	# representative atom per residue for distance calcs: CB, else CA (e.g. Gly)
+	rep_atoms = []
+	for residue in residues:
+		if "CB" in residue:
+			rep_atoms.append(residue["CB"])
+		elif "CA" in residue:
+			rep_atoms.append(residue["CA"])
+		else:
+			rep_atoms.append(None)
+
+	atom_to_idx = {atom: i for i, atom in enumerate(rep_atoms) if atom is not None}
+	ns = PDB.NeighborSearch(list(atom_to_idx.keys()))
+
+	# continuous score: sum of hydro*rsasa over neighbors within dist_cutoff, per residue
+	raw_scores = np.zeros(len(residues))
+	for i, atom in enumerate(rep_atoms):
+		if atom is None:
+			continue
+		neighbors = ns.search(atom.coord, dist_cutoff, level="A")
+		neighbor_idx = [atom_to_idx[a] for a in neighbors]
+		raw_scores[i] = sum(hydro[j] * rsasa[j] for j in neighbor_idx)
+
+	# min-max normalize to [0, 1]
+	score_range = raw_scores.max() - raw_scores.min()
+	if score_range > 0:
+		norm_scores = (raw_scores - raw_scores.min()) / score_range
+	else:
+		norm_scores = np.zeros(len(raw_scores))
+
+	# patch cores: connected components among surface hydrophobic ("seed") residues
+	surface_hydrophobic = [i for i in range(len(residues))
+							if rsasa[i] >= rsasa_cutoff and hydro[i] > 0]
+
+	adjacency = {i: [] for i in surface_hydrophobic}
+	surface_set = set(surface_hydrophobic)
+	for i in surface_hydrophobic:
+		atom = rep_atoms[i]
+		if atom is None:
+			continue
+		neighbors = ns.search(atom.coord, dist_cutoff, level="A")
+		for a in neighbors:
+			j = atom_to_idx.get(a)
+			if j is not None and j != i and j in surface_set:
+				adjacency[i].append(j)
+
+	# BFS connected components
+	visited = set()
+	seed_patches = []
+	for start in surface_hydrophobic:
+		if start in visited:
+			continue
+		component = []
+		queue = [start]
+		visited.add(start)
+		while queue:
+			node = queue.pop()
+			component.append(node)
+			for neighbor in adjacency[node]:
+				if neighbor not in visited:
+					visited.add(neighbor)
+					queue.append(neighbor)
+		if len(component) >= min_seed_size:
+			seed_patches.append({"seed_members": component})
+
+	dilated_patches = _dilate_and_merge_patches(seed_patches, rep_atoms, atom_to_idx, ns, dilation_radius)
+
+	patches = []
+	for p in dilated_patches:
+		seed_idx = sorted(p["seed_members"])
+		patches.append({
+			"members":      [resnums[i] for i in sorted(p["members"])],
+			"seed_members": [resnums[i] for i in seed_idx],
+			"total_hydro":  sum(hydro[i] * rsasa[i] for i in seed_idx),
+			"total_area_A2": sum(abs_area[i] for i in seed_idx),
+		})
+
+	return list(norm_scores), patches

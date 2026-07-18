@@ -35,6 +35,10 @@ RESULTS_TYPE_DICT = {
 # derive per-analysis color palettes from the registry
 ANALYSIS_COLORS = {t: d["colors"] for t, d in TASK_DEFS.items() if "colors" in d}
 
+# hydrophobic-patch score is a companion of plddt, not its own task, so it has
+# no entry in TASK_DEFS; give it a palette here so it doesn't fall back to gray
+ANALYSIS_COLORS["hydrophobic"] = ["#b2182b", "#2166ac", "#762a83"]
+
 # stable colors for domain/annotation sources (not task-type-keyed, stays in config)
 DOMAIN_SOURCE_COLORS = {
     "Phobius":      "#9467bd",   # purple

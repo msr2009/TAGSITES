@@ -96,7 +96,7 @@
 			},
 			"tooltips": {
 				"fasta": "Path to the protein FASTA (auto-filled from the sequence input above)",
-				"scores_file": "TSV file of per-amino-acid property scores (e.g., hydrophobicity) — defaults to the bundled Kyle-Doolittle table",
+				"scores_file": "TSV file of per-amino-acid property scores (e.g., hydrophobicity) — defaults to the bundled Kyte-Doolittle table",
 				"window": "Sliding window size in residues for averaging the property score (1 = no smoothing)"
 			}
 		},

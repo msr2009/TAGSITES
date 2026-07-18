@@ -39,7 +39,9 @@
 			"colors":        ["#1565c0", "#6a1b9a", "#ad1457"],
 			"selectable":    true,
 			"companions": {
-				"sasa": ".sasa.txt"
+				"sasa": ".sasa.txt",
+				"hydrophobic": ".hydro.txt",
+				"patches": ".patches.txt"
 			},
 			"params": {
 				"pdb":         { "default": "",     "hidden": true, "tooltip": "Path to a local AlphaFold PDB file. Leave blank to search the AlphaFold Database automatically." },
@@ -74,7 +76,7 @@
 			"colors":        ["#e65100", "#b71c1c", "#795548"],
 			"selectable":    true,
 			"params": {
-				"scores_file": { "default": "", "tooltip": "TSV file of per-amino-acid property scores (e.g., hydrophobicity) — defaults to the bundled Kyle-Doolittle table" },
+				"scores_file": { "default": "", "tooltip": "TSV file of per-amino-acid property scores (e.g., hydrophobicity) — defaults to the bundled Kyte-Doolittle table" },
 				"window":      { "default": 1,  "tooltip": "Sliding window size in residues for averaging the property score (1 = no smoothing)" }
 			}
 		},

@@ -164,6 +164,28 @@ def load_data_from_json(json_in, type_dict):
                             print(f"Error loading SASA for task '{task}': {e}")
                     else:
                         print(f"SASA file not found for task '{task}': {sasa_path}")
+                    # pLDDT tasks also produce companion hydrophobic-patch files
+                    hydro_path = companion_path(output_path, "plddt", "hydrophobic")
+                    if os.path.exists(hydro_path):
+                        try:
+                            hydro_df = pd.read_csv(hydro_path, sep="\t", header=None,
+                                                   comment="#", na_values=[-1000])
+                            htmp = pd.DataFrame()
+                            htmp["pos"] = hydro_df.iloc[:, 0].astype(int)
+                            hydro_vals = hydro_df.iloc[:, 1].rolling(window=3, center=True, min_periods=1).mean()
+                            htmp[task + "_hydro"] = hydro_vals
+                            df = pd.merge(df, htmp, how="outer", on="pos")
+                        except Exception as e:
+                            print(f"Error loading hydrophobic patch score for task '{task}': {e}")
+                    else:
+                        print(f"Hydrophobic patch file not found for task '{task}': {hydro_path}")
+                    patches_path = companion_path(output_path, "plddt", "patches")
+                    if os.path.exists(patches_path) and os.path.getsize(patches_path) > 0:
+                        try:
+                            patches_df = pd.read_csv(patches_path, sep="\t", names=range_cols)
+                            dat = pd.concat([dat, patches_df], ignore_index=True)
+                        except Exception as e:
+                            print(f"Error loading hydrophobic patches for task '{task}': {e}")
                 # blast tasks also produce companion files
                 if analysis == "blast":
                     aln_path = companion_path(output_path, "blast", "alignment")
@@ -282,6 +304,8 @@ def _guess_analysis_type(task_name):
     # sasa is co-produced by the pLDDT task; group it there for color palette purposes
     if t.endswith("_sasa"):
         return "plddt"
+    if t.endswith("_hydro"):
+        return "hydrophobic"
     for analysis in ANALYSIS_COLORS:
         if analysis in t:
             return analysis
@@ -321,8 +345,21 @@ def plot_results(aa_df, range_df, title="Results Plot"):
     # "Transmembrane" (both Phobius) are visually distinguishable, not just
     # all-Phobius-is-purple.
     height = 2
-    y_positions = {"Phobius": 2, "Pfam": 4, "modification": 6}
+    y_positions = {"Phobius": 2, "Pfam": 4, "modification": 6, "hydrophobic_patch": 8}
     color_map = _annotation_color_map(range_df)
+
+    # opacity for hydrophobic patches scales with total patch hydrophobicity
+    # (min-max normalized across patches present in this run)
+    patch_alpha = {}
+    patch_rows = range_df[range_df["source"] == "hydrophobic_patch"]
+    if not patch_rows.empty:
+        totals = {desc: _parse_patch_description(desc)[1] for desc in patch_rows["description"].unique()}
+        lo, hi = min(totals.values()), max(totals.values())
+        span = hi - lo
+        for desc, total in totals.items():
+            frac = (total - lo) / span if span > 0 else 1.0
+            patch_alpha[desc] = 0.25 + 0.65 * frac  # keep even the weakest patch visible
+
     legend_seen = set()
     for _, row in range_df.iterrows():
         source = row["source"]
@@ -333,6 +370,12 @@ def plot_results(aa_df, range_df, title="Results Plot"):
         y1 = y_positions[source] + height * 0.3
         key = (str(source), str(desc))
         color = color_map.get(key, DOMAIN_SOURCE_COLORS.get(source, "#888888"))
+        if source == "hydrophobic_patch":
+            label, total_hydro = _parse_patch_description(desc)
+            display_name = f"Hydrophobic {label} (Σ={total_hydro:.2f})"
+            color = _hex_to_rgba(color, patch_alpha.get(str(desc), 1.0))
+        else:
+            display_name = f"{desc} ({source})"
         first_of_label = key not in legend_seen
         legend_seen.add(key)
         fig.add_trace(
@@ -341,10 +384,10 @@ def plot_results(aa_df, range_df, title="Results Plot"):
                 y=[y0, y0, y1, y1, y0],
                 mode="lines", fill="toself",
                 fillcolor=color, line=dict(color=color),
-                name=f"{desc} ({source})",
+                name=display_name,
                 legendgroup=f"{source}|{desc}",
                 showlegend=first_of_label,
-                hovertemplate=f"{source}: {desc} ({start}-{stop})<extra></extra>",
+                hovertemplate=f"{display_name} ({start}-{stop})<extra></extra>",
             ),
             row=2, col=1
         )
@@ -365,6 +408,12 @@ def plot_results(aa_df, range_df, title="Results Plot"):
         margin=dict(l=60, r=20, t=40, b=40),
     )
     return go.Figure(fig)
+
+
+def _hex_to_rgba(hex_color, alpha):
+    """Convert '#rrggbb' to an 'rgba(r,g,b,a)' string for Plotly fill opacity."""
+    r, g, b = _hex_to_rgb(hex_color)
+    return f"rgba({r},{g},{b},{alpha:.2f})"
 
 
 def _task_color(task_name):
@@ -393,6 +442,13 @@ _PLASMA = [
 _COOL = [
     (0.0, (0, 255, 255)),
     (1.0, (255, 0, 255)),
+]
+
+# blue-white-red diverging: polar (buried/hydrophilic) → hydrophobic surface exposure
+_BWR = [
+    (0.0, (33,  102, 172)),
+    (0.5, (247, 247, 247)),
+    (1.0, (178, 24,  43)),
 ]
 
 # pLDDT gradient: band boundary values are used as t stops so the colour
@@ -425,6 +481,8 @@ def _pick_gradient_cmap(task_name):
     """Return the stop list for a gradient based on track type."""
     if task_name.endswith("_sasa"):
         return _COOL
+    if task_name.endswith("_hydro"):
+        return _BWR
     analysis = _guess_analysis_type(task_name)
     if analysis == "plddt":
         return _PLDDT_GRADIENT
@@ -516,7 +574,7 @@ _ANNOTATION_PALETTE = [
 ]
 
 # Sources shown in the 2D feature panel
-_FEATURE_SOURCES = {"Pfam", "Phobius", "modification"}
+_FEATURE_SOURCES = {"Pfam", "Phobius", "modification", "hydrophobic_patch"}
 
 # Sources painted in the __domains__ structure colorscheme (Phobius has its own scheme)
 _DOMAIN_STRUCT_SOURCES = {"Pfam", "modification"}
@@ -637,6 +695,42 @@ def _isoform_class_key(description):
     return "intermediate"
 
 
+def _parse_patch_description(description):
+    """Split a hydrophobic-patch description ('patch0|1.23|area=45.6') into (label, total_hydro).
+
+    The trailing area field (if present) isn't used for coloring yet — ignored here.
+    """
+    parts = str(description).split("|")
+    label = parts[0]
+    try:
+        total_hydro = float(parts[1]) if len(parts) > 1 else 0.0
+    except ValueError:
+        total_hydro = 0.0
+    return label, total_hydro
+
+
+def residue_colors_for_patches(range_df, seq_len):
+    """Color structure by hydrophobic patch membership, one hue per patch.
+
+    Returns (per_residue_colors, legend_items).
+    """
+    colors = ["#e8e8e8"] * seq_len
+    color_map = _annotation_color_map(range_df)
+    patch_rows = range_df[range_df["source"] == "hydrophobic_patch"]
+    for _, row in patch_rows.iterrows():
+        key = ("hydrophobic_patch", str(row["description"]))
+        color = color_map.get(key, "#888888")
+        pos = int(row["start"])
+        if 1 <= pos <= seq_len:
+            colors[pos - 1] = color
+    legend_items = [
+        {"color": color, "label": _parse_patch_description(desc)[0]}
+        for (src, desc), color in color_map.items()
+        if src == "hydrophobic_patch"
+    ]
+    return colors, legend_items
+
+
 def residue_colors_for_isoforms(range_df, seq_len):
     """Color structure by isoform class using the 3-class discrete color scheme.
 
@@ -673,7 +767,7 @@ def build_plot_payload(aa_df, range_df, title="Results"):
     NaN values in aa_df are converted to None (→ null in JSON).
     """
     # isoforms row sits lowest (nearest the sequence strip); others stack above
-    y_positions = {"isoforms": 1, "Phobius": 3, "Pfam": 5, "modification": 7}
+    y_positions = {"isoforms": 1, "Phobius": 3, "Pfam": 5, "modification": 7, "hydrophobic_patch": 9}
 
     line_tracks = []
     data_max = -float("inf")
@@ -686,6 +780,19 @@ def build_plot_payload(aa_df, range_df, title="Results"):
             if pd.notna(col_max):
                 data_max = max(data_max, float(col_max))
     y_max = max(1.1, data_max) if data_max > -float("inf") else 1.1
+
+    # hydrophobic patch fill opacity scales with total patch hydrophobicity
+    # (min-max normalized across patches present in this run)
+    patch_alpha = {}
+    if range_df is not None and not range_df.empty:
+        patch_rows = range_df[range_df["source"] == "hydrophobic_patch"]
+        if not patch_rows.empty:
+            totals = {desc: _parse_patch_description(desc)[1] for desc in patch_rows["description"].unique()}
+            lo, hi = min(totals.values()), max(totals.values())
+            span = hi - lo
+            for desc, total in totals.items():
+                frac = (total - lo) / span if span > 0 else 1.0
+                patch_alpha[desc] = 0.25 + 0.65 * frac  # keep even the weakest patch visible
 
     range_features = []
     if range_df is not None and not range_df.empty:
@@ -701,11 +808,15 @@ def build_plot_payload(aa_df, range_df, title="Results"):
             else:
                 key = (str(src), str(row["description"]))
                 color = color_map.get(key, "#888888")
+            desc = str(row["description"])
+            if src == "hydrophobic_patch":
+                color = _hex_to_rgba(color, patch_alpha.get(desc, 1.0))
+                desc = _parse_patch_description(desc)[0]
             range_features.append({
                 "source": src,
                 "start": int(row["start"]),
                 "stop": int(row["stop"]),
-                "desc": str(row["description"]),
+                "desc": desc,
                 "color": color,
                 "yRow": y_positions[src],
             })

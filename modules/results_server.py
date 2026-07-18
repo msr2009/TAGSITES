@@ -12,10 +12,11 @@ from utils.results import (
     residue_colors_for_annotations,
     residue_colors_for_phobius,
     residue_colors_for_isoforms,
+    residue_colors_for_patches,
     residue_colors_jet,
     _guess_analysis_type,
     _pick_gradient_cmap,
-    _VIRIDIS, _PLASMA, _COOL, _PLDDT_GRADIENT,
+    _VIRIDIS, _PLASMA, _COOL, _PLDDT_GRADIENT, _BWR,
 )
 from config import RESULTS_TYPE_DICT, DOMAIN_SOURCE_COLORS
 
@@ -53,6 +54,12 @@ def _build_colors_and_legend(track, task_name, scheme, aa_df, range_df, seq_len,
         colors, items = residue_colors_for_isoforms(range_df, seq_len)
         return colors, {"type": "categorical", "items": items}
 
+    if track == "__hydrophobic_patch__":
+        if range_df is None or not seq_len:
+            return None, None
+        colors, items = residue_colors_for_patches(range_df, seq_len)
+        return colors, {"type": "categorical", "items": items}
+
     # ── Continuous track coloring ────────────────────────────────────────────────
     if aa_df is None or task_name not in aa_df.columns:
         return None, None
@@ -71,9 +78,13 @@ def _build_colors_and_legend(track, task_name, scheme, aa_df, range_df, seq_len,
         _CMAP_NAMES = {
             id(_VIRIDIS): "viridis", id(_PLASMA): "plasma",
             id(_COOL): "cool",       id(_PLDDT_GRADIENT): "plddt",
+            id(_BWR): "bwr",
         }
-        cmap_name = _CMAP_NAMES.get(id(_pick_gradient_cmap(task_name)), "viridis")
-        legend = {"type": "gradient", "label": task_name, "vmin": 0, "vmax": 1,
+        cmap = _pick_gradient_cmap(task_name)
+        cmap_name = _CMAP_NAMES.get(id(cmap), "viridis")
+        # hydrophobic exposure uses named endpoints instead of 0/1
+        vmin, vmax = ("polar", "hydrophobic") if cmap is _BWR else (0, 1)
+        legend = {"type": "gradient", "label": task_name, "vmin": vmin, "vmax": vmax,
                   "cmap": cmap_name}
 
     return colors, legend
@@ -119,6 +130,8 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
                     choices[col + ":continuous"]  = f"{col} (gradient)"
                 elif col.endswith("_sasa"):
                     choices[col] = "Solv Access"
+                elif col.endswith("_hydro"):
+                    choices[col] = "Hydrophobic exposure"
                 else:
                     choices[col] = col
         if range_df is not None and not range_df.empty:
@@ -128,6 +141,8 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
                 choices["__phobius__"] = "Phobius"
             if not range_df[range_df["source"] == "isoforms"].empty:
                 choices["__isoforms__"] = "Isoforms"
+            if not range_df[range_df["source"] == "hydrophobic_patch"].empty:
+                choices["__hydrophobic_patch__"] = "Hydrophobic patches"
         color_by_choices.set(choices)
         ui.update_select("color_by", choices=choices, selected="(none)")
 

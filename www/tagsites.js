@@ -348,7 +348,8 @@
 
   /* ── Feature panel (row 2: range annotations) ──────────────────────────────── */
 
-  var FEAT_ROWS = ["isoforms", "Phobius", "Pfam", "modification"];
+  var FEAT_ROWS = ["isoforms", "Phobius", "Pfam", "modification", "hydrophobic_patch"];
+  var FEAT_ROW_LABELS = {hydrophobic_patch: "Hydro. patch"};
 
   function drawFeaturePanel(ctx, inf, layout) {
     var top = layout.featTop, h = layout.featH;
@@ -386,7 +387,8 @@
       ctx.moveTo(LEFT_GUTTER, py);
       ctx.lineTo(LEFT_GUTTER + inf.dataW, py);
       ctx.stroke();
-      ctx.fillText(name.charAt(0).toUpperCase() + name.slice(1), LEFT_GUTTER - 3, py);
+      var label = FEAT_ROW_LABELS[name] || (name.charAt(0).toUpperCase() + name.slice(1));
+      ctx.fillText(label, LEFT_GUTTER - 3, py);
     });
 
     var r     = getXRange();
@@ -996,6 +998,8 @@
     cool:    "linear-gradient(to right,#00ffff,#ff00ff)",
     // pLDDT gradient: stops at band boundaries (0%, 50%, 70%, 100%)
     plddt:   "linear-gradient(to right,#ff7d45 0%,#ffdb13 50%,#65cbf3 70%,#0053d6 100%)",
+    // blue-white-red diverging: polar (buried/hydrophilic) → hydrophobic surface exposure
+    bwr:     "linear-gradient(to right,#2166ac,#f7f7f7,#b2182b)",
   };
 
   // rainbow N→C matches 3Dmol's default chain-spectrum coloring
