@@ -3,3 +3,19 @@ N-terminal palmitoylation	^MGC..S
 CAAX prenylation	C...$
 RAB prenylation	C{1,2}$
 Canonical PDZ binding site	[ST]{1}.[VL]{1}$
+PDZ binding site class 1a (Tonikian 2008)	[VILFWYM][KR].SDV$
+PDZ binding site class 1b (Tonikian 2008)	[FWY][RK]ET[STRK][VILFWYM]$
+PDZ binding site class 1c (Tonikian 2008)	[VILFWYM]{2}ET.L$
+PDZ binding site class 1d (Tonikian 2008)	ET.V$
+PDZ binding site class 1e (Tonikian 2008)	TW[VILM]$
+PDZ binding site class 1f (Tonikian 2008)	[FWY]{2}TW[VILM]$
+PDZ binding site class 1g (Tonikian 2008)	[VILFWYM]{3}[TS]{2}[FWY][VILM]$
+PDZ binding site class 1h (Tonikian 2008)	[VILFWYM]{2}[DE][TS]W[VILM]$
+PDZ binding site class 2a (Tonikian 2008)	FD[FWY]{2}C$
+PDZ binding site class 2b (Tonikian 2008)	W.[FWY]FDV$
+PDZ binding site class 2c (Tonikian 2008)	W[FWY][VILFWYM]D[VILM]$
+PDZ binding site class 2d (Tonikian 2008)	[VILFWYM]{2}.[ED][VILFWYM]{3}$
+PDZ binding site class 2e (Tonikian 2008)	[VILFWYM]{4}$
+PDZ binding site class 2f (Tonikian 2008)	[DE][VILFWYM][FWY][VILFWYM]$
+PDZ binding site class 3a (Tonikian 2008)	W[FWY][ST]DW[VILM]$
+PDZ binding site class 4a (Tonikian 2008)	[FWY][VILFWYM]GWF$
