@@ -1,4 +1,20 @@
+import os
 from shiny import ui, module
+
+_WWW_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "www")
+
+
+def _asset_version(filename):
+    """mtime of a www/ asset, used as a cache-busting query param.
+
+    Browsers otherwise cache tagsites.css/js indefinitely, so edits don't show up
+    on reload without a manual hard-refresh; appending ?v=<mtime> forces a refetch
+    whenever the file on disk changes.
+    """
+    try:
+        return str(int(os.path.getmtime(os.path.join(_WWW_DIR, filename))))
+    except OSError:
+        return "0"
 
 
 @module.ui
@@ -6,8 +22,8 @@ def results_ui():
     return ui.page_fluid(
         # tagsites assets (3Dmol must load before tagsites.js)
         ui.tags.script(src="3Dmol-min.js"),
-        ui.tags.link(rel="stylesheet", href="tagsites.css"),
-        ui.tags.script(src="tagsites.js"),
+        ui.tags.link(rel="stylesheet", href=f"tagsites.css?v={_asset_version('tagsites.css')}"),
+        ui.tags.script(src=f"tagsites.js?v={_asset_version('tagsites.js')}"),
 
         ui.output_ui("json_upload_card"),
 
@@ -68,13 +84,9 @@ def results_ui():
             ui.input_action_button("add_cterm_button",
                                    "Add C-term",
                                    class_="btn btn-outline-danger btn-sm ts-sites-btn"),
-            # TODO: implement suggested-site algorithm (score-based auto-selection)
-            # When ready: remove disabled/title attrs and wire up on_add_suggested() in results_server.py
             ui.input_action_button("add_suggested_button",
                                    "Add suggested",
-                                   class_="btn btn-secondary btn-sm ts-sites-btn",
-                                   disabled=True,
-                                   title="Not yet implemented"),
+                                   class_="btn btn-outline-success btn-sm ts-sites-btn"),
             ui.input_action_button("clear_highlights_button",
                                    "Clear",
                                    class_="btn btn-secondary btn-sm ts-sites-btn"),

@@ -21,32 +21,50 @@ GENEWISE  = "https://www.ebi.ac.uk/Tools/services/rest/genewise"
 DBFETCH_BASE = "https://www.ebi.ac.uk/Tools/dbfetch/dbfetch"
 
 
+RETRYABLE_EXCEPTIONS = (requests.exceptions.Timeout, requests.exceptions.ConnectionError)
+
+
+def _request_with_retries(method, url, retries=3, retry_wait=5, **kwargs):
+    """Call requests.<method>(url, **kwargs), retrying on transient timeout/connection errors.
+
+    EBI's REST endpoints occasionally hang past the read timeout; retrying the same
+    idempotent GET/POST a few times with a short wait clears most of these transparently.
+    """
+    last_exc = None
+    for attempt in range(retries + 1):
+        try:
+            resp = getattr(requests, method)(url, **kwargs)
+            resp.raise_for_status()
+            return resp
+        except RETRYABLE_EXCEPTIONS as exc:
+            last_exc = exc
+            if attempt < retries:
+                time.sleep(retry_wait)
+    raise last_exc
+
+
 def submit(base_url, params):
     """POST params to {base_url}/run; return the jobId string."""
-    resp = requests.post(f"{base_url}/run", data=params, timeout=60)
-    resp.raise_for_status()
+    resp = _request_with_retries("post", f"{base_url}/run", data=params, timeout=60)
     return resp.text.strip()
 
 
 def get_status(base_url, job_id):
     """GET current status string for a submitted job."""
-    resp = requests.get(f"{base_url}/status/{job_id}", timeout=30)
-    resp.raise_for_status()
+    resp = _request_with_retries("get", f"{base_url}/status/{job_id}", timeout=30)
     return resp.text.strip()
 
 
 def fetch_result(base_url, job_id, result_type):
     """GET one result type for a finished job; return raw bytes."""
-    resp = requests.get(f"{base_url}/result/{job_id}/{result_type}", timeout=120)
-    resp.raise_for_status()
+    resp = _request_with_retries("get", f"{base_url}/result/{job_id}/{result_type}", timeout=120)
     return resp.content
 
 
 def dbfetch(db, accession, fmt="fasta", style="raw"):
     """Fetch a record from EBI dbfetch; return raw bytes."""
     url = f"{DBFETCH_BASE}/{db}/{accession}/{fmt}/{style}"
-    resp = requests.get(url, timeout=60)
-    resp.raise_for_status()
+    resp = _request_with_retries("get", url, timeout=60)
     return resp.content
 
 

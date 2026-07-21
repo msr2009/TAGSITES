@@ -5,6 +5,7 @@ from modules.json_card import json_upload_card as _json_upload_card
 from utils.results import (
     load_data_from_json,
     load_run_metadata,
+    load_reagents_df,
     build_plot_payload,
     assign_task_colors,
     residue_colors_for_track,
@@ -18,7 +19,28 @@ from utils.results import (
     _pick_gradient_cmap,
     _VIRIDIS, _PLASMA, _COOL, _PLDDT_GRADIENT, _BWR,
 )
+from utils.scoring import score_tag_sites, failed_flags, score_green_hex
 from config import RESULTS_TYPE_DICT, DOMAIN_SOURCE_COLORS
+
+# "Add suggested" picks up to this many top-scoring, well-spaced positions
+_SUGGESTED_MAX_SITES = 3
+_SUGGESTED_MIN_SPACING = 10  # minimum residue gap between suggested sites
+
+
+def _pick_suggested_sites(scores):
+    """Top-scoring, well-spaced positions from a score_tag_sites() DataFrame (see on_add_suggested)."""
+    if scores is None or scores.empty:
+        return []
+    ranked = scores.sort_values("score", ascending=False)
+    picked = []
+    for pos in ranked.index:
+        if ranked.loc[pos, "score"] <= 0:
+            break
+        if all(abs(pos - p) >= _SUGGESTED_MIN_SPACING for p in picked):
+            picked.append(pos)
+        if len(picked) >= _SUGGESTED_MAX_SITES:
+            break
+    return [int(p) for p in picked]
 
 # pLDDT 4-band legend items (values stored 0-1 after /100 at load time)
 _PLDDT_LEGEND = [
@@ -100,6 +122,7 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
     run_name    = reactive.Value(None)
     run_meta    = reactive.Value({})   # {query_seq, pdb_path, seq_len}
     task_colors = reactive.Value({})   # task_name → hex color (stable across renders)
+    site_scores = reactive.Value(None) # tag-site suggestion scores (see utils.scoring), indexed by pos
 
     # ── Color-by choices (drives the button row above the structure) ────────────
     color_by_choices = reactive.Value({})  # val → label dict, populated on load
@@ -119,6 +142,11 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
         run_name.set(json_content["global"]["run_name"])
         run_meta.set(meta)
         task_colors.set(assign_task_colors(aa_df) if aa_df is not None else {})
+
+        # tag-site suggestion scoring (see utils/scoring.py, issue #32) — reagents
+        # data is optional and only present once the Reagents task has run
+        reagents_df = load_reagents_df(json_content)
+        site_scores.set(score_tag_sites(aa_df, range_df, meta.get("query_seq", ""), reagents_df))
 
         # build color-by button choices
         # pLDDT tracks get two buttons: categorical (4-band) and continuous (gradient)
@@ -143,6 +171,9 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
                 choices["__isoforms__"] = "Isoforms"
             if not range_df[range_df["source"] == "hydrophobic_patch"].empty:
                 choices["__hydrophobic_patch__"] = "Hydrophobic patches"
+        scores = site_scores.get()
+        if scores is not None and not scores.empty:
+            choices["__score__"] = "Score"
         color_by_choices.set(choices)
         ui.update_select("color_by", choices=choices, selected="(none)")
 
@@ -238,6 +269,27 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
         payload = build_plot_payload(aa_df, range_df, title=title)
         payload["seq"] = meta.get("query_seq", "")
         payload["inputs"] = _input_names()
+
+        # tag-site score heatmap row (see utils/scoring.py, issue #32)
+        scores = site_scores.get()
+        seq_len = meta.get("seq_len", 0)
+        if scores is not None and not scores.empty and seq_len:
+            by_pos = scores["score"]
+            payload["scoreTrack"] = [
+                int(by_pos[p]) if p in by_pos.index else None for p in range(1, seq_len + 1)
+            ]
+            flags_by_pos = dict(zip(scores.index, failed_flags(scores)))
+            payload["scoreFlags"] = [
+                flags_by_pos.get(p, []) for p in range(1, seq_len + 1)
+            ]
+            payload["scoreMax"] = max(1, int(scores["score"].max()))
+            payload["suggestedSites"] = _pick_suggested_sites(scores)
+        else:
+            payload["scoreTrack"] = []
+            payload["scoreFlags"] = []
+            payload["scoreMax"] = 1
+            payload["suggestedSites"] = []
+
         await session.send_custom_message("tagsites_set_plot", payload)
 
     async def _send_struct(pdb_path):
@@ -303,14 +355,15 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
         sites = sorted(set(shared_sites.get()) | {seq_len})
         shared_sites.set(sites)
 
-    # TODO: implement suggested-site algorithm (score-based auto-selection)
-    # Button is disabled in results_ui.py until this is ready.
-    # When implementing: enable the button, fill this handler with the selection logic,
-    # and update the button class from btn-secondary back to btn-outline-success.
     @reactive.effect
     @reactive.event(input.add_suggested_button)
     def on_add_suggested():
-        pass
+        """Add the top-scoring, well-spaced tag sites (see utils.scoring.score_tag_sites)."""
+        picked = _pick_suggested_sites(site_scores.get())
+        if not picked:
+            return
+        sites = sorted(set(shared_sites.get()) | set(picked))
+        shared_sites.set(sites)
 
     @reactive.effect
     @reactive.event(input.clear_highlights_button)
@@ -352,6 +405,25 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
             await session.send_custom_message("tagsites_set_colors",
                                               {"colors": colors,
                                                "legend": {"type": "rainbow"}})
+            return
+
+        if track == "__score__":
+            scores = site_scores.get()
+            meta = run_meta.get()
+            seq_len = meta.get("seq_len", 0) if meta else 0
+            score_max = max(1, int(scores["score"].max())) if scores is not None and not scores.empty else 1
+            colors = []
+            if scores is not None and not scores.empty and seq_len:
+                by_pos = scores["score"]
+                for p in range(1, seq_len + 1):
+                    if p in by_pos.index:
+                        colors.append(score_green_hex(by_pos[p] / score_max))
+                    else:
+                        colors.append("#e8e8e8")
+            legend = {"type": "gradient", "cmap": "score", "label": "Score",
+                     "vmin": 0, "vmax": score_max}
+            await session.send_custom_message("tagsites_set_colors",
+                                              {"colors": colors, "legend": legend})
             return
 
         task_name, scheme = track.rsplit(":", 1) if ":" in track else (track, "categorical")

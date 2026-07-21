@@ -35,6 +35,12 @@
   var plotYMax      = 1.1;  // fixed y ceiling for the line panel
   var legendHitBoxes = [];  // [{name, x0, y0, x1, y1}] — rebuilt on each render
 
+  // Tag-site score heatmap row (see utils/scoring.py, issue #32)
+  var scoreTrack = [];   // scoreTrack[i] = int score at pos i+1, null = no data
+  var scoreFlags = [];   // scoreFlags[i] = [failed-criterion labels] at pos i+1
+  var scoreMax   = 1;    // normalization ceiling for the white→green fill
+  var suggestedSites = [];  // positions picked by "Add suggested" — marked with * above the heatmap
+
   // Zoom/pan state — null means full range
   var currentRange = null;
   var dragState    = null;  // {startX, lastX, mode, startR0, startR1}
@@ -47,6 +53,8 @@
   var RIGHT_GUTTER = 14;
   var TOP_GUTTER   = 6;    // top margin
   var SEQ_H        = 58;   // fixed height for sequence strip
+  var SCORE_MARK_H = 8;    // top margin reserved for suggested-site triangle markers
+  var SCORE_H      = 24 + SCORE_MARK_H;   // fixed height for the score heatmap row (fill + marker margin)
   var LEGEND_H     = 22;   // fixed-height legend band between line and feature panels
   var PANEL_GAP    = 8;    // gap between panels
   // line panel gets 65% of the remaining height; feature panel gets the rest
@@ -171,14 +179,15 @@
 
   // Compute panel boundary positions (all in CSS px, top-down).
   function getPanelLayout(cssH) {
-    // fixed overhead: title + legend band + seq strip + 3 gaps
-    var contentH  = Math.max(cssH - TOP_GUTTER - LEGEND_H - SEQ_H - PANEL_GAP * 3, 40);
+    // fixed overhead: title + legend band + score row + seq strip + 4 gaps
+    var contentH  = Math.max(cssH - TOP_GUTTER - LEGEND_H - SCORE_H - SEQ_H - PANEL_GAP * 4, 40);
     var lineH     = Math.round(contentH * LINE_FRAC);
     var featH     = contentH - lineH;
     var lineTop   = TOP_GUTTER;
     var legendTop = lineTop + lineH + PANEL_GAP;
     var featTop   = legendTop + LEGEND_H + PANEL_GAP;
-    var seqTop    = featTop + featH + PANEL_GAP;
+    var scoreTop  = featTop + featH + PANEL_GAP;
+    var seqTop    = scoreTop + SCORE_H + PANEL_GAP;
     return {
       lineTop:   lineTop,
       lineH:     lineH,
@@ -186,6 +195,8 @@
       legendH:   LEGEND_H,
       featTop:   featTop,
       featH:     featH,
+      scoreTop:  scoreTop,
+      scoreH:    SCORE_H,
       seqTop:    seqTop,
       seqH:      SEQ_H,
     };
@@ -217,6 +228,7 @@
     drawLinePanel(ctx, inf, layout);
     drawLegendBand(ctx, inf, layout);
     drawFeaturePanel(ctx, inf, layout);
+    drawScoreHeatmap(ctx, inf, layout);
     drawSeqStrip(ctx, inf, layout);
 
     // drag-to-zoom rubber band overlaid on top
@@ -258,7 +270,7 @@
     ctx.lineWidth   = 1;
     ctx.strokeRect(LEFT_GUTTER, top, inf.dataW, h);
 
-    // y-axis label "Score" (vertical, in gutter)
+    // y-axis label "Value" (vertical, in gutter)
     ctx.save();
     ctx.translate(11, top + h / 2);
     ctx.rotate(-Math.PI / 2);
@@ -266,7 +278,7 @@
     ctx.textAlign    = "center";
     ctx.textBaseline = "middle";
     ctx.fillStyle    = "#666";
-    ctx.fillText("Score", 0, 0);
+    ctx.fillText("Value", 0, 0);
     ctx.restore();
 
     // run name in top-left corner of the panel
@@ -371,7 +383,8 @@
     var n = activeRows.length;
     var dynYPos = {};
     activeRows.forEach(function (name, idx) { dynYPos[name] = idx + 1; });
-    var dynYMin = 0, dynYMax = n + 1;
+    // small half-row margin above/below the outermost rows instead of a full row's worth
+    var dynYMin = 0.5, dynYMax = n + 0.5;
     var ySpan   = dynYMax - dynYMin;
 
     // row labels and subtle separators
@@ -483,6 +496,83 @@
     });
   }
 
+  /* ── Tag-site score heatmap (white→green, sits directly above the seq strip) ── */
+
+  function drawScoreHeatmap(ctx, inf, layout) {
+    var markTop = layout.scoreTop, markH = SCORE_MARK_H;
+    var top = markTop + markH, h = layout.scoreH - markH;
+
+    ctx.fillStyle   = "#f8f8f8";
+    ctx.fillRect(LEFT_GUTTER, top, inf.dataW, h);
+    ctx.strokeStyle = "#d8d8d8";
+    ctx.lineWidth   = 1;
+    ctx.strokeRect(LEFT_GUTTER, top, inf.dataW, h);
+
+    // row label in the left gutter, matching the sequence strip's style
+    ctx.fillStyle    = "#777";
+    ctx.font         = "10px sans-serif";
+    ctx.textAlign    = "right";
+    ctx.textBaseline = "middle";
+    ctx.fillText("Score", LEFT_GUTTER - 6, top + h / 2);
+
+    if (scoreTrack.length === 0) return;
+
+    var r     = getXRange();
+    var lo    = Math.max(1, Math.floor(r[0]));
+    var hi    = Math.min(scoreTrack.length, Math.ceil(r[1]));
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(LEFT_GUTTER, top, inf.dataW, h);
+    ctx.clip();
+
+    for (var pos = lo; pos <= hi; pos++) {
+      var s = scoreTrack[pos - 1];
+      if (s === null || s === undefined) continue;
+      var x0 = posToX(pos - 0.5, inf);
+      var x1 = posToX(pos + 0.5, inf);
+      var w  = x1 - x0;
+      if (w < 0.5) continue;
+      ctx.fillStyle = scoreGreenHex(s / scoreMax);
+      ctx.fillRect(x0, top + 1, Math.max(w - 0.5, 0.5), h - 2);
+    }
+
+    ctx.restore();
+
+    // downward-facing green triangle above each suggested site, in the reserved top margin
+    if (suggestedSites.length) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(LEFT_GUTTER, markTop, inf.dataW, markH);
+      ctx.clip();
+      ctx.fillStyle = "#28a745";
+      for (var i = 0; i < suggestedSites.length; i++) {
+        var sp = suggestedSites[i];
+        if (sp < lo || sp > hi) continue;
+        var cx = posToX(sp, inf);
+        var triW = 8, triH = markH - 1;
+        ctx.beginPath();
+        ctx.moveTo(cx - triW / 2, markTop);
+        ctx.lineTo(cx + triW / 2, markTop);
+        ctx.lineTo(cx, markTop + triH);
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+  }
+
+  // white (#ffffff) → green (#28a745) interpolation — must match
+  // utils.scoring.score_green_hex so the heatmap and structure coloring agree
+  function scoreGreenHex(frac) {
+    frac = Math.max(0, Math.min(1, frac));
+    var r = Math.round(0xff + frac * (0x28 - 0xff));
+    var g = Math.round(0xff + frac * (0xa7 - 0xff));
+    var b = Math.round(0xff + frac * (0x45 - 0xff));
+    function hx(v) { var s = v.toString(16); return s.length < 2 ? "0" + s : s; }
+    return "#" + hx(r) + hx(g) + hx(b);
+  }
+
   /* ── Sequence strip (row 3) ────────────────────────────────────────────────── */
 
   function drawSeqStrip(ctx, inf, layout) {
@@ -501,6 +591,13 @@
     ctx.moveTo(LEFT_GUTTER, top + LETTER_H);
     ctx.lineTo(LEFT_GUTTER + inf.dataW, top + LETTER_H);
     ctx.stroke();
+
+    // row label in the left gutter, matching the score row's style
+    ctx.fillStyle    = "#777";
+    ctx.font         = "10px sans-serif";
+    ctx.textAlign    = "right";
+    ctx.textBaseline = "middle";
+    ctx.fillText("Sequence", LEFT_GUTTER - 6, top + LETTER_H / 2);
 
     if (seqArray.length === 0) return;
 
@@ -640,6 +737,16 @@
           lines.push(feat.source + ": " + feat.desc + " (" + feat.start + "–" + feat.stop + ")");
         }
       });
+    }
+
+    // show tag-site score + failed-criterion flags when hovering the score row
+    if (cy >= layout.scoreTop && cy <= layout.scoreTop + layout.scoreH) {
+      var s = scoreTrack[pos - 1];
+      if (s !== null && s !== undefined) {
+        var aa    = seqArray[pos - 1] || "";
+        var flags = scoreFlags[pos - 1] || [];
+        lines = [aa + pos + ": " + s + (flags.length ? " [" + flags.join(", ") + "]" : "")];
+      }
     }
 
     showTooltip(cx, cy, lines);
@@ -944,6 +1051,10 @@
     lineTracks    = msg.lineTracks    || [];
     rangeFeatures = msg.rangeFeatures || [];
     seqArray      = (msg.seq || "").split("");
+    scoreTrack    = msg.scoreTrack    || [];
+    scoreFlags    = msg.scoreFlags    || [];
+    scoreMax      = (typeof msg.scoreMax === "number" && msg.scoreMax > 0) ? msg.scoreMax : 1;
+    suggestedSites = msg.suggestedSites || [];
     hiddenTracks  = new Set();
     committedSet.clear();
     perResidueColors = [];
@@ -1000,6 +1111,8 @@
     plddt:   "linear-gradient(to right,#ff7d45 0%,#ffdb13 50%,#65cbf3 70%,#0053d6 100%)",
     // blue-white-red diverging: polar (buried/hydrophilic) → hydrophobic surface exposure
     bwr:     "linear-gradient(to right,#2166ac,#f7f7f7,#b2182b)",
+    // tag-site suggestion score (see utils/scoring.py) — white→green
+    score:   "linear-gradient(to right,#ffffff,#28a745)",
   };
 
   // rainbow N→C matches 3Dmol's default chain-spectrum coloring

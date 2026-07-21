@@ -283,6 +283,41 @@ def load_run_metadata(json_in):
     }
 
 
+def load_reagents_df(json_in):
+    """Load the precomputed Reagents TSV referenced by a run JSON, for scoring purposes.
+
+    Mirrors how modules/reagents_server.py locates the file. Returns a DataFrame
+    with columns [residue_index, distance, dist_to_5p_splice, dist_to_3p_splice]
+    (one row per residue × guide), or None if the Reagents task hasn't been run
+    or its output isn't on disk yet.
+    """
+    j = {}
+    if isinstance(json_in, dict):
+        j = json_in
+    elif isinstance(json_in, str):
+        try:
+            j = json.loads(json_in)
+        except ValueError:
+            try:
+                with open(json_in, "r") as f:
+                    j = json.load(f)
+            except (ValueError, FileNotFoundError):
+                return None
+
+    reagent_args = j.get("tasks", {}).get("REAGENTS_reagents", {}).get("args", {})
+    tsv_path = reagent_args.get("output", "")
+    if not tsv_path or not os.path.exists(tsv_path):
+        return None
+
+    try:
+        df = pd.read_csv(tsv_path, sep="\t")
+        cols = ["residue_index", "distance", "dist_to_5p_splice", "dist_to_3p_splice"]
+        return df[[c for c in cols if c in df.columns]]
+    except Exception as e:
+        print(f"Error loading reagents TSV for scoring: {e}")
+        return None
+
+
 ###FOR PLOTTING RESULTS DATA
 
 def assign_task_colors(aa_df):
