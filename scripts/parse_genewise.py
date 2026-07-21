@@ -25,8 +25,9 @@ Output TSV columns:
   exon_index      0-based exon number
   is_split_codon  whether this codon straddles an intron boundary
   dist_to_5p_splice  bases from insert_pos to 5′ end of current exon
+                     (set to 99999 for the first exon = no upstream intron)
   dist_to_3p_splice  bases from insert_pos to 3′ end of current exon last codon
-                     (set to -1 for the last exon = no downstream intron)
+                     (set to 99999 for the last exon = no downstream intron)
 
 Matt Rich, 2025
 """
@@ -214,8 +215,13 @@ def enumerate_insertion_sites(cds_df, dna):
 
             # Distances to splice sites
             # dist_to_5p_splice: bases from exon start to this insert position
-            #   (small → close to 5′ splice site; =3 for first clean codon)
-            dist_5p = x - start
+            #   (small → close to 5′ splice site; =3 for first clean codon).
+            #   The first exon's start is the translation start, not a splice
+            #   acceptor, so there is no 5′ splice site to be near there.
+            if exon_i == 0:
+                dist_5p = 99999
+            else:
+                dist_5p = x - start
 
             # dist_to_3p_splice: bases from insert_pos to end of exon last codon.
             #   Value of 0 means tag inserts exactly at the 3′ exon boundary.
