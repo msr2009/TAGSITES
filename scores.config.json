@@ -1,0 +1,112 @@
+{
+  "__doc__": [
+    "Tag-site scoring config. Score = weighted sum of the criteria below; each",
+    "criterion adds `weight` points to a residue when its test passes (missing",
+    "data = 0 points, never a penalty).",
+    "",
+    "TO EDIT AN EXISTING SCORE: change its `weight` (0 disables it), `label`",
+    "(shown when a residue fails it), or the values in `params` (e.g. thresholds).",
+    "This is the ONLY file you touch for that.",
+    "",
+    "TO ADD A NEW SCORE: add a criterion object below. If it uses one of the",
+    "existing `type` handlers (range_absent | column_below | reagent_min_below |",
+    "reagent_min_above | flank_small_fraction) you edit ONLY this file. A brand-new",
+    "kind of test needs one new handler function in utils/scoring.py (SCORE_HANDLERS).",
+    "",
+    "Handler params reference:",
+    "  range_absent:          sources (list), exclude_descriptions (list, optional)",
+    "  column_below:          analysis (aa_df column type, e.g. 'plddt'/'blast'), threshold",
+    "  reagent_min_below:     column (reagents TSV column), threshold",
+    "  reagent_min_above:     columns (list of reagents TSV columns), threshold",
+    "  flank_small_fraction:  small_aa (string of residue letters), window, fraction"
+  ],
+  "criteria": [
+    {
+      "key": "not_in_domain",
+      "type": "range_absent",
+      "weight": 1,
+      "label": "in domain",
+      "note": "1 pt if residue is outside all Pfam/Phobius domains",
+      "params": {
+        "sources": ["Pfam", "Phobius"],
+        "exclude_descriptions": ["Cytoplasmic", "Extracellular"]
+      }
+    },
+    {
+      "key": "not_in_modification",
+      "type": "range_absent",
+      "weight": 1,
+      "label": "in modification",
+      "note": "1 pt if not inside a known PTM/modification site",
+      "params": {
+        "sources": ["modification"]
+      }
+    },
+    {
+      "key": "not_in_hydrophobic_patch",
+      "type": "range_absent",
+      "weight": 1,
+      "label": "in hydrophobic patch",
+      "note": "1 pt if not inside a hydrophobic surface patch",
+      "params": {
+        "sources": ["hydrophobic_patch"]
+      }
+    },
+    {
+      "key": "low_plddt",
+      "type": "column_below",
+      "weight": 1,
+      "label": "pLDDT>0.5",
+      "note": "1 pt if AlphaFold pLDDT is below threshold (disordered/flexible)",
+      "params": {
+        "analysis": "plddt",
+        "threshold": 0.5
+      }
+    },
+    {
+      "key": "low_conservation",
+      "type": "column_below",
+      "weight": 1,
+      "label": "SJD>0.5",
+      "note": "1 pt if BLAST conservation (SJD) is below threshold",
+      "params": {
+        "analysis": "blast",
+        "threshold": 0.5
+      }
+    },
+    {
+      "key": "near_guide",
+      "type": "reagent_min_below",
+      "weight": 1,
+      "label": "no guide<5bp",
+      "note": "1 pt if a CRISPR guide cut site is within `threshold` bp",
+      "params": {
+        "column": "distance",
+        "threshold": 5
+      }
+    },
+    {
+      "key": "not_near_splice",
+      "type": "reagent_min_above",
+      "weight": 1,
+      "label": "near splice site",
+      "note": "1 pt if the nearest splice site is at least `threshold` bp away",
+      "params": {
+        "columns": ["dist_to_5p_splice", "dist_to_3p_splice"],
+        "threshold": 5
+      }
+    },
+    {
+      "key": "small_aa_flanked",
+      "type": "flank_small_fraction",
+      "weight": 1,
+      "label": "few small flanking",
+      "note": "1 pt if >`fraction` of the +/-`window` flank are small AAs",
+      "params": {
+        "small_aa": "GSA",
+        "window": 5,
+        "fraction": 0.70
+      }
+    }
+  ]
+}

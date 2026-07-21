@@ -19,7 +19,7 @@ from utils.results import (
     _pick_gradient_cmap,
     _VIRIDIS, _PLASMA, _COOL, _PLDDT_GRADIENT, _BWR,
 )
-from utils.scoring import score_tag_sites, failed_flags, score_green_hex
+from utils.scoring import score_tag_sites, failed_flags, score_green_hex, load_scoring_config
 from config import RESULTS_TYPE_DICT, DOMAIN_SOURCE_COLORS
 
 # "Add suggested" picks up to this many top-scoring, well-spaced positions
@@ -144,9 +144,13 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
         task_colors.set(assign_task_colors(aa_df) if aa_df is not None else {})
 
         # tag-site suggestion scoring (see utils/scoring.py, issue #32) — reagents
-        # data is optional and only present once the Reagents task has run
+        # data is optional and only present once the Reagents task has run.
+        # scoring_cfg is reloaded on every load so edits to scores.config.json
+        # take effect without restarting the app
         reagents_df = load_reagents_df(json_content)
-        site_scores.set(score_tag_sites(aa_df, range_df, meta.get("query_seq", ""), reagents_df))
+        scoring_cfg = load_scoring_config()
+        site_scores.set(score_tag_sites(aa_df, range_df, meta.get("query_seq", ""),
+                                        reagents_df, scoring_cfg))
 
         # build color-by button choices
         # pLDDT tracks get two buttons: categorical (4-band) and continuous (gradient)
@@ -274,15 +278,17 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
         scores = site_scores.get()
         seq_len = meta.get("seq_len", 0)
         if scores is not None and not scores.empty and seq_len:
+            scoring_cfg = load_scoring_config()
             by_pos = scores["score"]
             payload["scoreTrack"] = [
                 int(by_pos[p]) if p in by_pos.index else None for p in range(1, seq_len + 1)
             ]
-            flags_by_pos = dict(zip(scores.index, failed_flags(scores)))
+            flags_by_pos = dict(zip(scores.index, failed_flags(scores, scoring_cfg)))
             payload["scoreFlags"] = [
                 flags_by_pos.get(p, []) for p in range(1, seq_len + 1)
             ]
-            payload["scoreMax"] = max(1, int(scores["score"].max()))
+            score_max = sum(c["weight"] for c in scoring_cfg["criteria"])
+            payload["scoreMax"] = max(1, int(score_max))
             payload["suggestedSites"] = _pick_suggested_sites(scores)
         else:
             payload["scoreTrack"] = []

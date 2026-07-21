@@ -1,54 +1,47 @@
 """utils/scoring.py — tag-site suggestion scoring (see GitHub issue #32)
 
 Combines the per-residue analysis tracks already loaded for the Results tab
-into a simple additive score: each of 8 criteria contributes +1 when
-satisfied, giving an integer score in [0, 8] per position. A criterion whose
-underlying data isn't available (e.g. no Reagents run) contributes 0 rather
-than penalizing the position, so the score degrades gracefully to [0, 6].
+into a weighted score: each criterion in scores.config.json contributes its
+`weight` when satisfied, giving a score in [0, sum(weights)] per position. A
+criterion whose underlying data isn't available (e.g. no Reagents run)
+contributes 0 rather than penalizing the position. All scoring knobs (weights,
+thresholds, labels, the "small" amino-acid set, etc.) live in scores.config.json
+— see that file's __doc__ for how to edit or extend it.
 """
+
+import json
+from pathlib import Path
 
 import pandas as pd
 
 from utils.results import _guess_analysis_type
 
-# amino acids treated as "small" for the flanking-residue criterion
-_SMALL_AA = set("GSA")
+# default location of the editable scoring config, next to task_definitions.json
+SCORING_CONFIG_PATH = Path(__file__).parent.parent / "scores.config.json"
 
-# criteria are named for the boolean columns returned in the score DataFrame
-_CRITERIA = [
-    "not_in_domain",
-    "not_in_modification",
-    "not_in_hydrophobic_patch",
-    "low_plddt",
-    "low_conservation",
-    "near_guide",
-    "not_near_splice",
-    "small_aa_flanked",
-]
-
-# short label for each criterion's *failed* state — shown as a tooltip flag
-# when a position didn't earn that point
-CRITERION_LABELS = {
-    "not_in_domain": "in domain",
-    "not_in_modification": "in modification",
-    "not_in_hydrophobic_patch": "in hydrophobic patch",
-    "low_plddt": "pLDDT>0.5",
-    "low_conservation": "SJD>0.5",
-    "near_guide": "no guide<5bp",
-    "not_near_splice": "near splice site",
-    "small_aa_flanked": "few small flanking",
-}
+# Phobius topology labels (see utils.results._PHOBIUS_KEYWORDS) that describe bulk
+# membrane orientation rather than a structurally distinct domain — handled via
+# the "exclude_descriptions" param on a range_absent criterion
 
 
-def failed_flags(scores_df):
-    """For each position, list the CRITERION_LABELS of criteria that were NOT satisfied.
+def load_scoring_config(path=None):
+    """Load scores.config.json (or a given path), returning its parsed criteria list."""
+    path = path or SCORING_CONFIG_PATH
+    with open(path) as f:
+        return json.load(f)
+
+
+def failed_flags(scores_df, config=None):
+    """For each position, list the labels of criteria that were NOT satisfied (weight > 0 only).
 
     These are the "reasons points were lost" shown in the Results-tab tooltip,
     e.g. H28: 5 [pLDDT>0.5, SJD>0.5, few small flanking].
     """
+    config = config or load_scoring_config()
+    active = [c for c in config["criteria"] if c["weight"] > 0]
     flags = []
     for _, row in scores_df.iterrows():
-        flags.append([CRITERION_LABELS[c] for c in _CRITERIA if not row[c]])
+        flags.append([c["label"] for c in active if not row[c["key"]]])
     return flags
 
 
@@ -61,12 +54,6 @@ def score_green_hex(frac):
     g = int(g0 + frac * (g1 - g0))
     b = int(b0 + frac * (b1 - b0))
     return f"#{r:02x}{g:02x}{b:02x}"
-
-
-# Phobius topology labels (see utils.results._PHOBIUS_KEYWORDS) that describe bulk
-# membrane orientation rather than a structurally distinct domain — these shouldn't
-# count against a position for the "not_in_domain" criterion
-_PHOBIUS_NON_DOMAIN_LABELS = {"Cytoplasmic", "Extracellular"}
 
 
 def _range_mask(range_df, sources, seq_len, exclude_descriptions=None):
@@ -123,18 +110,84 @@ def _reagents_min_distance(reagents_df, pos, column):
     return vals.min()
 
 
-def score_tag_sites(aa_df, range_df, query_seq, reagents_df=None,
-                     plddt_thresh=0.5, cons_thresh=0.5, guide_bp=5,
-                     splice_bp=5, small_aa=None, small_frac=0.70, window=5):
+# ── criterion handlers ───────────────────────────────────────────────────────
+# each handler takes (positions, params, ctx) and returns a list[bool] aligned
+# with `positions`; ctx bundles the data already loaded for scoring. Adding a
+# criterion that reuses one of these types is config-only (scores.config.json);
+# a genuinely new kind of test needs a new handler registered in SCORE_HANDLERS.
+
+def _handle_range_absent(positions, params, ctx):
+    """True where the position is NOT covered by any range interval from the given sources."""
+    mask = _range_mask(ctx["range_df"], set(params["sources"]), ctx["seq_len"],
+                        exclude_descriptions=params.get("exclude_descriptions"))
+    return [p not in mask for p in positions]
+
+
+def _handle_column_below(positions, params, ctx):
+    """True where the aa_df column for `analysis` is below `threshold` (False if column missing)."""
+    col = _find_column(ctx["aa_df"], params["analysis"])
+    if col is None:
+        return [False] * len(positions)
+    series = ctx["aa_df"].set_index("pos")[col]
+    threshold = params["threshold"]
+    return [series.get(p, float("nan")) < threshold for p in positions]
+
+
+def _handle_reagent_min_below(positions, params, ctx):
+    """True where the minimum reagents-TSV `column` value for this position is below `threshold`."""
+    if ctx["reagents_df"] is None:
+        return [False] * len(positions)
+    column, threshold = params["column"], params["threshold"]
+    return [_reagents_min_distance(ctx["reagents_df"], p, column) < threshold for p in positions]
+
+
+def _handle_reagent_min_above(positions, params, ctx):
+    """True where the nearest of several reagents-TSV distance columns is at least `threshold`."""
+    if ctx["reagents_df"] is None:
+        return [False] * len(positions)
+    columns, threshold = params["columns"], params["threshold"]
+    out = []
+    for p in positions:
+        # nearest of the distance columns; NaN (unknown) is excluded rather than
+        # compared directly, since min() with NaN operands is order-dependent
+        dists = [d for d in (_reagents_min_distance(ctx["reagents_df"], p, c) for c in columns)
+                 if pd.notna(d)]
+        out.append(min(dists, default=float("nan")) >= threshold)
+    return out
+
+
+def _handle_flank_small_fraction(positions, params, ctx):
+    """True where more than `fraction` of the +/-`window` flank are small amino acids."""
+    small_aa = set(params["small_aa"])
+    window, fraction = params["window"], params["fraction"]
+    return [
+        _small_aa_fraction(ctx["query_seq"], p, window, small_aa) > fraction
+        for p in positions
+    ]
+
+
+SCORE_HANDLERS = {
+    "range_absent":         _handle_range_absent,
+    "column_below":         _handle_column_below,
+    "reagent_min_below":    _handle_reagent_min_below,
+    "reagent_min_above":    _handle_reagent_min_above,
+    "flank_small_fraction": _handle_flank_small_fraction,
+}
+
+
+def score_tag_sites(aa_df, range_df, query_seq, reagents_df=None, config=None):
     """Score every residue position for suitability as a tag insertion site.
 
-    Each of 8 criteria (see issue #32) adds +1 to the position's score when
-    satisfied; missing data contributes 0 rather than penalizing the position.
+    Each criterion in `config` (scores.config.json by default) adds its `weight`
+    to the position's score when satisfied; missing data contributes 0 rather
+    than penalizing the position.
 
     Returns a DataFrame indexed by 1-based `pos` with one bool column per
-    criterion plus an integer "score" column (sum of the criteria columns).
+    criterion plus a numeric "score" column (weighted sum of the criteria columns).
     """
-    small_aa = set(small_aa) if small_aa else _SMALL_AA
+    config = config or load_scoring_config()
+    criteria = config["criteria"]
+
     seq_len = len(query_seq) if query_seq else 0
     if aa_df is not None and not aa_df.empty:
         seq_len = max(seq_len, int(aa_df["pos"].max()))
@@ -142,48 +195,48 @@ def score_tag_sites(aa_df, range_df, query_seq, reagents_df=None,
     positions = list(range(1, seq_len + 1))
     out = pd.DataFrame(index=pd.Index(positions, name="pos"))
 
-    domain_mask = _range_mask(range_df, {"Pfam", "Phobius"}, seq_len,
-                               exclude_descriptions=_PHOBIUS_NON_DOMAIN_LABELS)
-    mod_mask = _range_mask(range_df, {"modification"}, seq_len)
-    patch_mask = _range_mask(range_df, {"hydrophobic_patch"}, seq_len)
-    out["not_in_domain"] = [p not in domain_mask for p in positions]
-    out["not_in_modification"] = [p not in mod_mask for p in positions]
-    out["not_in_hydrophobic_patch"] = [p not in patch_mask for p in positions]
+    ctx = {
+        "aa_df": aa_df, "range_df": range_df, "query_seq": query_seq,
+        "reagents_df": reagents_df, "seq_len": seq_len,
+    }
 
-    plddt_col = _find_column(aa_df, "plddt")
-    cons_col = _find_column(aa_df, "blast")
-    if plddt_col is not None:
-        plddt = aa_df.set_index("pos")[plddt_col]
-        out["low_plddt"] = [plddt.get(p, float("nan")) < plddt_thresh for p in positions]
-    else:
-        out["low_plddt"] = False
-    if cons_col is not None:
-        cons = aa_df.set_index("pos")[cons_col]
-        out["low_conservation"] = [cons.get(p, float("nan")) < cons_thresh for p in positions]
-    else:
-        out["low_conservation"] = False
+    for c in criteria:
+        handler = SCORE_HANDLERS[c["type"]]
+        out[c["key"]] = handler(positions, c["params"], ctx)
 
-    if reagents_df is not None:
-        out["near_guide"] = [
-            _reagents_min_distance(reagents_df, p, "distance") < guide_bp for p in positions
-        ]
-        # nearest of the two splice distances; NaN (unknown) is excluded rather than
-        # compared directly, since min() with NaN operands is order-dependent
-        out["not_near_splice"] = [
-            min([d for d in (
-                _reagents_min_distance(reagents_df, p, "dist_to_5p_splice"),
-                _reagents_min_distance(reagents_df, p, "dist_to_3p_splice"),
-            ) if pd.notna(d)], default=float("nan")) >= splice_bp
-            for p in positions
-        ]
-    else:
-        out["near_guide"] = False
-        out["not_near_splice"] = False
-
-    out["small_aa_flanked"] = [
-        _small_aa_fraction(query_seq, p, window, small_aa) > small_frac for p in positions
-    ]
-
-    # NaN comparisons above evaluate False, which is the desired "no penalty" behavior
-    out["score"] = out[_CRITERIA].sum(axis=1).astype(int)
+    # NaN comparisons inside handlers evaluate False, which is the desired
+    # "no penalty" behavior
+    out["score"] = sum(c["weight"] * out[c["key"]] for c in criteria)
     return out
+
+
+def write_run_scores(run_json_path, config=None, output_path=None):
+    """Compute tag-site scores for a completed run and write them to a TSV.
+
+    Loads the run JSON's analysis tracks (aa_df/range_df/reagents_df), scores
+    every position, and writes pos + one bool column per criterion + score to
+    `output_path` (default: <working_dir>/<run_name>.scores.tsv next to the run
+    JSON). Returns the output path.
+    """
+    # local imports avoid a hard circular dependency at module load time
+    from config import RESULTS_TYPE_DICT
+    from utils.results import load_data_from_json, load_run_metadata, load_reagents_df
+
+    with open(run_json_path) as f:
+        run_json = json.load(f)
+
+    aa_df, range_df, _ = load_data_from_json(run_json, RESULTS_TYPE_DICT)
+    meta = load_run_metadata(run_json)
+    reagents_df = load_reagents_df(run_json)
+
+    config = config or load_scoring_config()
+    scores_df = score_tag_sites(aa_df, range_df, meta.get("query_seq", ""), reagents_df, config)
+
+    if output_path is None:
+        g = run_json.get("global", {})
+        working_dir = g.get("working_dir", "")
+        run_name = g.get("run_name", "")
+        output_path = str(Path(working_dir) / f"{run_name}.scores.tsv")
+
+    scores_df.to_csv(output_path, sep="\t")
+    return output_path

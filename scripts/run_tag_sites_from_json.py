@@ -12,9 +12,11 @@ Matt Rich, 09/24 / updated 2026
 import subprocess, os, json, sys, threading
 from pathlib import Path
 
-# ensure scripts/ is on sys.path for sibling imports
+# ensure scripts/ and the repo root are on sys.path for sibling/utils imports
 _SCRIPTS = Path(__file__).parent
+_ROOT = _SCRIPTS.parent
 sys.path.insert(0, str(_SCRIPTS))
+sys.path.insert(0, str(_ROOT))
 import run_status
 import progress
 from task_registry import task_script
@@ -240,6 +242,15 @@ def main(json_input_file, force=False):
                                    status="failed", message=msg, stage="failed")
 
     print("####DONE WITH ANALYSIS####")
+
+    # compute and persist tag-site scores (see utils/scoring.py, issue #32) —
+    # best-effort: a scoring failure shouldn't fail an otherwise-successful run
+    try:
+        from utils.scoring import write_run_scores
+        scores_path = write_run_scores(json_input_file)
+        print(f"Wrote tag-site scores: {scores_path}")
+    except Exception as e:
+        print(f"Warning: could not write tag-site scores: {e}")
 
 
 if __name__ == "__main__":
