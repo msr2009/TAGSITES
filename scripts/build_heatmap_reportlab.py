@@ -35,7 +35,7 @@ MARGIN_BOT  = 32
 FONT_SIZE   = 11   # cell letters — sized to fit within CELL_W=20
 LABEL_FONT  = 9
 TICK_FONT   = 11
-LABEL_MAXLEN = 30
+LABEL_MAXLEN = 45
 
 
 def parse_fasta_alignment(fasta_file):

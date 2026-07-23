@@ -6,6 +6,7 @@ Matt Rich, 9/2024 / updated 2026 — EBI REST calls via ebi_rest.py
 
 import json
 import os
+import re
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -72,6 +73,23 @@ def parse_dbfetch_fasta_record(raw_text):
     name = raw_text.split("\n")[0].split()[0]
     seq  = "".join(ln for ln in raw_text.split("\n") if not ln.startswith(">"))
     return name, seq
+
+
+def format_seq_label(acc, species):
+    """Build a FASTA header/label combining UniProt accession and species,
+    e.g. "P12345_H_sapiens" — always keeps the accession so sequences stay
+    traceable even when the species string is missing or unusual. Genus is
+    abbreviated and anything past the binomial (strain/collection codes,
+    which can run to 100+ chars in UniProt's hit_os field) is dropped.
+    """
+    acc = acc.split()[0]
+    parts = (species or "").split()
+    if len(parts) >= 2:
+        binomial = f"{parts[0][0]}_{parts[1]}"
+    else:
+        binomial = parts[0] if parts else ""
+    species_clean = re.sub(r"[^A-Za-z0-9]+", "_", binomial).strip("_")
+    return f"{acc}_{species_clean}" if species_clean else acc
 
 
 def ensure_query_in_alignment_set(fasta_str_list, input_match, seq_name, seq):
@@ -196,7 +214,8 @@ def main(fasta_in, email, workingdir, name, output,
     if not align_full_seqs:
         # sequences come directly from the BLAST result — no network call needed
         for _, h in ordered_hits:
-            fasta_str_list.append(">{}\n{}\n".format(h["acc"].split()[0], h["hitseq"]))
+            fasta_str_list.append(">{}\n{}\n".format(
+                format_seq_label(h["acc"], h["species"]), h["hitseq"]))
     else:
         accs = [h["acc"] for _, h in ordered_hits]
         _WORKERS = 10
@@ -233,18 +252,19 @@ def main(fasta_in, email, workingdir, name, output,
             acc = h["acc"]
             if acc not in fasta_dict:
                 continue
-            acc_fasta_name, acc_fasta_seq = fasta_dict[acc]
+            _, acc_fasta_seq = fasta_dict[acc]
+            label = format_seq_label(acc, h["species"])
 
             if acc_fasta_seq == seq:
-                _report(reporter, f"found match to input: {acc_fasta_name}", stage="dbfetch")
-                input_match = acc_fasta_name[1:]
+                _report(reporter, f"found match to input: {label}", stage="dbfetch")
+                input_match = label
 
             hit_len = float(len(acc_fasta_seq))
             if length_percent != 0:
                 if hit_len / seq_len < length_percent or hit_len / seq_len > 1 / length_percent:
                     continue
 
-            fasta_str_list.append(acc_fasta_name + "\n" + acc_fasta_seq.rstrip("\n") + "\n")
+            fasta_str_list.append(">{}\n{}\n".format(label, acc_fasta_seq.rstrip("\n")))
 
     # if no exact match to input, insert our query sequence at the front
     if input_match == "":
