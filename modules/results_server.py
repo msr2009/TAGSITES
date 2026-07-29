@@ -453,7 +453,7 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
     def json_upload_card():
         """Render the JSON upload card; collapsed and warning-free when data is loaded."""
         return _json_upload_card(
-            "json_file_input", "ts-json-body", "Upload results JSON",
+            "json_file_input", "ts-json-body", "Upload results JSON/ZIP",
             run_name.get() is not None,
         )
 

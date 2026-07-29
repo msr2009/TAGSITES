@@ -23,7 +23,7 @@ def json_upload_card(input_id, body_id, title, has_json):
             ),
             ui.div(
                 ui.div(
-                    compact_file_input(input_id, "Load JSON or ZIP", accept=[".json", ".zip"]),
+                    compact_file_input(input_id, "Load JSON (.run.json) or ZIP", accept=[".json", ".zip"]),
                     ui.div(
                         ui.tags.span(
                             class_="spinner-border spinner-border-sm text-secondary",

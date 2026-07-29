@@ -116,7 +116,7 @@ def progress_ui():
                        "bundled; in-progress or queued tasks are skipped and can be "
                        "included by downloading again later."),
             ),
-            ui.input_switch("auto_download", "Auto-download when finished", value=False),
+            ui.input_switch("auto_download", "Auto-download when finished", value=True),
             class_="save-bar",
         ),
     )
