@@ -123,6 +123,13 @@ def _handle_range_absent(positions, params, ctx):
     return [p not in mask for p in positions]
 
 
+def _handle_range_present(positions, params, ctx):
+    """True where the position is NOT covered by any range interval from the given sources."""
+    mask = _range_mask(ctx["range_df"], set(params["sources"]), ctx["seq_len"],
+                        exclude_descriptions=params.get("exclude_descriptions"))
+    return [p in mask for p in positions]
+
+
 def _handle_column_below(positions, params, ctx):
     """True where the aa_df column for `analysis` is below `threshold` (None if column missing)."""
     col = _find_column(ctx["aa_df"], params["analysis"])
@@ -168,6 +175,7 @@ def _handle_flank_small_fraction(positions, params, ctx):
 
 SCORE_HANDLERS = {
     "range_absent":         _handle_range_absent,
+	"range_present":		_handle_range_present,
     "column_below":         _handle_column_below,
     "reagent_min_below":    _handle_reagent_min_below,
     "reagent_min_above":    _handle_reagent_min_above,
