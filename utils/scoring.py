@@ -124,10 +124,10 @@ def _handle_range_absent(positions, params, ctx):
 
 
 def _handle_column_below(positions, params, ctx):
-    """True where the aa_df column for `analysis` is below `threshold` (False if column missing)."""
+    """True where the aa_df column for `analysis` is below `threshold` (None if column missing)."""
     col = _find_column(ctx["aa_df"], params["analysis"])
     if col is None:
-        return [False] * len(positions)
+        return [None] * len(positions)
     series = ctx["aa_df"].set_index("pos")[col]
     threshold = params["threshold"]
     return [series.get(p, float("nan")) < threshold for p in positions]
@@ -136,7 +136,7 @@ def _handle_column_below(positions, params, ctx):
 def _handle_reagent_min_below(positions, params, ctx):
     """True where the minimum reagents-TSV `column` value for this position is below `threshold`."""
     if ctx["reagents_df"] is None:
-        return [False] * len(positions)
+        return [None] * len(positions)
     column, threshold = params["column"], params["threshold"]
     return [_reagents_min_distance(ctx["reagents_df"], p, column) < threshold for p in positions]
 
@@ -144,7 +144,7 @@ def _handle_reagent_min_below(positions, params, ctx):
 def _handle_reagent_min_above(positions, params, ctx):
     """True where the nearest of several reagents-TSV distance columns is at least `threshold`."""
     if ctx["reagents_df"] is None:
-        return [False] * len(positions)
+        return [None] * len(positions)
     columns, threshold = params["columns"], params["threshold"]
     out = []
     for p in positions:
@@ -182,8 +182,10 @@ def score_tag_sites(aa_df, range_df, query_seq, reagents_df=None, config=None):
     to the position's score when satisfied; missing data contributes 0 rather
     than penalizing the position.
 
-    Returns a DataFrame indexed by 1-based `pos` with one bool column per
-    criterion plus a numeric "score" column (weighted sum of the criteria columns).
+    Returns a DataFrame indexed by 1-based `pos` with one column per criterion
+    (True/False, or None where the underlying data wasn't available — e.g. no
+    Reagents run) plus a numeric "score" column (weighted sum, None counting
+    as 0/not-satisfied).
     """
     config = config or load_scoring_config()
     criteria = config["criteria"]
@@ -204,9 +206,9 @@ def score_tag_sites(aa_df, range_df, query_seq, reagents_df=None, config=None):
         handler = SCORE_HANDLERS[c["type"]]
         out[c["key"]] = handler(positions, c["params"], ctx)
 
-    # NaN comparisons inside handlers evaluate False, which is the desired
-    # "no penalty" behavior
-    out["score"] = sum(c["weight"] * out[c["key"]] for c in criteria)
+    # NaN comparisons inside handlers evaluate False, and None (missing data)
+    # is treated as not-satisfied — both are the desired "no penalty" behavior
+    out["score"] = sum(c["weight"] * out[c["key"]].apply(lambda v: bool(v)) for c in criteria)
     return out
 
 

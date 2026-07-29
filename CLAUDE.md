@@ -41,9 +41,11 @@ scripts/                # core analysis executables
   extract_from_pdb.py         # pLDDT + SASA from AlphaFold PDB
   regex_sites.py              # PTM site identification
   call_interpro.py            # EBI InterPro domain annotation
+  uniprot_features.py         # curated UniProt feature annotation (lipidation, PTMs, binding sites, ...)
   calculate_protein_scores.py # sliding-window property scoring
   site_selection_util.py      # shared library: FASTA/PDB I/O, BLAST API, sequence utils
   existing_AF_model.py        # search AFDB for existing predictions
+  uniprot_api.py               # shared UniProt REST helpers (checksum lookup, entry fetch)
   design_guides_across_region.py  # CRISPR guide design
 
 utils/
@@ -79,4 +81,5 @@ Key dependencies: `shiny`, `biopython`, `plotly`, `pandas`, `scipy`, `scikit-lea
 - **NCBI BLAST** (via EBI REST API) — `scripts/site_selection_util.py:ncbiblast_call()`
 - **EBI InterPro API** — `scripts/call_interpro.py`
 - **AlphaFold DB** — `scripts/existing_AF_model.py`
+- **UniProt REST** (entry fetch + checksum lookup) — `scripts/uniprot_api.py`, used by `scripts/uniprot_features.py` and `scripts/existing_AF_model.py`
 - **UniProt taxonomy** — `uniprot_species.flat.txt` (local flat file, ~1.7MB)

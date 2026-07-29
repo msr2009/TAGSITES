@@ -69,6 +69,18 @@
 			"params": {}
 		},
 
+		"uniprot": {
+			"script":        "uniprot_features.py",
+			"result_type":   "range",
+			"output_suffix": ".txt",
+			"selectable":    true,
+			"params": {
+				"features_file": { "default": "./tables/uniprot_features.txt", "tooltip": "Tab-delimited file of UniProt feature types to fetch and their severity (blocking vs. informational)" },
+				"accession":     { "default": "", "tooltip": "UniProt accession to use directly (e.g. Q22038). Leave blank to auto-detect from the FASTA header or sequence checksum." },
+				"taxid":         { "default": "", "tooltip": "UniProt taxonomic ID to constrain the sequence-checksum lookup (only used if accession is blank)" }
+			}
+		},
+
 		"scores": {
 			"script":        "calculate_protein_scores.py",
 			"result_type":   "continuous",

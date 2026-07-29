@@ -36,6 +36,7 @@ TASK_DESCRIPTIONS = {
     "plddt":         "Extracts per-residue AlphaFold confidence (pLDDT) and solvent accessibility (SASA) from a PDB structure.",
     "modifications": "Identifies post-translational modification sites (phosphorylation, ubiquitination, etc.) by regex pattern matching.",
     "domains":       "Annotates protein domains and functional families via the EBI InterPro API.",
+    "uniprot":       "Fetches curated UniProt features (lipidation, propeptides, binding sites, PTMs, ...) that may indicate an untaggable region.",
     "scores":        "Computes a sliding-window amino acid property score (e.g. hydrophobicity) along the sequence.",
 }
 

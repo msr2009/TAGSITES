@@ -44,6 +44,8 @@ DOMAIN_SOURCE_COLORS = {
     "Phobius":      "#9467bd",   # purple
     "Pfam":         "#17becf",   # teal
     "modification": "#d62728",   # red
+    "UniProt":      "#795548",   # brown — blocking features (lipidation, propeptide, ...)
+    "UniProt_site": "#8d6e63",   # lighter brown — informational features (binding site, motif, ...)
 }
 
 # isoform classification colors (constitutive → green, intermediate → amber, unique → red)

@@ -13,6 +13,7 @@
 		"plddt": "extract_from_pdb.py",
 		"modifications": "regex_sites.py",
 		"domains": "call_interpro.py",
+		"uniprot": "uniprot_features.py",
 		"scores": "calculate_protein_scores.py",
 		"reagents": "design_tag_reagents.py"
 	},
@@ -84,6 +85,21 @@
 				"output": ".txt"
 			},
 			"tooltips": {}
+		},
+		"uniprot": {
+			"name": "",
+			"type": "uniprot",
+			"args": {
+				"features_file": "./tables/uniprot_features.txt",
+				"accession": "",
+				"taxid": "",
+				"output": ".txt"
+			},
+			"tooltips": {
+				"features_file": "Tab-delimited file of UniProt feature types to fetch and their severity (blocking vs. informational)",
+				"accession": "UniProt accession to use directly (e.g. Q22038). Leave blank to auto-detect from the FASTA header or sequence checksum.",
+				"taxid": "UniProt taxonomic ID to constrain the sequence-checksum lookup (only used if accession is blank)"
+			}
 		},
 		"scores": {
 			"name": "",

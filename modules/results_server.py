@@ -167,7 +167,7 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
                 else:
                     choices[col] = col
         if range_df is not None and not range_df.empty:
-            if not range_df[range_df["source"].isin({"Pfam", "modification"})].empty:
+            if not range_df[range_df["source"].isin({"Pfam", "modification", "UniProt", "UniProt_site"})].empty:
                 choices["__domains__"] = "Domains"
             if not range_df[range_df["source"] == "Phobius"].empty:
                 choices["__phobius__"] = "Phobius"

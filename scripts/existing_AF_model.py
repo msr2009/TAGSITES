@@ -27,21 +27,13 @@ Matt Rich, 4/2024 / updated 2026 — EBI REST calls via ebi_rest.py
 import sys
 import requests
 from pathlib import Path
-from Bio.SeqUtils.CheckSum import crc64
 
 from site_selection_util import get_sequence, uniprot_accession_regex, save_fasta
+from uniprot_api import checksum_lookup_response_to_accession, checksum_lookup as _uniprot_checksum_lookup
 
 sys.path.insert(0, str(Path(__file__).parent))
 import ebi_rest
 from progress import report as _report, resolve_reporter, timed_poll_adapter
-
-
-def checksum_lookup_response_to_accession(resp_json):
-    """Extract the first matching UniProt accession from a checksum-search response, or None."""
-    results = resp_json.get("results", [])
-    if results:
-        return results[0]["primaryAccession"]
-    return None
 
 
 def blast_tsv_line_to_afdb_hit(line):
@@ -53,24 +45,6 @@ def blast_tsv_line_to_afdb_hit(line):
 def is_afdb_not_found(pdb_text):
     """EBI dbfetch returns a plain-text 'ERROR ...' message when an AFDB accession isn't found."""
     return "ERROR" in pdb_text[:50]
-
-
-def _uniprot_checksum_lookup(seq, taxid=None):
-    """Query UniProt REST API for an exact sequence match by CRC64 checksum.
-
-    Returns the first matching UniProt accession, or None.
-    """
-    checksum = crc64(seq).replace("CRC-", "")  # Biopython adds "CRC-" prefix; UniProt expects bare hex
-    query = f"checksum:{checksum}"
-    if str(taxid) not in ("", "1", "1.0", "None", None):
-        query += f" AND taxonomy_id:{taxid}"
-    resp = requests.get(
-        "https://rest.uniprot.org/uniprotkb/search",
-        params={"query": query, "format": "json", "fields": "accession", "size": 1},
-        timeout=15,
-    )
-    resp.raise_for_status()
-    return checksum_lookup_response_to_accession(resp.json())
 
 
 def search_AFDB(fasta_in, email, workingdir, name, taxid, evalue, percentid,

@@ -380,7 +380,8 @@ def plot_results(aa_df, range_df, title="Results Plot"):
     # "Transmembrane" (both Phobius) are visually distinguishable, not just
     # all-Phobius-is-purple.
     height = 2
-    y_positions = {"Phobius": 2, "Pfam": 4, "modification": 6, "hydrophobic_patch": 8}
+    y_positions = {"Phobius": 2, "Pfam": 4, "modification": 6, "hydrophobic_patch": 8,
+                   "UniProt": 10, "UniProt_site": 12}
     color_map = _annotation_color_map(range_df)
 
     # opacity for hydrophobic patches scales with total patch hydrophobicity
@@ -609,13 +610,13 @@ _ANNOTATION_PALETTE = [
 ]
 
 # Sources shown in the 2D feature panel
-_FEATURE_SOURCES = {"Pfam", "Phobius", "modification", "hydrophobic_patch"}
+_FEATURE_SOURCES = {"Pfam", "Phobius", "modification", "hydrophobic_patch", "UniProt", "UniProt_site"}
 
 # Sources painted in the __domains__ structure colorscheme (Phobius has its own scheme)
-_DOMAIN_STRUCT_SOURCES = {"Pfam", "modification"}
+_DOMAIN_STRUCT_SOURCES = {"Pfam", "modification", "UniProt", "UniProt_site"}
 
-# paint priority: last painted wins; modifications end up on top
-_FEATURE_PAINT_ORDER = ["Pfam", "Phobius", "modification"]
+# paint priority: last painted wins; modifications and UniProt features end up on top
+_FEATURE_PAINT_ORDER = ["Pfam", "Phobius", "modification", "UniProt_site", "UniProt"]
 
 
 def _annotation_color_map(range_df):
@@ -802,7 +803,8 @@ def build_plot_payload(aa_df, range_df, title="Results"):
     NaN values in aa_df are converted to None (→ null in JSON).
     """
     # isoforms row sits lowest (nearest the sequence strip); others stack above
-    y_positions = {"isoforms": 1, "Phobius": 3, "Pfam": 5, "modification": 7, "hydrophobic_patch": 9}
+    y_positions = {"isoforms": 1, "Phobius": 3, "Pfam": 5, "modification": 7, "hydrophobic_patch": 9,
+                   "UniProt": 11, "UniProt_site": 13}
 
     line_tracks = []
     data_max = -float("inf")

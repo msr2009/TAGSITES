@@ -430,7 +430,7 @@ def _dilate_and_merge_patches(seed_patches, rep_atoms, atom_to_idx, ns, dilation
 
 
 def calc_hydrophobic_patches(pdb_file, hydro_scores, rsasa_cutoff=0.20, dist_cutoff=8.0,
-							  dilation_radius=8.0, min_seed_size=3, max_sasa_dict=None):
+							  dilation_radius=4.0, min_seed_size=3, max_sasa_dict=None):
 	"""
 	identify hydrophobic patches on the solvent-exposed surface of a structure.
 
@@ -452,7 +452,7 @@ def calc_hydrophobic_patches(pdb_file, hydro_scores, rsasa_cutoff=0.20, dist_cut
 	- rsasa_cutoff (float): minimum relative SASA to call a residue "surface" (default 0.20)
 	- dist_cutoff (float): distance (Angstroms) for seed-to-seed core edges (default 8.0)
 	- dilation_radius (float): distance (Angstroms) to grow each core's footprint by;
-		0 = no dilation, i.e. patch == core (default 8.0)
+		0 = no dilation, i.e. patch == core (default 4.0)
 	- min_seed_size (int): minimum seed-residue count for a core to be reported (default 3)
 	- max_sasa_dict (dict): optional override for per-residue-type max SASA (Tien 2013 default)
 

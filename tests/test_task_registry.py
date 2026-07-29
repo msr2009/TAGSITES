@@ -40,7 +40,7 @@ def test_global_keys_contains_canonical_fields():
 # ── AVAILABLE_TASKS / SELECTABLE_TASKS ───────────────────────────────────────
 
 def test_available_tasks_includes_core_types():
-    for t in ("blast", "plddt", "modifications", "domains", "scores", "reagents"):
+    for t in ("blast", "plddt", "modifications", "domains", "uniprot", "scores", "reagents"):
         assert t in AVAILABLE_TASKS, f"'{t}' missing from AVAILABLE_TASKS"
 
 
@@ -50,7 +50,7 @@ def test_reagents_not_selectable():
 
 
 def test_core_analyses_selectable():
-    for t in ("blast", "plddt", "modifications", "domains", "scores"):
+    for t in ("blast", "plddt", "modifications", "domains", "uniprot", "scores"):
         assert t in SELECTABLE_TASKS, f"'{t}' should be selectable"
 
 
@@ -220,6 +220,9 @@ class TestResultType:
 
     def test_domains_is_range(self):
         assert result_type("domains") == "range"
+
+    def test_uniprot_is_range(self):
+        assert result_type("uniprot") == "range"
 
     def test_reagents_is_none(self):
         assert result_type("reagents") == "none"

@@ -178,6 +178,17 @@ def run_domains(args, report=None, job_id_cb=None, resume_job_ids=None):
     )
 
 
+def run_uniprot(args, report=None, job_id_cb=None, resume_job_ids=None):
+    """Run uniprot_features.main() from a JSON args dict."""
+    import uniprot_features
+    fasta_in = _str(args.get("input_file") or args.get("fasta"))
+    output   = _str(args.get("output"))
+    features_file = _str(args.get("features_file"), "./tables/uniprot_features.txt")
+    accession = _str(args.get("accession"))
+    taxid     = _str(args.get("taxid"))
+    uniprot_features.main(fasta_in, output, features_file, accession, taxid, report=report)
+
+
 def run_scores(args, report=None, job_id_cb=None, resume_job_ids=None):
     """Run calculate_protein_scores.main() from a JSON args dict."""
     import calculate_protein_scores
@@ -253,6 +264,7 @@ TASK_RUNNERS = {
     "plddt":         run_plddt,
     "modifications": run_modifications,
     "domains":       run_domains,
+    "uniprot":       run_uniprot,
     "scores":        run_scores,
     "reagents":      run_reagents,
 }

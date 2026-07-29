@@ -1,0 +1,28 @@
+# uniprot_features.txt — which UniProt feature types to fetch and how to treat them.
+#
+# Tab-delimited: feature_type <tab> severity <tab> label
+#   feature_type — must match UniProt's "type" field exactly (case-sensitive)
+#   severity     — "blocking" (site is UniProt track, penalized by not_in_uniprot_feature
+#                  scoring criterion) or "site" (site is UniProt_site track, informational only)
+#   label        — short human-readable name shown in the Results plot legend
+#
+# Feature types not listed here are ignored. Lines starting with # and blank
+# lines are ignored. To add/remove a tracked feature type, edit this file only.
+
+Lipidation		blocking	Lipidation
+Propeptide		blocking	Propeptide
+Signal			blocking	Signal peptide
+Transit peptide	blocking	Transit peptide
+Initiator methionine	blocking	Initiator methionine
+Cross-link		blocking	Cross-link
+Disulfide bond		blocking	Disulfide bond
+Transmembrane		blocking	Transmembrane
+
+Binding site		site	Binding site
+Active site		site	Active site
+Site			site	Site
+Modified residue	site	Modified residue
+Glycosylation		site	Glycosylation
+Motif			site	Motif
+DNA binding		site	DNA binding
+Region			site	Region

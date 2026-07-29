@@ -26,6 +26,7 @@ import run_status
 import run_tag_sites_from_json
 from task_registry import task_defaults, task_output_suffix
 from setup_logic import build_global_block, build_task_entry, build_reagents_entry, build_run_json
+from fetch_genomic_sequence import fetch_genomic_sequence
 
 
 def _sniff_delimiter(manifest_path):
@@ -42,7 +43,33 @@ def read_manifest(manifest_path):
         return list(csv.DictReader(f, delimiter=delimiter))
 
 
-def build_protein_run_json(row, template, default_email, output_root):
+def _autofetch_genomic(row, run_name, working_dir, taxid, flank_bp):
+    """Fetch genomic FASTA from Ensembl for a manifest row's gene, saved next to the run.
+
+    Only runs when the row has no genomic_file already and names a 'gene'
+    column; mirrors the setup_server.py "Fetch" button in the Shiny app.
+    Returns the path written, or "" if the row can't/shouldn't be fetched.
+    """
+    gene_symbol = row.get("gene", "").strip()
+    if not gene_symbol:
+        return ""
+    try:
+        fasta_text, meta = fetch_genomic_sequence(taxid, gene_symbol, flank_bp=flank_bp)
+    except Exception as e:
+        print(f"WARNING: genomic auto-fetch failed for {run_name} ({gene_symbol}): {e}",
+              file=sys.stderr)
+        return ""
+    if meta["ambiguous"]:
+        print(f"WARNING: {run_name}: {gene_symbol} matched {len(meta['candidates'])} "
+              f"genes; used {meta['gene_id']} (longest genomic span) — verify this is correct.",
+              file=sys.stderr)
+    genomic_path = os.path.join(working_dir, f"{run_name}.genomic.fa")
+    with open(genomic_path, "w") as f:
+        f.write(fasta_text)
+    return genomic_path
+
+
+def build_protein_run_json(row, template, default_email, output_root, taxid="", flank_bp=2000):
     """Build the full run JSON dict + its destination path for one manifest row."""
     run_name = row["run_name"]
     working_dir = row.get("working_dir") or os.path.join(output_root, run_name)
@@ -50,13 +77,17 @@ def build_protein_run_json(row, template, default_email, output_root):
         working_dir += "/"
     os.makedirs(working_dir, exist_ok=True)
 
+    genomic_file = row.get("genomic_file", "")
+    if not genomic_file and taxid:
+        genomic_file = _autofetch_genomic(row, run_name, working_dir, taxid, flank_bp)
+
     global_block = build_global_block(
         email=row.get("email") or default_email,
         run_name=run_name,
         working_dir=working_dir,
         input_file=row["input_file"],
         pdb=row.get("pdb", ""),
-        genomic_file=row.get("genomic_file", ""),
+        genomic_file=genomic_file,
     )
 
     task_entries = []
@@ -77,7 +108,6 @@ def build_protein_run_json(row, template, default_email, output_root):
         )
 
     reagents_entry = None
-    genomic_file = row.get("genomic_file", "")
     if genomic_file:
         defaults = reagents_template["args"] if reagents_template else task_defaults("reagents")
         reagents_entry = build_reagents_entry(
@@ -115,7 +145,8 @@ def run_one(run_json_path, force):
     return run_name, True, "ok"
 
 
-def main(manifest_path, params_path, email, output_root, max_concurrent=3, force=False):
+def main(manifest_path, params_path, email, output_root, max_concurrent=3, force=False,
+         taxid="", flank_bp=2000):
     """Build and run one pipeline per manifest row, capped at max_concurrent concurrent proteins."""
     with open(params_path) as f:
         template = json.load(f)
@@ -126,7 +157,8 @@ def main(manifest_path, params_path, email, output_root, max_concurrent=3, force
 
     run_json_paths = []
     for row in rows:
-        run_json_path, run_json = build_protein_run_json(row, template, email, output_root)
+        run_json_path, run_json = build_protein_run_json(
+            row, template, email, output_root, taxid=taxid, flank_bp=flank_bp)
         with open(run_json_path, "w") as f:
             json.dump(run_json, f, indent=4)
         run_json_paths.append(run_json_path)
@@ -157,7 +189,18 @@ if __name__ == "__main__":
         "--manifest",
         required=True,
         help="CSV/TSV file, one row per protein (run_name, input_file, "
-        "and optional pdb, genomic_file, working_dir, email columns)",
+        "and optional pdb, genomic_file, gene, working_dir, email columns)",
+    )
+    parser.add_argument(
+        "--taxid", default="",
+        help="NCBI taxid to resolve each row's 'gene' column against on Ensembl, "
+        "auto-fetching genomic FASTA for rows that omit 'genomic_file' "
+        "(e.g. 6239 for C. elegans). Omit to disable auto-fetch.",
+    )
+    parser.add_argument(
+        "--flank-bp", type=int, default=2000,
+        help="bp of flanking sequence to fetch on each side of the gene body "
+        "during genomic auto-fetch (default: 2000)",
     )
     parser.add_argument(
         "--params",
@@ -195,4 +238,6 @@ if __name__ == "__main__":
         args.output_root,
         max_concurrent=args.max_concurrent,
         force=args.force,
+        taxid=args.taxid,
+        flank_bp=args.flank_bp,
     )

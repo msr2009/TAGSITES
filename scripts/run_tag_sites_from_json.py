@@ -170,6 +170,32 @@ def main(json_input_file, force=False):
                 if os.path.exists(orig_json_path):
                     os.rename(orig_json_path, user_json_path)
                 _write_json(json_input_file, global_args, tasks)
+            else:
+                # no AFDB structure found — fine as long as we still have a real
+                # input sequence for the other (independent) tasks to run on;
+                # only fatal if this run had no sequence of its own and was
+                # counting on the AFDB fetch to supply one.
+                input_file = global_args.get("input_file", "")
+                has_sequence = False
+                if input_file and os.path.exists(input_file):
+                    try:
+                        from site_selection_util import get_sequence
+                        has_sequence = bool(get_sequence(input_file))
+                    except Exception:
+                        has_sequence = False
+
+                if not has_sequence:
+                    raise RuntimeError(
+                        "No AlphaFold structure found in the AlphaFold DB, and no "
+                        "usable input protein sequence is available either — there "
+                        "is nothing to analyze. Please provide a valid protein "
+                        "FASTA (or PDB) as the input sequence and re-run."
+                    )
+
+                print(f"WARNING: no AlphaFold structure found in AFDB for {run_name}; "
+                      "pLDDT/SASA/hydrophobicity analysis will be skipped. Other "
+                      "analyses will continue using the provided input sequence.",
+                      file=sys.stderr)
 
     ###############################################
     # MAIN TASK LOOP — re-read JSON (may have been rewritten above)

@@ -360,8 +360,8 @@
 
   /* ── Feature panel (row 2: range annotations) ──────────────────────────────── */
 
-  var FEAT_ROWS = ["isoforms", "Phobius", "Pfam", "modification", "hydrophobic_patch"];
-  var FEAT_ROW_LABELS = {hydrophobic_patch: "Hydro. patch"};
+  var FEAT_ROWS = ["isoforms", "Phobius", "Pfam", "modification", "hydrophobic_patch", "UniProt", "UniProt_site"];
+  var FEAT_ROW_LABELS = {hydrophobic_patch: "Hydro. patch", UniProt: "UniProt", UniProt_site: "UniProt site"};
 
   function drawFeaturePanel(ctx, inf, layout) {
     var top = layout.featTop, h = layout.featH;

@@ -54,3 +54,6 @@ FORTESTING_DELETEWHENREADY/
 # Research/scratch notebooks
 notebooks/
 scripts/uniprot_species/speclist_testing.ipynb
+
+# Local model usage tracking
+MODELS.md

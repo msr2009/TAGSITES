@@ -8,7 +8,7 @@
             "max_hits": "100",
             "db": "uniprotkb_swissprot",
             "length": "",
-            "output": ".BROAD_blast.jsd"
+            "output": "data/src-1/src-1.BROAD_blast.jsd"
         }
     },
     "WORM_blast": {
@@ -20,30 +20,39 @@
             "max_hits": "100",
             "db": "uniprotkb",
             "length": ".7",
-            "output": ".WORM_blast.jsd"
+            "output": "data/src-1/src-1.WORM_blast.jsd"
         }
     },
     "AF2_plddt": {
         "type": "plddt",
         "args": {
             "pdb": "",
+            "existing_AF2": 1,
             "evalue": "",
             "percent_id": "",
-            "output": ".AF2_plddt.txt",
-            "existing_AF2": 1
+            "output": "data/src-1/src-1.AF2_plddt.txt"
         }
     },
     "MODS_modifications": {
         "type": "modifications",
         "args": {
             "sites_file": "./tables/modification_sites.txt",
-            "output": ".MODS_modifications.txt"
+            "output": "data/src-1/src-1.MODS_modifications.txt"
         }
     },
     "DOMAINS_domains": {
         "type": "domains",
         "args": {
-            "output": ".DOMAINS_domains.txt"
+            "output": "data/src-1/src-1.DOMAINS_domains.txt"
+        }
+    },
+    "UNIPROT_uniprot": {
+        "type": "uniprot",
+        "args": {
+            "features_file": "./tables/uniprot_features.txt",
+            "accession": "",
+            "taxid": "",
+            "output": "data/src-1/src-1.UNIPROT_uniprot.txt"
         }
     }
 }
