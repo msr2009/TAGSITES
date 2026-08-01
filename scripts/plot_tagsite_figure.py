@@ -51,8 +51,8 @@ def score_at_site(run_json, aa_df, range_df, site, config):
     return row["score"], criteria
 
 
-def main(run_json, site, outfile, approximate=False):
-    config = load_scoring_config()
+def main(run_json, site, outfile, approximate=False, config=None):
+    config = config or load_scoring_config()
     max_score = sum(c["weight"] for c in config["criteria"])
 
     aa_df, range_df, _alns = load_data_from_json(run_json, RESULTS_TYPE_DICT)
@@ -105,7 +105,10 @@ if __name__ == "__main__":
         help="PNG output path", required=True)
     parser.add_argument("--approximate", action="store_true", default=False,
         help="label the site as approximate in the plot title")
+    parser.add_argument("--config", action="store", type=str, dest="CONFIG", default=None,
+        help="path to a scores.config.json variant (default: repo scores.config.json)")
 
     args = parser.parse_args()
 
-    main(args.RUN_JSON, args.SITE, args.OUTFILE, args.approximate)
+    main(args.RUN_JSON, args.SITE, args.OUTFILE, args.approximate,
+         config=load_scoring_config(args.CONFIG) if args.CONFIG else None)
