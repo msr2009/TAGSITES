@@ -859,7 +859,7 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
     def _register_remove(task_id):
         """Register a one-off reactive effect that removes a task when its button fires."""
         @reactive.effect
-        @reactive.event(lambda: input[f"{task_id}_remove"]())
+        @reactive.event(lambda: input[f"{task_id}_remove"](), ignore_init=True)
         def _handler():
             _snapshot()
             tasks.set([t for t in tasks() if t["id"] != task_id])
@@ -867,7 +867,7 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
     def _register_table_upload(task_id):
         """Copy an uploaded TSV to /tables/, update snap, and re-render the card."""
         @reactive.effect
-        @reactive.event(lambda: input[f"{task_id}_add_table"]())
+        @reactive.event(lambda: input[f"{task_id}_add_table"](), ignore_init=True)
         def _handler():
             files = input[f"{task_id}_add_table"]()
             if not files:
@@ -895,6 +895,12 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
         tips    = task_tooltips(ttype)
         choices = task_choices(ttype)
         task = make_task(ttype, label, params, tips, choices)
+        if task["id"] in {t["id"] for t in tasks()}:
+            ui.notification_show(
+                f"A task named '{label}' of type '{ttype}' already exists.",
+                type="warning", duration=5,
+            )
+            return
         task["start_open"] = True   # newly added tasks open by default
         tasks.set(tasks() + [task])
         _register_remove(task["id"])
