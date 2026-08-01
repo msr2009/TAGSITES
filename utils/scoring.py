@@ -96,10 +96,33 @@ def _small_aa_fraction(query_seq, pos, window, small_aa):
     return sum(1 for aa in flank if aa in small_aa) / len(flank)
 
 
-def _reagents_min_distance(reagents_df, pos, column):
-    """Minimum value of `column` across all reagents-TSV rows for this residue, or NaN if absent."""
+def _reagents_min_by_residue(reagents_df, column):
+    """Precompute, once per (reagents_df, column), a residue_index -> min(column) Series.
+
+    Scoring every position of a run (rather than just the tagged site) turns the
+    naive per-position `reagents_df[reagents_df["residue_index"] == pos]` scan into
+    an O(positions x rows) cost against a 6-24MB DataFrame — the dominant cost of a
+    full-protein rescore. groupby-once + O(1) lookup preserves the exact prior
+    semantics (drop negative sentinels before the min; NaN when a residue has no
+    rows) while making it O(rows + positions).
+    """
+    if reagents_df is None or column not in reagents_df.columns:
+        return None
+    non_negative = reagents_df[reagents_df[column] >= 0]
+    return non_negative.groupby("residue_index")[column].min()
+
+
+def _reagents_min_distance(reagents_df, pos, column, _cache=None):
+    """Minimum value of `column` across all reagents-TSV rows for this residue, or NaN if absent.
+
+    `_cache` is an optional {column: Series} map from `_reagents_min_by_residue`,
+    used by the handlers below to avoid rescanning reagents_df per position.
+    """
     if reagents_df is None or column not in reagents_df.columns:
         return float("nan")
+    if _cache is not None:
+        series = _cache.get(column)
+        return series.get(pos, float("nan")) if series is not None else float("nan")
     rows = reagents_df[reagents_df["residue_index"] == pos]
     if rows.empty:
         return float("nan")
@@ -140,12 +163,21 @@ def _handle_column_below(positions, params, ctx):
     return [series.get(p, float("nan")) < threshold for p in positions]
 
 
+def _reagents_cache_for(ctx, column):
+    """Get (building + memoizing on ctx if needed) the per-residue min Series for `column`."""
+    cache = ctx.setdefault("_reagents_cache", {})
+    if column not in cache:
+        cache[column] = _reagents_min_by_residue(ctx["reagents_df"], column)
+    return cache
+
+
 def _handle_reagent_min_below(positions, params, ctx):
     """True where the minimum reagents-TSV `column` value for this position is below `threshold`."""
     if ctx["reagents_df"] is None:
         return [None] * len(positions)
     column, threshold = params["column"], params["threshold"]
-    return [_reagents_min_distance(ctx["reagents_df"], p, column) < threshold for p in positions]
+    cache = _reagents_cache_for(ctx, column)
+    return [_reagents_min_distance(ctx["reagents_df"], p, column, cache) < threshold for p in positions]
 
 
 def _handle_reagent_min_above(positions, params, ctx):
@@ -153,11 +185,14 @@ def _handle_reagent_min_above(positions, params, ctx):
     if ctx["reagents_df"] is None:
         return [None] * len(positions)
     columns, threshold = params["columns"], params["threshold"]
+    for c in columns:
+        _reagents_cache_for(ctx, c)
+    cache = ctx["_reagents_cache"]
     out = []
     for p in positions:
         # nearest of the distance columns; NaN (unknown) is excluded rather than
         # compared directly, since min() with NaN operands is order-dependent
-        dists = [d for d in (_reagents_min_distance(ctx["reagents_df"], p, c) for c in columns)
+        dists = [d for d in (_reagents_min_distance(ctx["reagents_df"], p, c, cache) for c in columns)
                  if pd.notna(d)]
         out.append(min(dists, default=float("nan")) >= threshold)
     return out
