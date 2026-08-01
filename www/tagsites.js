@@ -151,24 +151,6 @@
     return steps[steps.length - 1];
   }
 
-  // Generate ~n nice y-tick values spanning [yMin, yMax].
-  function niceYTicks(yMin, yMax, n) {
-    var span = yMax - yMin;
-    var rawStep = span / n;
-    var mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
-    var mults = [1, 2, 2.5, 5, 10];
-    var step = mag * mults[mults.length - 1];
-    for (var i = 0; i < mults.length; i++) {
-      if (mag * mults[i] >= rawStep) { step = mag * mults[i]; break; }
-    }
-    var ticks = [];
-    var start = Math.ceil(yMin / step) * step;
-    for (var v = start; v <= yMax + 1e-9; v += step) {
-      ticks.push(parseFloat(v.toPrecision(6)));
-    }
-    return ticks;
-  }
-
   // Format a y-tick value compactly.
   function fmtVal(v) {
     if (!isFinite(v)) return "";
@@ -294,21 +276,14 @@
 
     if (lineTracks.length === 0) return;
 
-    // fixed y ceiling (plotYMax); auto-range only the minimum
-    var yMin = Infinity;
+    // y-axis is pinned to 0 at the bottom (scores are normalized to [0, 1])
+    var yMin = 0;
     var yMax = plotYMax;
-    lineTracks.forEach(function (tr) {
-      if (hiddenTracks.has(tr.name)) return;
-      tr.values.forEach(function (v) {
-        if (v !== null && isFinite(v) && v < yMin) yMin = v;
-      });
-    });
-    if (!isFinite(yMin)) yMin = 0;
-    if (yMin >= yMax)    yMin = yMax - 1;
+    if (yMin >= yMax) yMax = yMin + 1;
     var ySpan = yMax - yMin;
 
-    // y-axis grid lines and tick labels
-    var yTicks = niceYTicks(yMin, yMax, 4);
+    // fixed tick set at quarter intervals, filtered to what's on-screen
+    var yTicks = [0, 0.25, 0.5, 0.75, 1.0].filter(function (v) { return v <= yMax + 1e-9; });
     ctx.textAlign    = "right";
     ctx.textBaseline = "middle";
     ctx.font         = "10px sans-serif";
@@ -1049,13 +1024,17 @@
     plotTitle     = msg.title  || "";
     plotYMax      = (typeof msg.yMax === "number") ? msg.yMax : 1.1;
     lineTracks    = msg.lineTracks    || [];
+    // sasa and hydrophobicity lines clutter the default view — start them hidden
+    var defaultHidden = lineTracks
+      .map(function (tr) { return tr.name; })
+      .filter(function (n) { return /_sasa$/.test(n) || /_hydro$/.test(n); });
     rangeFeatures = msg.rangeFeatures || [];
     seqArray      = (msg.seq || "").split("");
     scoreTrack    = msg.scoreTrack    || [];
     scoreFlags    = msg.scoreFlags    || [];
     scoreMax      = (typeof msg.scoreMax === "number" && msg.scoreMax > 0) ? msg.scoreMax : 1;
     suggestedSites = msg.suggestedSites || [];
-    hiddenTracks  = new Set();
+    hiddenTracks  = new Set(defaultHidden);
     committedSet.clear();
     perResidueColors = [];
     currentRange     = null;
@@ -1083,6 +1062,17 @@
     var pane = document.getElementById("ts-struct-pane");
     if (pane) pane.style.display = "flex";
     initViewer(msg.pdb);
+  });
+
+  Shiny.addCustomMessageHandler("tagsites_clear_struct", function (msg) {
+    if (viewer) {
+      viewer.clear();
+      viewer = null;
+    }
+    var container = document.getElementById("ts-viewer-container");
+    if (container) container.innerHTML = "";
+    var pane = document.getElementById("ts-struct-pane");
+    if (pane) pane.style.display = "none";
   });
 
   Shiny.addCustomMessageHandler("tagsites_set_states", function (msg) {

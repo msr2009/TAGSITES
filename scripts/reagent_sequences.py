@@ -476,14 +476,18 @@ def design_genotyping_primers(left_flank, right_flank, insert_sequence,
     primers held flank_min-flank_max bp away — verifies the WT locus / detects any
     size change at the site.
 
-    Insert sequence given: the external pair above, plus a 5' and 3' junction pair,
-    attempted regardless of insert length. Each junction pair is designed as a
-    genuine primer3 pair — the genomic-side primer is designed first (single-primer
-    mode), then pinned via SEQUENCE_PRIMER/SEQUENCE_PRIMER_REVCOMP so primer3 designs
-    a true, Tm-/dimer-compatible internal partner on the in-silico edited allele
-    sequence (left_flank + insert_sequence + right_flank) — not matched after the fact.
-    A junction pair is simply absent from the result if the insert is too short for
-    primer3 to find a valid internal primer.
+    Insert sequence >= 200 nt: the external pair above, plus a 5' and 3' junction
+    pair. Each junction pair is designed as a genuine primer3 pair — the
+    genomic-side primer is designed first (single-primer mode), then pinned via
+    SEQUENCE_PRIMER/SEQUENCE_PRIMER_REVCOMP so primer3 designs a true,
+    Tm-/dimer-compatible internal partner on the in-silico edited allele sequence
+    (left_flank + insert_sequence + right_flank) — not matched after the fact.
+    A junction pair is simply absent from the result if the insert is too short
+    for primer3 to find a valid internal primer.
+
+    Insert sequence < 200 nt: junction pairs are skipped — the external pair's
+    size shift already confirms the insert is present, so a junction pair adds
+    no diagnostic value for tags this short.
 
     internal_threshold is accepted for backward compatibility but no longer gates
     junction-primer design (kept to avoid changing the CLI/task interface).
@@ -524,7 +528,10 @@ def design_genotyping_primers(left_flank, right_flank, insert_sequence,
     if ext:
         results['external'] = ext
 
-    if not insert_sequence:
+    # junction pairs only make sense for inserts long enough that an external
+    # pair alone can't confirm the insert is actually present (short tags are
+    # already caught by the external pair's size shift)
+    if not insert_sequence or insert_len < 200:
         return results
 
     # ── 5' junction: fixed genomic forward primer, primer3 designs internal reverse ──

@@ -182,10 +182,17 @@ def reagents_server(input, output, session, shared_json, shared_sites):
     @reactive.effect
     @reactive.event(input.reagents_json_file)
     def _handle_upload():
-        """Push an uploaded JSON path into shared state."""
+        """Validate and push an uploaded JSON path into shared state."""
         info = input.reagents_json_file()
-        if info:
-            shared_json.set(info[0]["datapath"])
+        if not info:
+            return
+        path = info[0]["datapath"]
+        from utils.bundle import validate_run_json
+        error = validate_run_json(path)
+        if error:
+            ui.notification_show(error, type="error", duration=8)
+            return
+        shared_json.set(path)
 
     # ── update arm-length default when repair type changes ────────────────────
 

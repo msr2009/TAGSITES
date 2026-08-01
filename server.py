@@ -31,6 +31,10 @@ def app_server(input, output, session):
     # reloads even when the JSON path hasn't changed
     shared_results_trigger = reactive.Value(0)
 
+    # bumped by setup_server after Save Analysis is pressed, so progress_server
+    # auto-starts all tasks once the new run JSON has been parsed
+    shared_autostart = reactive.Value(0)
+
     # session-scoped temp dir for extracted bundle files; created lazily on first
     # bundle upload and deleted when the browser session ends
     _session_temp = [""]
@@ -109,9 +113,10 @@ def app_server(input, output, session):
         await session.send_custom_message("tagsites_bundle_done", {})
         shared_values.set(new_path)
 
-    setup_server("setup", shared_json=shared_values)
+    setup_server("setup", shared_json=shared_values, shared_autostart=shared_autostart)
     progress_server("progress", shared_json=shared_values,
-                    shared_results_trigger=shared_results_trigger)
+                    shared_results_trigger=shared_results_trigger,
+                    shared_autostart=shared_autostart)
     results_server("results", shared_json=shared_values, shared_sites=shared_sites,
                    shared_results_trigger=shared_results_trigger)
     reagents_server("reagents", shared_json=shared_values, shared_sites=shared_sites)

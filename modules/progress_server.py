@@ -23,7 +23,7 @@ import run_status as _run_status
 from task_runners import TASK_RUNNERS, afdb_presearch
 from progress import make_status_reporter, report as _progress_report
 
-from modules.progress_logic import all_terminal, display_params, parse_run, status_label
+from modules.progress_logic import display_params, parse_run, status_label
 from modules.setup_ui import label_with_tip
 from modules.json_card import json_upload_card as _json_upload_card
 
@@ -79,7 +79,8 @@ def _build_body(task, global_block, entry):
 # ── module server ─────────────────────────────────────────────────────────────
 
 @module.server
-def progress_server(input, output, session, shared_json, shared_results_trigger):
+def progress_server(input, output, session, shared_json, shared_results_trigger,
+                     shared_autostart=None):
 
     # per-session state derived from the loaded JSON
     global_block = reactive.Value({})
@@ -94,6 +95,11 @@ def progress_server(input, output, session, shared_json, shared_results_trigger)
 
     # {tid: resume_seq last shown as a toast} — avoids re-notifying on every 2 s poll
     _resume_seq_seen = {}
+
+    # path most recently fully parsed by _parse_json — lets other effects (e.g.
+    # auto-launch) confirm working_dir/run_name reflect the *current* shared_json
+    # instead of racing against still-stale values left over from a prior run
+    _parsed_path = reactive.Value("")
 
     # ── parse JSON whenever the shared path changes ────────────────────────────
 
@@ -125,16 +131,24 @@ def progress_server(input, output, session, shared_json, shared_results_trigger)
                     _run_status.update_task(wd, rn, t["id"],
                                             status="pending", job_ids=[],
                                             message="", output=t["output"])
+        _parsed_path.set(path)
 
     # ── upload handler ─────────────────────────────────────────────────────────
 
     @reactive.effect
     @reactive.event(input.upload_json)
     def _handle_upload():
-        """Store an uploaded JSON path in shared state."""
+        """Validate and store an uploaded JSON path in shared state."""
         info = input.upload_json()
-        if info:
-            shared_json.set(info[0]["datapath"])
+        if not info:
+            return
+        path = info[0]["datapath"]
+        from utils.bundle import validate_run_json
+        error = validate_run_json(path)
+        if error:
+            ui.notification_show(error, type="error", duration=8)
+            return
+        shared_json.set(path)
 
     # ── shared task runner (used by both extended tasks) ──────────────────────
 
@@ -392,10 +406,20 @@ def progress_server(input, output, session, shared_json, shared_results_trigger)
     _completion_count = [0]
     _completion_notified_all    = [False]
     _completion_notified_single = [False]
+    # set only when run_all_tasks actually finishes THIS session — auto-download
+    # keys off this instead of the on-disk status file (see _auto_download)
+    run_all_tasks_did_finish = [False]
 
     @reactive.effect
     def _on_tasks_complete():
-        """Increment shared_results_trigger once when either runner finishes."""
+        """Increment shared_results_trigger once when either runner finishes.
+
+        Keyed off run_all_tasks/run_single_task.status() — these ExtendedTasks
+        only move off their idle state when THIS session actually invoked them,
+        unlike the on-disk status file (which loading an already-finished run
+        also makes look "complete"). See auto-download below for why that
+        distinction matters.
+        """
         all_status    = run_all_tasks.status()
         single_status = run_single_task.status()
 
@@ -405,6 +429,8 @@ def progress_server(input, output, session, shared_json, shared_results_trigger)
             _completion_notified_all[0] = True
             _completion_count[0] += 1
             shared_results_trigger.set(_completion_count[0])
+            if input.auto_download():
+                run_all_tasks_did_finish[0] = True
 
         if single_status == "running":
             _completion_notified_single[0] = False
@@ -438,21 +464,22 @@ def progress_server(input, output, session, shared_json, shared_results_trigger)
                                      "found) — please re-run this task.",
                                      type="warning", duration=8)
 
-    # plain mutable guard — avoids re-firing auto-download on every poll while
-    # the run stays finished
-    _auto_download_notified = [False]
-
     @reactive.effect
+    @reactive.event(shared_results_trigger)
     async def _auto_download():
-        """Trigger a browser download once every task reaches a terminal status, if enabled."""
-        status = _current_status()
-        tasks  = task_list.get()
-        if not all_terminal(status, tasks):
-            _auto_download_notified[0] = False
+        """Trigger a browser download once run_all_tasks actually finishes THIS session.
+
+        Piggybacks on shared_results_trigger (bumped by _on_tasks_complete) purely
+        to get re-invalidated at the right moment; run_all_tasks_did_finish is the
+        actual gate. Must NOT key off the on-disk status file / task_list: those
+        reflect whatever run got loaded, so simply opening an already-completed
+        run (from Progress OR Results — they share shared_json) would look
+        "finished" and fire a spurious download before Shiny has even bound the
+        download link's real href.
+        """
+        if not run_all_tasks_did_finish[0]:
             return
-        if _auto_download_notified[0] or not input.auto_download():
-            return
-        _auto_download_notified[0] = True
+        run_all_tasks_did_finish[0] = False
         await session.send_custom_message("tagsites_trigger_download", {})
 
     @reactive.effect
@@ -466,6 +493,23 @@ def progress_server(input, output, session, shared_json, shared_results_trigger)
     def _launch_all():
         """Re-run every task unconditionally."""
         _do_launch(frozenset(t["id"] for t in task_list.get()))
+
+    if shared_autostart is not None:
+        @reactive.effect
+        @reactive.event(shared_autostart)
+        async def _auto_launch():
+            """Auto-start all tasks after Setup's Save Analysis triggers this bump."""
+            # working_dir/run_name are reactive.Values left over from whatever run
+            # was loaded before — they can be non-empty from a *prior* run, so
+            # truthiness alone isn't enough. Wait until _parse_json has actually
+            # caught up to the current shared_json path before trusting them.
+            target = shared_json.get()
+            for _ in range(50):
+                if target and _parsed_path.get() == target:
+                    break
+                await asyncio.sleep(0.1)
+            if target and _parsed_path.get() == target and working_dir.get() and run_name.get():
+                _do_launch(frozenset())
 
     # ── live status polling ────────────────────────────────────────────────────
 

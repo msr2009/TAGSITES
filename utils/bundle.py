@@ -127,6 +127,23 @@ def _is_junk_entry(name):
     return name.startswith("__MACOSX/") or base.startswith("._")
 
 
+def validate_run_json(path):
+    """Check an uploaded path is a bundle ZIP or a run JSON; return an error message or None."""
+    if is_bundle_zip(path):
+        return None
+    try:
+        with open(path) as f:
+            content = json.load(f)
+    except FileNotFoundError:
+        return "Uploaded file not found."
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return "Could not parse JSON — file may be malformed."
+    if not isinstance(content, dict) or "run_name" not in content.get("global", {}):
+        return ("This doesn't look like a run JSON (missing global.run_name) — "
+                 "please upload a .run.json file.")
+    return None
+
+
 def is_bundle_zip(path):
     """True if path is a ZIP holding a MANIFEST or exactly one *.run.json."""
     if not path or not zipfile.is_zipfile(path):

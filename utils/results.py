@@ -365,15 +365,23 @@ def plot_results(aa_df, range_df, title="Results Plot"):
     # row 1: continuous per-position scores — one line per task column
     for col_name in aa_df.columns[1:]:
         color = task_colors.get(col_name, "#888888")
+        # sasa and hydrophobicity lines clutter the default view; start hidden,
+        # user can still click them on in the legend
+        off_by_default = col_name.endswith("_sasa") or col_name.endswith("_hydro")
         fig.add_trace(
             go.Scatter(
                 x=aa_df["pos"], y=aa_df[col_name],
                 mode="lines", name=col_name,
                 line=dict(color=color),
+                visible="legendonly" if off_by_default else True,
             ),
             row=1, col=1
         )
-    fig.update_yaxes(title_text="Score", row=1, col=1, fixedrange=True)
+    fig.update_yaxes(
+        title_text="Score", row=1, col=1, fixedrange=True,
+        rangemode="tozero",
+        tickmode="array", tickvals=[0, 0.25, 0.5, 0.75, 1.0],
+    )
 
     # row 2: range/categorical data — filled rectangles per annotation, one
     # color per unique (source, description) so e.g. "Signal peptide" and

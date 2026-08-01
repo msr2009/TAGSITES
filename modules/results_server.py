@@ -189,6 +189,10 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
                                           {"colors": jet_colors, "legend": {"type": "rainbow"}})
         if meta.get("pdb_path"):
             await _send_struct(meta["pdb_path"])
+        else:
+            # no AFDB structure for this run — clear out any structure left over
+            # from a previously loaded run rather than leaving it stale on screen
+            await session.send_custom_message("tagsites_clear_struct", {})
         # record the canonical on-disk path so _save_sites can write back
         wd = json_content["global"].get("working_dir", "")
         rn_str = json_content["global"].get("run_name", "")
@@ -213,18 +217,11 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
             return
         path = info[0]["datapath"]
         # bundle ZIPs are valid — the interceptor in server.py handles extraction
-        from utils.bundle import is_bundle_zip
-        if not is_bundle_zip(path):
-            try:
-                with open(path) as f:
-                    json.load(f)
-            except FileNotFoundError:
-                ui.notification_show("Uploaded file not found.", type="error", duration=6)
-                return
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                ui.notification_show("Could not parse JSON — file may be malformed.",
-                                     type="error", duration=6)
-                return
+        from utils.bundle import validate_run_json
+        error = validate_run_json(path)
+        if error:
+            ui.notification_show(error, type="error", duration=8)
+            return
         shared_json.set(path)
 
     @reactive.effect
@@ -299,11 +296,12 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
         await session.send_custom_message("tagsites_set_plot", payload)
 
     async def _send_struct(pdb_path):
-        """Read PDB file and send to 3Dmol viewer."""
+        """Read PDB file and send to 3Dmol viewer; clears the viewer if unreadable."""
         try:
             with open(pdb_path) as f:
                 pdb_str = f.read()
         except OSError:
+            await session.send_custom_message("tagsites_clear_struct", {})
             return
         await session.send_custom_message("tagsites_init_struct", {
             "pdb": pdb_str,

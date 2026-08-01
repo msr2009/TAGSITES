@@ -170,7 +170,7 @@ def _fetch_isoforms(canonical_acc, base_hit):
 # ── module server ─────────────────────────────────────────────────────────────
 
 @module.server
-def setup_server(input, output, session, shared_json):
+def setup_server(input, output, session, shared_json, shared_autostart=None):
 
     tasks      = reactive.Value([])   # list of in-memory task dicts
     task_snap  = reactive.Value({})   # {task_id: {param: value}} — preserved across re-renders
@@ -1223,3 +1223,5 @@ def setup_server(input, output, session, shared_json):
         # give the save a moment to register before jumping to the Progress tab
         await asyncio.sleep(0.5)
         ui.update_navs("main_tabs", selected="progress", session=session.root_scope())
+        if shared_autostart is not None:
+            shared_autostart.set(shared_autostart.get() + 1)
