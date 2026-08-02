@@ -38,7 +38,10 @@
   // Tag-site score heatmap row (see utils/scoring.py, issue #32)
   var scoreTrack = [];   // scoreTrack[i] = int score at pos i+1, null = no data
   var scoreFlags = [];   // scoreFlags[i] = [failed-criterion labels] at pos i+1
+  var scoreMasked = [];       // scoreMasked[i] = true if pos i+1 is masked outright (issue #38)
+  var scoreMaskReasons = [];  // scoreMaskReasons[i] = [mask-criterion labels] at pos i+1
   var scoreMax   = 1;    // normalization ceiling for the white→green fill
+  var MASKED_HEX = "#d9b3b3";  // must match modules.results_server._MASKED_HEX
   var suggestedSites = [];  // positions picked by "Add suggested" — marked with * above the heatmap
 
   // Zoom/pan state — null means full range
@@ -508,7 +511,7 @@
       var x1 = posToX(pos + 0.5, inf);
       var w  = x1 - x0;
       if (w < 0.5) continue;
-      ctx.fillStyle = scoreGreenHex(s / scoreMax);
+      ctx.fillStyle = scoreMasked[pos - 1] ? MASKED_HEX : scoreCmapHex(s / scoreMax);
       ctx.fillRect(x0, top + 1, Math.max(w - 0.5, 0.5), h - 2);
     }
 
@@ -537,13 +540,33 @@
     }
   }
 
-  // white (#ffffff) → green (#28a745) interpolation — must match
-  // utils.scoring.score_green_hex so the heatmap and structure coloring agree
-  function scoreGreenHex(frac) {
+  // viridis colormap stops — must match utils.results._VIRIDIS so the heatmap
+  // and structure coloring (utils.scoring.score_cmap_hex) agree
+  var _SCORE_VIRIDIS = [
+    [0.000, 68,  1,  84], [0.111, 72,  40, 120], [0.222, 62,  74, 137],
+    [0.333, 49, 104, 142], [0.444, 38, 130, 142], [0.556, 31, 158, 137],
+    [0.667, 53, 183, 121], [0.778, 110, 206,  88], [0.889, 181, 222,  43],
+    [1.000, 253, 231,  37],
+  ];
+
+  function scoreCmapHex(frac) {
     frac = Math.max(0, Math.min(1, frac));
-    var r = Math.round(0xff + frac * (0x28 - 0xff));
-    var g = Math.round(0xff + frac * (0xa7 - 0xff));
-    var b = Math.round(0xff + frac * (0x45 - 0xff));
+    var stops = _SCORE_VIRIDIS;
+    for (var i = 0; i < stops.length - 1; i++) {
+      var t0 = stops[i][0], t1 = stops[i + 1][0];
+      if (frac <= t1) {
+        var f = t1 > t0 ? (frac - t0) / (t1 - t0) : 0;
+        var r = Math.round(stops[i][1] + f * (stops[i + 1][1] - stops[i][1]));
+        var g = Math.round(stops[i][2] + f * (stops[i + 1][2] - stops[i][2]));
+        var b = Math.round(stops[i][3] + f * (stops[i + 1][3] - stops[i][3]));
+        return hexFromRgb(r, g, b);
+      }
+    }
+    var last = stops[stops.length - 1];
+    return hexFromRgb(last[1], last[2], last[3]);
+  }
+
+  function hexFromRgb(r, g, b) {
     function hx(v) { var s = v.toString(16); return s.length < 2 ? "0" + s : s; }
     return "#" + hx(r) + hx(g) + hx(b);
   }
@@ -718,9 +741,14 @@
     if (cy >= layout.scoreTop && cy <= layout.scoreTop + layout.scoreH) {
       var s = scoreTrack[pos - 1];
       if (s !== null && s !== undefined) {
-        var aa    = seqArray[pos - 1] || "";
-        var flags = scoreFlags[pos - 1] || [];
-        lines = [aa + pos + ": " + s + (flags.length ? " [" + flags.join(", ") + "]" : "")];
+        var aa = seqArray[pos - 1] || "";
+        if (scoreMasked[pos - 1]) {
+          var reasons = scoreMaskReasons[pos - 1] || [];
+          lines = [aa + pos + ": masked" + (reasons.length ? " [" + reasons.join(", ") + "]" : "")];
+        } else {
+          var flags = scoreFlags[pos - 1] || [];
+          lines = [aa + pos + ": " + s + (flags.length ? " [" + flags.join(", ") + "]" : "")];
+        }
       }
     }
 
@@ -1032,6 +1060,8 @@
     seqArray      = (msg.seq || "").split("");
     scoreTrack    = msg.scoreTrack    || [];
     scoreFlags    = msg.scoreFlags    || [];
+    scoreMasked   = msg.scoreMasked   || [];
+    scoreMaskReasons = msg.scoreMaskReasons || [];
     scoreMax      = (typeof msg.scoreMax === "number" && msg.scoreMax > 0) ? msg.scoreMax : 1;
     suggestedSites = msg.suggestedSites || [];
     hiddenTracks  = new Set(defaultHidden);
@@ -1101,8 +1131,6 @@
     plddt:   "linear-gradient(to right,#ff7d45 0%,#ffdb13 50%,#65cbf3 70%,#0053d6 100%)",
     // blue-white-red diverging: polar (buried/hydrophilic) → hydrophobic surface exposure
     bwr:     "linear-gradient(to right,#2166ac,#f7f7f7,#b2182b)",
-    // tag-site suggestion score (see utils/scoring.py) — white→green
-    score:   "linear-gradient(to right,#ffffff,#28a745)",
   };
 
   // rainbow N→C matches 3Dmol's default chain-spectrum coloring

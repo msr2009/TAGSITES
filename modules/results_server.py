@@ -19,12 +19,19 @@ from utils.results import (
     _pick_gradient_cmap,
     _VIRIDIS, _PLASMA, _COOL, _PLDDT_GRADIENT, _BWR,
 )
-from utils.scoring import score_tag_sites, failed_flags, score_green_hex, load_scoring_config
+from utils.scoring import (
+    score_tag_sites, failed_flags, mask_reasons, score_cmap_hex, score_max,
+    load_scoring_config,
+)
 from config import RESULTS_TYPE_DICT, DOMAIN_SOURCE_COLORS
 
 # "Add suggested" picks up to this many top-scoring, well-spaced positions
 _SUGGESTED_MAX_SITES = 3
 _SUGGESTED_MIN_SPACING = 10  # minimum residue gap between suggested sites
+
+# color for residues masked outright (issue #38) — distinct from the white->green
+# score gradient; must match the client-side MASKED_HEX in www/tagsites.js
+_MASKED_HEX = "#d9b3b3"
 
 
 def _pick_suggested_sites(scores):
@@ -34,7 +41,7 @@ def _pick_suggested_sites(scores):
     ranked = scores.sort_values("score", ascending=False)
     picked = []
     for pos in ranked.index:
-        if ranked.loc[pos, "score"] <= 0:
+        if ranked.loc[pos, "score"] <= 0 or ranked.loc[pos].get("masked", False):
             break
         if all(abs(pos - p) >= _SUGGESTED_MIN_SPACING for p in picked):
             picked.append(pos)
@@ -284,12 +291,22 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
             payload["scoreFlags"] = [
                 flags_by_pos.get(p, []) for p in range(1, seq_len + 1)
             ]
-            score_max = sum(c["weight"] for c in scoring_cfg["criteria"])
-            payload["scoreMax"] = max(1, int(score_max))
+            masked_by_pos = scores["masked"]
+            payload["scoreMasked"] = [
+                bool(masked_by_pos[p]) if p in masked_by_pos.index else False
+                for p in range(1, seq_len + 1)
+            ]
+            mask_reasons_by_pos = dict(zip(scores.index, mask_reasons(scores, scoring_cfg)))
+            payload["scoreMaskReasons"] = [
+                mask_reasons_by_pos.get(p, []) for p in range(1, seq_len + 1)
+            ]
+            payload["scoreMax"] = max(1, int(score_max(scoring_cfg)))
             payload["suggestedSites"] = _pick_suggested_sites(scores)
         else:
             payload["scoreTrack"] = []
             payload["scoreFlags"] = []
+            payload["scoreMasked"] = []
+            payload["scoreMaskReasons"] = []
             payload["scoreMax"] = 1
             payload["suggestedSites"] = []
 
@@ -415,17 +432,20 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
             scores = site_scores.get()
             meta = run_meta.get()
             seq_len = meta.get("seq_len", 0) if meta else 0
-            score_max = max(1, int(scores["score"].max())) if scores is not None and not scores.empty else 1
+            vmax = max(1, int(scores["score"].max())) if scores is not None and not scores.empty else 1
             colors = []
             if scores is not None and not scores.empty and seq_len:
                 by_pos = scores["score"]
+                masked_by_pos = scores["masked"]
                 for p in range(1, seq_len + 1):
-                    if p in by_pos.index:
-                        colors.append(score_green_hex(by_pos[p] / score_max))
-                    else:
+                    if p not in by_pos.index:
                         colors.append("#e8e8e8")
-            legend = {"type": "gradient", "cmap": "score", "label": "Score",
-                     "vmin": 0, "vmax": score_max}
+                    elif masked_by_pos[p]:
+                        colors.append(_MASKED_HEX)
+                    else:
+                        colors.append(score_cmap_hex(by_pos[p] / vmax))
+            legend = {"type": "gradient", "cmap": "viridis", "label": "Score",
+                     "vmin": 0, "vmax": vmax, "maskedColor": _MASKED_HEX, "maskedLabel": "masked"}
             await session.send_custom_message("tagsites_set_colors",
                                               {"colors": colors, "legend": legend})
             return

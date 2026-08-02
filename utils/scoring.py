@@ -1,4 +1,4 @@
-"""utils/scoring.py — tag-site suggestion scoring (see GitHub issue #32)
+"""utils/scoring.py — tag-site suggestion scoring (see GitHub issues #32, #38)
 
 Combines the per-residue analysis tracks already loaded for the Results tab
 into a weighted score: each criterion in scores.config.json contributes its
@@ -7,6 +7,12 @@ criterion whose underlying data isn't available (e.g. no Reagents run)
 contributes 0 rather than penalizing the position. All scoring knobs (weights,
 thresholds, labels, the "small" amino-acid set, etc.) live in scores.config.json
 — see that file's __doc__ for how to edit or extend it.
+
+A criterion may also set `"mask": true` (weight 0). Mask criteria never add to
+the weighted sum; instead, if any of them fires, the position's score is forced
+to 0 regardless of the other criteria — used for categorical disqualifiers
+(transmembrane/signal/propeptide spans, high-confidence modifications) that
+should never be tagged (issue #38).
 """
 
 import json
@@ -14,7 +20,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from utils.results import _guess_analysis_type
+from utils.results import _guess_analysis_type, _interp_cmap, _VIRIDIS
 
 # default location of the editable scoring config, next to task_definitions.json
 SCORING_CONFIG_PATH = Path(__file__).parent.parent / "scores.config.json"
@@ -35,7 +41,8 @@ def failed_flags(scores_df, config=None):
     """For each position, list the labels of criteria that were NOT satisfied (weight > 0 only).
 
     These are the "reasons points were lost" shown in the Results-tab tooltip,
-    e.g. H28: 5 [pLDDT>0.5, SJD>0.5, few small flanking].
+    e.g. H28: 5 [pLDDT>0.5, SJD>0.5, few small flanking]. Mask criteria have
+    weight 0 so they're excluded here; see mask_reasons() for those.
     """
     config = config or load_scoring_config()
     active = [c for c in config["criteria"] if c["weight"] > 0]
@@ -45,22 +52,35 @@ def failed_flags(scores_df, config=None):
     return flags
 
 
-def score_green_hex(frac):
-    """Interpolate white (#ffffff) to green (#28a745) at frac ∈ [0, 1]."""
-    frac = max(0.0, min(1.0, frac))
-    r0, g0, b0 = 0xff, 0xff, 0xff
-    r1, g1, b1 = 0x28, 0xa7, 0x45
-    r = int(r0 + frac * (r1 - r0))
-    g = int(g0 + frac * (g1 - g0))
-    b = int(b0 + frac * (b1 - b0))
-    return f"#{r:02x}{g:02x}{b:02x}"
+def mask_reasons(scores_df, config=None):
+    """For each position, list the labels of mask criteria that fired (empty if unmasked)."""
+    config = config or load_scoring_config()
+    masks = [c for c in config["criteria"] if c.get("mask")]
+    reasons = []
+    for _, row in scores_df.iterrows():
+        reasons.append([c["label"] for c in masks if row[c["key"]]])
+    return reasons
 
 
-def _range_mask(range_df, sources, seq_len, exclude_descriptions=None):
+def score_max(config=None):
+    """Sum of weights over non-mask criteria — the normalization ceiling for the score track."""
+    config = config or load_scoring_config()
+    return sum(c["weight"] for c in config["criteria"] if not c.get("mask"))
+
+
+def score_cmap_hex(frac):
+    """Map frac ∈ [0, 1] through the viridis colormap (dark purple = low, yellow = high)."""
+    return _interp_cmap(frac, _VIRIDIS)
+
+
+def _range_mask(range_df, sources, seq_len, exclude_descriptions=None, include_descriptions=None):
     """Return a set of 1-based positions covered by any interval whose source is in `sources`.
 
     Rows whose description is in `exclude_descriptions` are skipped even if their
-    source matches.
+    source matches. If `include_descriptions` is given, only rows whose description
+    contains (case-insensitive substring) one of those strings are kept — descriptions
+    are often composite (e.g. "Transmembrane: Helical (PubMed:123)"), so substring
+    matching is used rather than equality.
     """
     positions = set()
     if range_df is None or range_df.empty:
@@ -68,6 +88,10 @@ def _range_mask(range_df, sources, seq_len, exclude_descriptions=None):
     subset = range_df[range_df["source"].isin(sources)]
     if exclude_descriptions:
         subset = subset[~subset["description"].isin(exclude_descriptions)]
+    if include_descriptions:
+        needles = [d.lower() for d in include_descriptions]
+        subset = subset[subset["description"].str.lower().apply(
+            lambda desc: any(n in desc for n in needles))]
     for _, row in subset.iterrows():
         start, stop = int(row["start"]), int(row["stop"])
         positions.update(range(max(1, start), min(stop, seq_len) + 1))
@@ -142,14 +166,16 @@ def _reagents_min_distance(reagents_df, pos, column, _cache=None):
 def _handle_range_absent(positions, params, ctx):
     """True where the position is NOT covered by any range interval from the given sources."""
     mask = _range_mask(ctx["range_df"], set(params["sources"]), ctx["seq_len"],
-                        exclude_descriptions=params.get("exclude_descriptions"))
+                        exclude_descriptions=params.get("exclude_descriptions"),
+                        include_descriptions=params.get("include_descriptions"))
     return [p not in mask for p in positions]
 
 
 def _handle_range_present(positions, params, ctx):
-    """True where the position is NOT covered by any range interval from the given sources."""
+    """True where the position IS covered by any range interval from the given sources."""
     mask = _range_mask(ctx["range_df"], set(params["sources"]), ctx["seq_len"],
-                        exclude_descriptions=params.get("exclude_descriptions"))
+                        exclude_descriptions=params.get("exclude_descriptions"),
+                        include_descriptions=params.get("include_descriptions"))
     return [p in mask for p in positions]
 
 
@@ -249,9 +275,25 @@ def score_tag_sites(aa_df, range_df, query_seq, reagents_df=None, config=None):
         handler = SCORE_HANDLERS[c["type"]]
         out[c["key"]] = handler(positions, c["params"], ctx)
 
+    mask_criteria = [c for c in criteria if c.get("mask")]
+    score_criteria = [c for c in criteria if not c.get("mask")]
+
     # NaN comparisons inside handlers evaluate False, and None (missing data)
     # is treated as not-satisfied — both are the desired "no penalty" behavior
-    out["score"] = sum(c["weight"] * out[c["key"]].apply(lambda v: bool(v)) for c in criteria)
+    out["score"] = sum(
+        c["weight"] * out[c["key"]].apply(lambda v: bool(v)) for c in score_criteria
+    )
+
+    # a fired mask criterion (weight 0, never a penalty for missing data) forces
+    # the position's score to 0 regardless of how many other criteria it satisfied
+    if mask_criteria:
+        out["masked"] = pd.concat(
+            [out[c["key"]].apply(lambda v: bool(v)) for c in mask_criteria], axis=1
+        ).any(axis=1)
+    else:
+        out["masked"] = False
+    out.loc[out["masked"], "score"] = 0
+
     return out
 
 

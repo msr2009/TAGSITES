@@ -9,16 +9,30 @@
     "This is the ONLY file you touch for that.",
     "",
     "TO ADD A NEW SCORE: add a criterion object below. If it uses one of the",
-    "existing `type` handlers (range_absent | column_below | reagent_min_below |",
-    "reagent_min_above | flank_small_fraction) you edit ONLY this file. A brand-new",
-    "kind of test needs one new handler function in utils/scoring.py (SCORE_HANDLERS).",
+    "existing `type` handlers (range_absent | range_present | column_below |",
+    "reagent_min_below | reagent_min_above | flank_small_fraction) you edit ONLY this",
+    "file. A brand-new kind of test needs one new handler function in",
+    "utils/scoring.py (SCORE_HANDLERS).",
+    "",
+    "MASKING (issue #38): a criterion with \"mask\": true (and weight 0) is a",
+    "categorical disqualifier rather than a scored test — if it fires, the residue's",
+    "score is forced to 0 regardless of every other criterion, it's never suggested,",
+    "and the Results tab shows it in a distinct color with the mask label as the",
+    "tooltip. Missing data never masks (same rule as scored criteria).",
     "",
     "Handler params reference:",
-    "  range_absent:          sources (list), exclude_descriptions (list, optional)",
+    "  range_absent:          sources (list), exclude_descriptions (list, optional),",
+    "                         include_descriptions (list, optional)",
+    "  range_present:         sources (list), exclude_descriptions (list, optional),",
+    "                         include_descriptions (list, optional)",
     "  column_below:          analysis (aa_df column type, e.g. 'plddt'/'blast'), threshold",
     "  reagent_min_below:     column (reagents TSV column), threshold",
     "  reagent_min_above:     columns (list of reagents TSV columns), threshold",
-    "  flank_small_fraction:  small_aa (string of residue letters), window, fraction"
+    "  flank_small_fraction:  small_aa (string of residue letters), window, fraction",
+    "",
+    "include_descriptions/exclude_descriptions match as a case-insensitive substring",
+    "of the range's description (descriptions are often composite, e.g.",
+    "'Transmembrane: Helical (PubMed:123)')."
   ],
   "criteria": [
     {
@@ -116,6 +130,30 @@
         "small_aa": "GSAP",
         "window": 5,
         "fraction": 0.50
+      }
+    },
+    {
+      "key": "in_membrane_or_cleaved",
+      "type": "range_present",
+      "mask": true,
+      "weight": 0,
+      "label": "transmembrane / signal / propeptide",
+      "note": "masks the residue outright: never a good tag site (issue #38)",
+      "params": {
+        "sources": ["UniProt", "Phobius"],
+        "include_descriptions": ["Transmembrane", "Signal peptide", "Propeptide", "Transit peptide"]
+      }
+    },
+    {
+      "key": "in_highconf_modification",
+      "type": "range_present",
+      "mask": true,
+      "weight": 0,
+      "label": "high-confidence modification",
+      "note": "masks the residue outright: lipidation/prenylation sites, not soft PDZ/degron motifs (issue #38)",
+      "params": {
+        "sources": ["modification"],
+        "include_descriptions": ["myristoylation", "palmitoylation", "prenylation"]
       }
     }
   ]
