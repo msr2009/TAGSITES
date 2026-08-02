@@ -15,9 +15,9 @@ from pathlib import Path
 from shiny import module, reactive, render, ui
 
 from config import (
-    DEFAULT_SPECIES, GLOBAL_TOOLTIPS, TASK_PARAMETERS,
+    DEFAULT_SPECIES, GLOBAL_TOOLTIPS, TASK_PARAMETERS, DEFAULT_TASKS,
     task_hidden, task_defaults, task_choices, task_tooltips, task_output_suffix,
-    GLOBAL_DEFAULTS, GLOBAL_KEYS,
+    GLOBAL_DEFAULTS, GLOBAL_KEYS, default_task_label,
 )
 from modules.setup_ui import label_with_tip, TASK_DESCRIPTIONS
 from modules.ui_helpers import compact_file_input
@@ -55,9 +55,28 @@ def _taxid_file_choices():
     return choices
 
 
+# ranks offered as BLAST scope options in the taxid dropdown, broad → narrow
+_TAXID_CHOICE_RANKS = ("domain", "superkingdom", "kingdom", "phylum",
+                       "class", "order", "family", "genus")
+
+
+def _taxid_rank_choices(lineage, current):
+    """Return {taxid: label} scope options for the blast taxid dropdown, or {} if no lineage."""
+    if not lineage:
+        return {}
+    choices = {"": "all species"}
+    for e in lineage:
+        if e["rank"] in _TAXID_CHOICE_RANKS:
+            choices[e["taxid"]] = f"{e['rank']} — {e['name']} ({e['taxid']})"
+    # keep a hand-typed taxid that isn't in this lineage instead of silently dropping it
+    if current and current not in choices:
+        choices[current] = f"custom ({current})"
+    return choices
+
+
 # ── widget builders ───────────────────────────────────────────────────────────
 
-def _make_param_widget(widget_id, param, value, tip, choices=None):
+def _make_param_widget(widget_id, param, value, tip, choices=None, taxid_choices=None):
     """Return one input widget for a task parameter."""
     lbl = label_with_tip(param.replace("_", " "), tip)
     if param == "scores_file":
@@ -68,13 +87,29 @@ def _make_param_widget(widget_id, param, value, tip, choices=None):
         file_choices = _taxid_file_choices()
         selected = value if value in file_choices else ""
         return ui.input_select(widget_id, label=lbl, choices=file_choices, selected=selected)
+    if param == "taxid" and taxid_choices:
+        selected = value if value in taxid_choices else ""
+        return ui.input_select(widget_id, label=lbl, choices=taxid_choices, selected=selected)
     if choices:
         selected = value if value in choices else choices[0]
         return ui.input_select(widget_id, label=lbl, choices=choices, selected=selected, size=1)
     return ui.input_text(widget_id, label=lbl, value=str(value) if value != "" else "")
 
 
-def _build_param_inputs(task, task_values_snap):
+def _build_default_task(entry, taxid=None):
+    """Build one in-memory task dict from a default_tasks registry entry."""
+    ttype  = entry["type"]
+    hidden = task_hidden(ttype)
+    params = {p: v for p, v in task_defaults(ttype).items() if p not in hidden}
+    params.update({p: v for p, v in entry.get("args", {}).items() if p not in hidden})
+    if taxid is not None:
+        params["taxid"] = taxid
+    task = make_task(ttype, default_task_label(entry), params, task_tooltips(ttype), task_choices(ttype))
+    task["start_open"] = False
+    return task
+
+
+def _build_param_inputs(task, task_values_snap, lineage=None):
     """Build the list of param widgets for one task card."""
     tips       = task.get("tooltips", {})
     all_choices = task.get("choices", {})
@@ -86,7 +121,9 @@ def _build_param_inputs(task, task_values_snap):
         widget_id = f"{task['id']}_{p}"
         # use the snapshotted value if present (preserves edits across re-renders)
         current = task_values_snap.get(task["id"], {}).get(p, default)
-        widgets.append(_make_param_widget(widget_id, p, current, tips.get(p, ""), all_choices.get(p)))
+        taxid_choices = _taxid_rank_choices(lineage, current) if p == "taxid" else None
+        widgets.append(_make_param_widget(widget_id, p, current, tips.get(p, ""),
+                                           all_choices.get(p), taxid_choices))
     return widgets
 
 
@@ -856,12 +893,22 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
 
     # ── task CRUD ─────────────────────────────────────────────────────────────
 
+    # rank-scoped default blast task (e.g. ORDER_blast) — tracked so it can be
+    # added/repointed/removed as the organism selection changes
+    _rank_entry = next((e for e in DEFAULT_TASKS if e.get("requires_organism")), None)
+    _rank_id    = f"{default_task_label(_rank_entry)}_{_rank_entry['type']}" if _rank_entry else ""
+    _rank       = _rank_entry.get("taxid_from_rank", "") if _rank_entry else ""
+    _seeded       = [False]  # defaults added for this session
+    _rank_dropped = [False]  # user (or Clear all) removed the rank task; don't resurrect it
+
     def _register_remove(task_id):
         """Register a one-off reactive effect that removes a task when its button fires."""
         @reactive.effect
         @reactive.event(lambda: input[f"{task_id}_remove"](), ignore_init=True)
         def _handler():
             _snapshot()
+            if task_id == _rank_id:
+                _rank_dropped[0] = True  # deliberate delete — don't re-add on next organism change
             tasks.set([t for t in tasks() if t["id"] != task_id])
 
     def _register_table_upload(task_id):
@@ -908,6 +955,61 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
             _register_table_upload(task["id"])
         ui.update_text("task_label", value="")
 
+    @reactive.effect
+    def _seed_default_tasks():
+        """Auto-add the DEFAULT analysis set once, at session start (no dependencies)."""
+        if _seeded[0]:
+            return
+        _seeded[0] = True
+        new_tasks = [_build_default_task(e) for e in DEFAULT_TASKS if not e.get("requires_organism")]
+        tasks.set(new_tasks)
+        for t in new_tasks:
+            _register_remove(t["id"])
+            if t["name"] == "scores":
+                _register_table_upload(t["id"])
+
+    @reactive.effect
+    @reactive.event(_lineage, ignore_init=True)
+    def _sync_rank_task():
+        """Add/update/remove the rank-scoped default BLAST task as the organism changes."""
+        if not _rank_entry:
+            return
+        entries = _lineage()
+        match   = next((e for e in entries if e["rank"] == _rank), None)
+        present = any(t["id"] == _rank_id for t in tasks())
+
+        if not match:
+            # organism cleared, or this species has no ancestor at the configured rank
+            if present:
+                _snapshot()
+                tasks.set([t for t in tasks() if t["id"] != _rank_id])
+            _rank_dropped[0] = False  # a fresh organism choice may re-add it
+            return
+
+        if present:
+            # organism switched — repoint the existing task's taxid, keep other edits
+            _snapshot()
+            snap = dict(task_snap())
+            snap.setdefault(_rank_id, {})["taxid"] = match["taxid"]
+            task_snap.set(snap)
+            tasks.set(list(tasks()))  # force card re-render
+            return
+
+        if _rank_dropped[0]:
+            return  # user deleted it deliberately; don't resurrect it
+        _snapshot()
+        task = _build_default_task(_rank_entry, taxid=match["taxid"])
+        tasks.set(tasks() + [task])
+        _register_remove(task["id"])
+
+    @reactive.effect
+    @reactive.event(input.clear_tasks)
+    def _clear_tasks():
+        """Remove every task card (advanced escape hatch)."""
+        tasks.set([])
+        task_snap.set({})
+        _rank_dropped[0] = True  # don't let _sync_rank_task immediately re-add the rank task
+
     # ── preset load / save ────────────────────────────────────────────────────
 
     @reactive.effect
@@ -924,8 +1026,13 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
             ui.notification_show(f"Preset '{name}' not found.", type="error")
             return
         _snapshot()
+        existing_ids = {t["id"] for t in tasks()}
         new_tasks = []
+        skipped = []
         for tid, entry in data.items():
+            if tid in existing_ids:
+                skipped.append(tid)
+                continue
             ttype  = entry.get("type") or entry.get("analysis", "")  # accept old "analysis" key
             hidden = task_hidden(ttype)
             # use saved args as params, supplement tooltips + choices from registry
@@ -939,6 +1046,11 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
             if ttype == "scores":
                 _register_table_upload(tid)
         tasks.set(tasks() + new_tasks)
+        if skipped:
+            ui.notification_show(
+                f"Skipped tasks already present: {', '.join(skipped)}.",
+                type="warning", duration=5,
+            )
 
     @reactive.effect
     @reactive.event(input.save_preset_btn)
@@ -968,10 +1080,11 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
         """Render tasks as a collapsible accordion; new tasks open, preloaded closed."""
         current_tasks = tasks()
         snap = task_snap()
+        lineage = _lineage()
 
         if not current_tasks:
             return ui.p(
-                "No tasks yet — choose a type and label above, then click Add.",
+                "No analyses — open Advanced to add one.",
                 style="color:#6c757d; margin-top:0.4rem; font-size:0.8rem;",
             )
 
@@ -980,7 +1093,7 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
         panels = []
         for task in current_tasks:
             label = task["id"].rsplit("_", 1)[0]
-            widgets = _build_param_inputs(task, snap)
+            widgets = _build_param_inputs(task, snap, lineage)
             add_table = (
                 ui.div(
                     compact_file_input(f"{task['id']}_add_table", "＋ Add table (.tsv)",

@@ -356,58 +356,77 @@ def setup_ui():
                             style="font-size:0.8rem; font-weight:400; color:#6c757d; margin-left:0.75rem;"),
                 ),
 
-                # preset load row
-                ui.card(
-                    ui.card_body(
-                        ui.div(
-                            ui.tags.label("Load saved analyses set", class_="form-label"),
-                            ui.input_select("load_preset", label="",
-                                choices=_preset_choices(), selected=""),
-                            ui.input_action_button("load_preset_btn", "Load",
-                                class_="btn-sm btn-outline-secondary"),
-                            class_="task-type-row",
-                        ),
-                        ui.tags.details(
-                            ui.tags.summary(
-                                "Load existing run JSON…",
-                                style=(
-                                    "font-size:0.78rem; color:#6c757d; cursor:pointer; "
-                                    "margin-top:0.5rem; user-select:none;"
-                                ),
-                            ),
-                            compact_file_input("upload_run_json", label="",
-                                accept=[".json"]),
-                            style="margin-top:0.15rem;",
+                # advanced: manual task building, presets, and run-JSON upload —
+                # the default analysis set below covers most users
+                ui.tags.details(
+                    ui.tags.summary(
+                        "Advanced — add or load analyses",
+                        style=(
+                            "font-size:0.85rem; font-weight:600; cursor:pointer; "
+                            "padding:0.35rem 0.5rem; color:#212529; user-select:none;"
                         ),
                     ),
-                ),
-
-                # task builder
-                ui.card(
-                    ui.card_body(
-                        # Row 1: Analysis type | dropdown | description
-                        ui.div(
-                            ui.tags.label("Analysis type", class_="form-label"),
-                            ui.input_select("task_type", label="", choices=SELECTABLE_TASKS),
-                            ui.span(ui.output_text("task_type_desc"), class_="task-desc"),
-                            class_="task-type-row",
-                        ),
-                        # Row 2: Task label | text input
-                        ui.div(
-                            ui.tags.label("Task label", class_="form-label"),
-                            ui.input_text("task_label", label="",
-                                placeholder="short ID, e.g. WORM or BROAD"),
-                            ui.tags.small(
-                                "Names output files, e.g. WORM_blast.jsd.",
-                                class_="text-muted",
+                    ui.div(
+                        # preset load row
+                        ui.card(
+                            ui.card_body(
+                                ui.div(
+                                    ui.tags.label("Load saved analyses set", class_="form-label"),
+                                    ui.input_select("load_preset", label="",
+                                        choices=_preset_choices(), selected=""),
+                                    ui.input_action_button("load_preset_btn", "Load",
+                                        class_="btn-sm btn-outline-secondary"),
+                                    class_="task-type-row",
+                                ),
+                                ui.tags.details(
+                                    ui.tags.summary(
+                                        "Load existing run JSON…",
+                                        style=(
+                                            "font-size:0.78rem; color:#6c757d; cursor:pointer; "
+                                            "margin-top:0.5rem; user-select:none;"
+                                        ),
+                                    ),
+                                    compact_file_input("upload_run_json", label="",
+                                        accept=[".json"]),
+                                    style="margin-top:0.15rem;",
+                                ),
                             ),
-                            class_="task-label-row",
                         ),
-                        ui.div(
-                            ui.input_action_button("add_task", "＋ Add task",
-                                disabled=True, class_="btn-primary btn-sm"),
-                            style="margin-top: 0.5rem;",
+
+                        # task builder
+                        ui.card(
+                            ui.card_body(
+                                # Row 1: Analysis type | dropdown | description
+                                ui.div(
+                                    ui.tags.label("Analysis type", class_="form-label"),
+                                    ui.input_select("task_type", label="", choices=SELECTABLE_TASKS),
+                                    ui.span(ui.output_text("task_type_desc"), class_="task-desc"),
+                                    class_="task-type-row",
+                                ),
+                                # Row 2: Task label | text input
+                                ui.div(
+                                    ui.tags.label("Task label", class_="form-label"),
+                                    ui.input_text("task_label", label="",
+                                        placeholder="short ID, e.g. WORM or BROAD"),
+                                    ui.tags.small(
+                                        "Names output files, e.g. WORM_blast.jsd.",
+                                        class_="text-muted",
+                                    ),
+                                    class_="task-label-row",
+                                ),
+                                ui.div(
+                                    ui.input_action_button("add_task", "＋ Add task",
+                                        disabled=True, class_="btn-primary btn-sm"),
+                                    ui.input_action_button("clear_tasks", "✕ Clear all tasks",
+                                        class_="btn-sm btn-outline-danger"),
+                                    style="margin-top: 0.5rem; display:flex; gap:0.5rem;",
+                                ),
+                            ),
                         ),
+                    ),
+                    style=(
+                        "border:1px solid #adb5bd; border-radius:4px; "
+                        "margin-bottom:0.5rem; background:#f8f9fa;"
                     ),
                 ),
 

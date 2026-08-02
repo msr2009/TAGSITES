@@ -6,10 +6,11 @@ _ROOT = Path(__file__).parent
 sys.path.insert(0, str(_ROOT / "scripts"))
 
 from task_registry import (
-    TASK_DEFS, GLOBAL_DEFAULTS, GLOBAL_TOOLTIPS,
+    TASK_DEFS, GLOBAL_DEFAULTS, GLOBAL_TOOLTIPS, DEFAULT_TASKS,
     AVAILABLE_TASKS, SELECTABLE_TASKS, GLOBAL_KEYS,
     task_defaults, task_choices, task_tooltips, task_hidden,
     task_script, task_output_suffix, task_companions, companion_path, result_type,
+    default_task_label,
 )
 
 # species → NCBI taxid; "Other (search...)" is a sentinel for dynamic search

@@ -26,7 +26,8 @@ python app_modular.py
 app_modular.py          # main Shiny entry point
 server.py / ui.py       # top-level Shiny orchestrators
 config.py               # species taxonomy, result type config, JSON defaults
-default_json.json       # default task parameters and script-to-task mappings
+task_definitions.json   # task registry: script-to-task mappings, params, and the
+                         # auto-applied default_tasks set (see below)
 
 modules/                # Shiny UI + server components
   setup_ui.py / setup_server.py       # analysis configuration, file upload, task params
@@ -57,7 +58,7 @@ tables/
   hydrophobicity_kyle-doolittle.tsv # amino acid property scores
 
 params/
-  worm_default.json   # saved parameter preset for C. elegans
+  worm_default.json   # example saved analyses preset (C. elegans) — not auto-loaded
   *.json              # user-saved parameter presets
 ```
 
@@ -67,7 +68,7 @@ params/
 
 ## Key design patterns
 
-**Configuration-driven pipeline**: `default_json.json` defines which scripts map to which analyses and their default parameters. `config.py` defines available species (with NCBI taxonomy IDs) and which result types are continuous vs. range-based.
+**Configuration-driven pipeline**: `task_definitions.json` defines which scripts map to which analyses and their default parameters. Its `default_tasks` block lists the analyses auto-added to a new session (e.g. a BROAD blast searching all species) — entries can set `requires_organism: true` to be added only once a species is selected, and `taxid_from_rank` (e.g. `"order"`) to auto-fill their `taxid` from that rank in the selected organism's lineage. `config.py` defines available species (with NCBI taxonomy IDs) and which result types are continuous vs. range-based.
 **Shiny reactive state**: analysis parameters are stored in a shared reactive dict (`shared_dict`) passed between modules. `utils/helpers.py:update_shared_dict()` handles updates.
 **Async job submission**: `run_tag_sites_from_json.py` spawns analysis scripts as subprocesses and polls for completion, enabling parallel execution of independent analyses.
 **Alignment rendering**: sequence alignments are pre-rendered as matplotlib SVGs (stored in a dict keyed by alignment name) and displayed statically — this replaced an earlier real-time Plotly approach that was too slow.

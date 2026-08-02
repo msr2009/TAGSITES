@@ -150,7 +150,7 @@ EBI API change), replace them with the latest versions from that repository.
 ```
 app_modular.py              # main Shiny entry point
 config.py                   # species taxonomy, result type config, JSON defaults
-default_json.json           # default task parameters and script-to-task mappings
+task_definitions.json       # task registry: script-to-task mappings, params, default_tasks
 
 modules/                    # Shiny UI + server components
 scripts/                    # core analysis executables + EBI REST clients

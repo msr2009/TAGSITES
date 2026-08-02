@@ -19,6 +19,7 @@ except FileNotFoundError:
 TASK_DEFS         = _REG["tasks"]
 GLOBAL_DEFAULTS   = _REG.get("global_defaults", {})
 GLOBAL_TOOLTIPS   = _REG.get("global_tooltips", {})
+DEFAULT_TASKS     = _REG.get("default_tasks", [])
 
 # derived lists
 AVAILABLE_TASKS   = list(TASK_DEFS)
@@ -87,3 +88,8 @@ def companion_path(output_path, task_type, companion_key):
 def result_type(task_type):
     """Return 'continuous', 'range', or 'none' for task_type."""
     return TASK_DEFS[task_type].get("result_type", "none")
+
+
+def default_task_label(entry):
+    """Label for a default_tasks entry — explicit, else the rank it scopes to."""
+    return entry.get("label") or entry.get("taxid_from_rank", entry["type"]).upper()

@@ -11,6 +11,17 @@
 		"working_dir":   "Directory for output. Autocompleted from Analysis name and editable"
 	},
 
+	"default_tasks": [
+		{ "label": "BROAD", "type": "blast",
+			"args": { "taxid": "", "evalue": "1e-50", "max_hits": "100", "db": "uniprotkb_swissprot" } },
+		{ "label": "NARROW", "type": "blast", "requires_organism": true, "taxid_from_rank": "order",
+			"args": { "evalue": "1e-100", "max_hits": "100", "db": "uniprotkb", "length": ".7" } },
+		{ "label": "AF2",     "type": "plddt",         "args": { "existing_AF2": 1 } },
+		{ "label": "MODS",    "type": "modifications", "args": {} },
+		{ "label": "DOMAINS", "type": "domains",       "args": {} },
+		{ "label": "UNIPROT", "type": "uniprot",       "args": {} }
+	],
+
 	"tasks": {
 		"blast": {
 			"script":        "blast_orthologs.py",
