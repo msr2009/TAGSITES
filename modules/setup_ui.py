@@ -88,7 +88,6 @@ _STYLE = """
         border-top: 2px solid #adb5bd; padding: 0.5rem 1rem;
         margin-top: 0.5rem; z-index: 100;
         display: flex; align-items: center; gap: 0.75rem;
-        justify-content: space-between;
     }
     .save-bar #save_status { font-size: 0.8rem; color: #6c757d; margin: 0; }
     .save-bar-right { display: flex; align-items: center; gap: 0.4rem; }
@@ -207,10 +206,16 @@ def setup_ui():
                         placeholder="required for EBI submissions", width="100%"),
                     ui.input_text("run_name",
                         label_with_tip("Analysis name", _t.get("run_name", "")),
-                        placeholder="e.g., your-favorite-gene-tag", width="100%"),
-                    ui.input_text("working_dir",
-                        label_with_tip("Output directory", _t.get("working_dir", "")),
-                        placeholder="auto-filled", width="100%"),
+                        placeholder="auto-filled and editable", width="100%"),
+                    # output directory is auto-derived from the analysis name (see
+                    # _autofill_dir in setup_server.py) — hidden for now, not removed,
+                    # in case direct access is wanted again later
+                    ui.div(
+                        ui.input_text("working_dir",
+                            label_with_tip("Output directory", _t.get("working_dir", "")),
+                            placeholder="auto-filled", width="100%"),
+                        style="display:none;",
+                    ),
                     ui.div(
                         ui.input_select(
                             "organism",
@@ -378,17 +383,14 @@ def setup_ui():
                                         class_="btn-sm btn-outline-secondary"),
                                     class_="task-type-row",
                                 ),
-                                ui.tags.details(
-                                    ui.tags.summary(
-                                        "Load existing run JSON…",
-                                        style=(
-                                            "font-size:0.78rem; color:#6c757d; cursor:pointer; "
-                                            "margin-top:0.5rem; user-select:none;"
-                                        ),
-                                    ),
-                                    compact_file_input("upload_run_json", label="",
-                                        accept=[".json"]),
-                                    style="margin-top:0.15rem;",
+                                ui.div(
+                                    ui.tags.label("Save current analyses as default", class_="form-label",
+                                                  title="Saves to disk — not available when running via shinyapps.io"),
+                                    ui.input_text("preset_name", label="", placeholder="name"),
+                                    ui.input_action_button("save_preset_btn", "Save",
+                                        disabled=True, class_="btn-sm btn-outline-secondary"),
+                                    class_="task-type-row",
+                                    style="margin-top:0.5rem;",
                                 ),
                             ),
                         ),
@@ -442,22 +444,10 @@ def setup_ui():
 
         # ── Sticky save bar ───────────────────────────────────────────────────
         ui.div(
-            # left: save + status
-            ui.div(
-                ui.input_action_button("save_analysis", "5 · 💾 Save Analysis",
-                    disabled=True, class_="btn-success btn-sm"),
-                ui.output_text("save_status"),
-                style="display:flex; align-items:center; gap:0.75rem;",
-            ),
-            # right: save preset
-            ui.div(
-                ui.tags.label("Save current analyses as default", class_="form-label",
-                              title="Saves to disk — not available when running via shinyapps.io"),
-                ui.input_text("preset_name", label="", placeholder="name"),
-                ui.input_action_button("save_preset_btn", "Save",
-                    disabled=True, class_="btn-sm btn-outline-secondary"),
-                class_="save-bar-right",
-            ),
+            ui.input_action_button("save_analysis", "5 · 💾 Save Analysis",
+                disabled=True, class_="btn-success btn-sm"),
+            ui.output_text("save_status"),
+            style="display:flex; align-items:center; gap:0.75rem;",
             class_="save-bar",
         ),
     )

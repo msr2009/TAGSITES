@@ -7,9 +7,11 @@ setup_logic.py, writes the run JSON, and publishes its path via shared_json.
 import asyncio
 import json
 import os
+import re
 import requests
 import shutil
 import sys
+from datetime import date
 from pathlib import Path
 
 from shiny import module, reactive, render, ui
@@ -817,19 +819,28 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
         )
 
     @reactive.calc
-    def _ready():
-        """True when all required fields for Save Analysis are present."""
+    def _missing_requirements():
+        """Labels for the required fields for Save Analysis that aren't filled in yet."""
         has_sequence = (
             bool(input.input_file())
             or _selected_hit() is not None
             or bool(input.protein_seq_paste().strip())
         )
-        return (
-            bool(input.email())
-            and has_sequence
-            and bool(input.working_dir())
-            and len(tasks()) > 0
-        )
+        missing = []
+        if not input.email():
+            missing.append("an email address")
+        if not has_sequence:
+            missing.append("a protein sequence")
+        if not input.run_name().strip():
+            missing.append("an analysis name")
+        if not tasks():
+            missing.append("at least one task")
+        return missing
+
+    @reactive.calc
+    def _ready():
+        """True when all required fields for Save Analysis are present."""
+        return not _missing_requirements()
 
     @reactive.effect
     @reactive.event(_ready)
@@ -847,13 +858,59 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
         base = GLOBAL_DEFAULTS.get("working_dir") or "data"
         ui.update_text("working_dir", value=f"{base}/{input.run_name()}/")
 
+    # ── auto-fill analysis name from the selected sequence source ─────────────
+
+    def _safe_name_token(name):
+        """Collapse a gene/file name into a safe analysis-name token."""
+        return re.sub(r"[^A-Za-z0-9_-]+", "_", name.strip()).strip("_")
+
+    def _autofill_run_name(source_name):
+        """Fill run_name with '{source_name}_{YYYYMMDD}' unless the user already typed one."""
+        if input.run_name().strip() or not source_name:
+            return
+        token = _safe_name_token(source_name)
+        if not token:
+            return
+        ui.update_text("run_name", value=f"{token}_{date.today():%Y%m%d}")
+
+    @reactive.effect
+    def _autofill_run_name_from_hit():
+        """Auto-fill the analysis name once a UniProt hit is selected."""
+        hit = _selected_hit()
+        if hit is not None:
+            _autofill_run_name(hit.get("gene") or hit.get("accession", ""))
+
+    @reactive.effect
+    @reactive.event(input.input_file)
+    def _autofill_run_name_from_file():
+        """Auto-fill the analysis name from the uploaded protein file's name."""
+        files = input.input_file()
+        if files:
+            _autofill_run_name(Path(files[0]["name"]).stem)
+
+    @reactive.effect
+    @reactive.event(input.protein_seq_paste)
+    def _warn_pasted_seq_needs_name():
+        """Warn when a raw (headerless) pasted sequence has no analysis name to derive from.
+
+        A pasted FASTA (starting with '>') carries its own name; a raw amino-acid
+        paste does not, and today's Analysis name box is the only way to name it.
+        """
+        raw = input.protein_seq_paste().strip()
+        if raw and not raw.startswith(">") and not input.run_name().strip():
+            ui.notification_show(
+                "Pasted sequence has no name — please enter an Analysis name above.",
+                type="warning", duration=8,
+            )
+
     # ── save-status hint ──────────────────────────────────────────────────────
 
     @render.text
     def save_status():
         """One-line hint next to the Save button."""
-        if not _ready():
-            return "Requires email, a sequence file or UniProt hit, an analysis name, and at least one task."
+        missing = _missing_requirements()
+        if missing:
+            return f"Still required: {', '.join(missing)}."
         if input.save_analysis() == 0:
             return "Ready — click Save Analysis to write the run configuration."
         return f"Saved → {input.working_dir()}{input.run_name()}.run.json"
@@ -1127,20 +1184,13 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
 
         return ui.accordion(
             *panels,
-            open=open_ids,
+            # bslib's accordion() forces the first panel open when `open` is an
+            # empty list, so explicitly pass False rather than [] when nothing
+            # should start open
+            open=open_ids or False,
             multiple=True,
             class_="task-accordion",
         )
-
-    # ── load run JSON (direct upload in setup tab) ────────────────────────────
-
-    @reactive.effect
-    @reactive.event(input.upload_run_json)
-    def _handle_json_upload():
-        """Store an uploaded run JSON path in shared state (same as other tabs)."""
-        info = input.upload_run_json()
-        if info:
-            shared_json.set(info[0]["datapath"])
 
     # ── populate setup from any loaded JSON ───────────────────────────────────
 
