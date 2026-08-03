@@ -110,8 +110,9 @@ def progress_ui():
             ui.input_action_button("rerun_all", "↻ Re-run All",
                                    disabled=True, class_="btn-outline-warning btn-sm"),
             ui.download_button(
-                "download_results", "⬇ Download Results",
-                class_="btn-secondary btn-sm",
+                "download_results", "⬇ Download Current Results",
+                class_="btn-outline-secondary btn-sm",
+                style="background:#fff;color:#495057;border-color:#495057;",
                 title=("Can be downloaded at any time during a run — finished tasks are "
                        "bundled; in-progress or queued tasks are skipped and can be "
                        "included by downloading again later."),

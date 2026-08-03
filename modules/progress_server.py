@@ -10,6 +10,7 @@ import asyncio
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -93,6 +94,11 @@ def progress_server(input, output, session, shared_json, shared_results_trigger,
     _click_baseline = {}   # {tid: click_count captured at last action} — plain dict
     _baseline_tick  = reactive.Value(0)  # bumped on each launch to trigger re-sync
 
+    # {tid: generation number} — bumped each time a running task's re-run button
+    # is clicked, so the (still in-flight) prior attempt's eventual result is
+    # recognized as stale and discarded instead of overwriting the new attempt
+    _task_gen = {}
+
     # {tid: resume_seq last shown as a toast} — avoids re-notifying on every 2 s poll
     _resume_seq_seen = {}
 
@@ -152,18 +158,30 @@ def progress_server(input, output, session, shared_json, shared_results_trigger,
 
     # ── shared task runner (used by both extended tasks) ──────────────────────
 
-    def _run_one(task, wd, rn):
+    def _is_current_attempt(tid, gen):
+        """True unless a newer attempt of this task has since been requested via re-run."""
+        return gen is None or _task_gen.get(tid) == gen
+
+    def _run_one(task, wd, rn, gen=None):
         """Run a single task synchronously, writing status updates to the status file.
 
         Before (re)launching, checks for EBI job IDs persisted from a previous
         attempt (e.g. after reloading a bundle whose task never finished) and
         passes them to the runner so it can reattach instead of resubmitting.
+
+        gen, if given, is this attempt's generation number for the task (bumped by
+        an explicit re-run click); a stale attempt superseded by a newer one stops
+        writing status updates once it finally returns, so it can't clobber the
+        newer attempt's result. There is no cooperative cancellation of the runner
+        itself — the stale attempt keeps running in its thread until it returns.
         """
         tid      = task["id"]
         analysis = task["analysis"]
         args     = task["args"]
         output   = task["output"]
         runner   = TASK_RUNNERS.get(analysis)
+        if not _is_current_attempt(tid, gen):
+            return
         if runner is None:
             _run_status.update_task(wd, rn, tid, status="failed",
                                     message=f"Unknown analysis type '{analysis}'",
@@ -183,6 +201,8 @@ def progress_server(input, output, session, shared_json, shared_results_trigger,
 
         def job_id_cb(index, jid):
             """Record a freshly-submitted EBI job ID at its sequential index within the task."""
+            if not _is_current_attempt(tid, gen):
+                return
             ids = list(_run_status.load_status(wd, rn).get(tid, {}).get("job_ids") or [])
             while len(ids) <= index:
                 ids.append(None)
@@ -190,11 +210,15 @@ def progress_server(input, output, session, shared_json, shared_results_trigger,
             _run_status.update_task(wd, rn, tid, job_ids=ids)
 
         log = []
-        _run_status.update_task(wd, rn, tid, status="running", log="", stage="")
+        _run_status.update_task(wd, rn, tid, status="running", log="", stage="",
+                                started_at=time.time())
         reporter = make_status_reporter(wd, rn, tid, log)
 
         try:
             result = runner(args, report=reporter, job_id_cb=job_id_cb, resume_job_ids=resume_job_ids)
+            if not _is_current_attempt(tid, gen):
+                # a newer re-run attempt has superseded this one — drop its result
+                return
             ebi_status = result.get("ebi_status") if isinstance(result, dict) else None
             if ebi_status == "pending":
                 _run_status.update_task(wd, rn, tid, status="queued",
@@ -220,6 +244,8 @@ def progress_server(input, output, session, shared_json, shared_results_trigger,
                 _run_status.update_task(wd, rn, tid, status="success", output=output,
                                         resume_note=note, resume_seq=resume_seq)
         except Exception as exc:
+            if not _is_current_attempt(tid, gen):
+                return
             import traceback
             log.append(traceback.format_exc())
             _run_status.update_task(wd, rn, tid, status="failed", message=str(exc),
@@ -354,7 +380,7 @@ def progress_server(input, output, session, shared_json, shared_results_trigger,
 
     @reactive.effect
     def _sync_rerun_queue():
-        """Detect per-task rerun clicks; launch immediately or queue if task is running."""
+        """Detect per-task rerun clicks; restart running tasks immediately, else launch/queue."""
         _baseline_tick.get()      # re-evaluate after each launch resets the baseline
         tasks = task_list.get()   # re-evaluate when the task list changes
         newly_clicked = set()
@@ -366,11 +392,13 @@ def progress_server(input, output, session, shared_json, shared_results_trigger,
                 clicks = 0
             if clicks > _click_baseline.get(tid, 0):
                 newly_clicked.add(tid)
+                _click_baseline[tid] = clicks
 
         if not newly_clicked:
             return
 
-        # partition: tasks currently running are queued pending their completion
+        # partition: tasks currently running are restarted immediately (their old,
+        # still in-flight attempt is marked stale rather than waited out)
         wd, rn = working_dir.get(), run_name.get()
         status = _run_status.load_status(wd, rn) if (wd and rn) else {}
         currently_running = {tid for tid in newly_clicked
@@ -378,7 +406,19 @@ def progress_server(input, output, session, shared_json, shared_results_trigger,
         launch_now = newly_clicked - currently_running
 
         if currently_running:
-            _pending_single.set(_pending_single.get() | frozenset(currently_running))
+            tasks_by_id = {t["id"]: t for t in tasks}
+            loop = asyncio.get_event_loop()
+            for tid in currently_running:
+                _task_gen[tid] = _task_gen.get(tid, 0) + 1
+                if wd and rn:
+                    # clear job_ids so an EBI task resubmits a fresh job rather than
+                    # reattaching to the one being abandoned
+                    _run_status.update_task(wd, rn, tid, job_ids=[], status="queued",
+                                            stage="", log="")
+                gen = _task_gen[tid]
+                task = tasks_by_id.get(tid)
+                if task is not None and wd and rn:
+                    asyncio.ensure_future(loop.run_in_executor(None, _run_one, task, wd, rn, gen))
 
         if launch_now:
             # launch immediately if the single-task runner is free; otherwise queue
@@ -439,6 +479,58 @@ def progress_server(input, output, session, shared_json, shared_results_trigger,
             _completion_count[0] += 1
             shared_results_trigger.set(_completion_count[0])
 
+    # ids that have already caused a results-refresh bump — avoids re-bumping
+    # on every 2 s poll once a task's completion has already been reflected
+    _refreshed_success_ids = set()
+
+    @reactive.effect
+    def _bump_results_on_task_success():
+        """Refresh the Results tab as each task finishes, not just once the whole batch does.
+
+        run_all_tasks/run_single_task only report "success" once every task inside
+        them has finished, so a long-running task would otherwise hold back the
+        Results view for everything else that already completed. Piggyback on the
+        2 s status poll instead and bump shared_results_trigger the moment any
+        individual task's on-disk status flips to success/failed.
+        """
+        status = _current_status()
+        newly_done = {tid for tid, entry in status.items()
+                     if entry.get("status") in ("success", "failed")
+                     and tid not in _refreshed_success_ids}
+        if not newly_done:
+            return
+        _refreshed_success_ids.update(newly_done)
+        _completion_count[0] += 1
+        shared_results_trigger.set(_completion_count[0])
+
+    # task ids already warned about running long — avoids renotifying every 2 s poll
+    _long_running_warned = set()
+    _LONG_RUNNING_THRESHOLD = 300  # 5 minutes; the Shiny server can time out on long jobs
+
+    @reactive.effect
+    def _warn_long_running():
+        """Warn once per task if it's been running past the timeout-risk threshold."""
+        status = _current_status()
+        for tid, entry in status.items():
+            if entry.get("status") != "running":
+                continue
+            started_at = entry.get("started_at")
+            key = (tid, started_at)
+            if not started_at or key in _long_running_warned:
+                continue
+            if time.time() - started_at < _LONG_RUNNING_THRESHOLD:
+                continue
+            _long_running_warned.add(key)
+            label = tid.rsplit("_", 1)[0]
+            minutes = _LONG_RUNNING_THRESHOLD / 60
+            minutes_str = f"{minutes:g}"
+            ui.notification_show(
+                f"{label} has been running for over {minutes_str} minute"
+                f"{'s' if minutes != 1 else ''} — consider downloading current results "
+                "in case the session times out.",
+                type="warning", duration=10,
+            )
+
     @reactive.effect
     def _notify_resume_status():
         """Toast the outcome of an EBI resume check: still running or expired.
@@ -481,6 +573,11 @@ def progress_server(input, output, session, shared_json, shared_results_trigger,
             return
         run_all_tasks_did_finish[0] = False
         await session.send_custom_message("tagsites_trigger_download", {})
+        wd, rn = working_dir.get(), run_name.get()
+        status = _run_status.load_status(wd, rn) if (wd and rn) else {}
+        any_failed = any(e.get("status") == "failed" for e in status.values())
+        if not any_failed:
+            ui.update_navs("main_tabs", selected="results", session=session.root_scope())
 
     @reactive.effect
     @reactive.event(input.run_analysis)

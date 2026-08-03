@@ -9,7 +9,6 @@ from utils.results import (
     build_plot_payload,
     assign_task_colors,
     residue_colors_for_track,
-    residue_colors_gradient,
     residue_colors_for_annotations,
     residue_colors_for_phobius,
     residue_colors_for_isoforms,
@@ -17,7 +16,7 @@ from utils.results import (
     residue_colors_jet,
     _guess_analysis_type,
     _pick_gradient_cmap,
-    _VIRIDIS, _PLASMA, _COOL, _PLDDT_GRADIENT, _BWR,
+    _VIRIDIS, _PLASMA, _COOL, _BWR,
 )
 from utils.scoring import (
     score_tag_sites, failed_flags, mask_reasons, score_cmap_hex, score_max,
@@ -93,21 +92,15 @@ def _build_colors_and_legend(track, task_name, scheme, aa_df, range_df, seq_len,
     if aa_df is None or task_name not in aa_df.columns:
         return None, None
 
-    if scheme == "continuous":
-        colors = residue_colors_gradient(aa_df, task_name, hex_color)
-    else:
-        colors = residue_colors_for_track(aa_df, task_name, hex_color)
+    colors = residue_colors_for_track(aa_df, task_name, hex_color)
 
-    # pLDDT categorical (4-band) — excludes SASA and forced-continuous variants
-    if (_guess_analysis_type(task_name) == "plddt"
-            and not task_name.endswith("_sasa")
-            and scheme != "continuous"):
+    # pLDDT categorical (4-band) — excludes SASA
+    if _guess_analysis_type(task_name) == "plddt" and not task_name.endswith("_sasa"):
         legend = {"type": "categorical", "items": _PLDDT_LEGEND}
     else:
         _CMAP_NAMES = {
             id(_VIRIDIS): "viridis", id(_PLASMA): "plasma",
-            id(_COOL): "cool",       id(_PLDDT_GRADIENT): "plddt",
-            id(_BWR): "bwr",
+            id(_COOL): "cool",       id(_BWR): "bwr",
         }
         cmap = _pick_gradient_cmap(task_name)
         cmap_name = _CMAP_NAMES.get(id(cmap), "viridis")
@@ -160,13 +153,12 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
                                         reagents_df, scoring_cfg))
 
         # build color-by button choices
-        # pLDDT tracks get two buttons: categorical (4-band) and continuous (gradient)
+        # pLDDT tracks use the standard AlphaFold 4-band categorical scheme only
         choices = {"(none)": "N→C"}
         if aa_df is not None:
             for col in aa_df.columns[1:]:
                 if _guess_analysis_type(col) == "plddt" and not col.endswith("_sasa"):
-                    choices[col + ":categorical"] = f"{col} (4-band)"
-                    choices[col + ":continuous"]  = f"{col} (gradient)"
+                    choices[col] = col
                 elif col.endswith("_sasa"):
                     choices[col] = "Solv Access"
                 elif col.endswith("_hydro"):
