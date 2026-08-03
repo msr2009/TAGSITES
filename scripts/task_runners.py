@@ -134,6 +134,7 @@ def run_blast(args, report=None, job_id_cb=None, resume_job_ids=None):
         taxid_file     = _str(args.get("taxid_file")) or None,
         clients_folder = str(_SCRIPTS) + "/",
         exclude_paralogs = _bool(args.get("exclude_paralogs"), False),
+        min_perfect_len = _int(args.get("min_perfect_len"), 40),
         report         = report,
         job_id_cb      = job_id_cb,
         resume_job_ids = resume_job_ids,

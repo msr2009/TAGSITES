@@ -147,26 +147,22 @@ class TestHexToRgb:
 
 
 # ── _isoform_class_key ────────────────────────────────────────────────────────
+# _isoform_class_key(count, n_iso) classifies a residue by how many isoforms
+# contain it identically, out of n_iso total isoforms.
 
 class TestIsoformClassKey:
 
-    def test_constitutive_prefix(self):
-        assert _isoform_class_key("constitutive exon") == "constitutive"
+    def test_present_in_all_is_constitutive(self):
+        assert _isoform_class_key(3, 3) == "constitutive"
 
-    def test_constitutive_case_insensitive(self):
-        assert _isoform_class_key("Constitutive region") == "constitutive"
+    def test_present_in_one_is_unique(self):
+        assert _isoform_class_key(1, 3) == "unique"
 
-    def test_unique_prefix(self):
-        assert _isoform_class_key("unique to isoform A") == "unique"
+    def test_present_in_some_is_intermediate(self):
+        assert _isoform_class_key(2, 3) == "intermediate"
 
-    def test_unique_case_insensitive(self):
-        assert _isoform_class_key("UNIQUE segment") == "unique"
-
-    def test_anything_else_is_intermediate(self):
-        assert _isoform_class_key("intermediate region") == "intermediate"
-
-    def test_unknown_defaults_to_intermediate(self):
-        assert _isoform_class_key("some unrecognised description") == "intermediate"
+    def test_zero_isoforms_defaults_to_intermediate(self):
+        assert _isoform_class_key(0, 0) == "intermediate"
 
 
 # ── load_run_metadata ─────────────────────────────────────────────────────────
@@ -264,7 +260,7 @@ class TestLoadDataFromJson:
                 "A_scores": {"type": "scores", "args": {"output": out}}
             }
         }
-        aa_df, range_df, alns = load_data_from_json(j, RESULTS_TYPE_DICT)
+        aa_df, range_df, alns, iso_result = load_data_from_json(j, RESULTS_TYPE_DICT)
         assert "A_scores" in aa_df.columns
         assert len(aa_df) == 5
 
@@ -276,7 +272,7 @@ class TestLoadDataFromJson:
                 "B_mods": {"type": "modifications", "args": {"output": out}}
             }
         }
-        aa_df, range_df, alns = load_data_from_json(j, RESULTS_TYPE_DICT)
+        aa_df, range_df, alns, iso_result = load_data_from_json(j, RESULTS_TYPE_DICT)
         assert len(range_df) == 1
         assert range_df.iloc[0]["description"] == "phosphorylation"
 
@@ -287,24 +283,24 @@ class TestLoadDataFromJson:
                 "A_blast": {"type": "blast", "args": {"output": str(tmp_path / "missing.jsd")}}
             }
         }
-        aa_df, range_df, alns = load_data_from_json(j, RESULTS_TYPE_DICT)
+        aa_df, range_df, alns, iso_result = load_data_from_json(j, RESULTS_TYPE_DICT)
         assert len(aa_df) == 0
 
     def test_accepts_json_string(self, tmp_path):
         out = self._minimal_continuous_tsv(tmp_path)
         j = {"global": {}, "tasks": {"A_scores": {"type": "scores", "args": {"output": out}}}}
-        aa_df, _, _ = load_data_from_json(json.dumps(j), RESULTS_TYPE_DICT)
+        aa_df, _, _, _ = load_data_from_json(json.dumps(j), RESULTS_TYPE_DICT)
         assert "A_scores" in aa_df.columns
 
     def test_accepts_dict(self, tmp_path):
         out = self._minimal_continuous_tsv(tmp_path)
         j = {"global": {}, "tasks": {"A_scores": {"type": "scores", "args": {"output": out}}}}
-        aa_df, _, _ = load_data_from_json(j, RESULTS_TYPE_DICT)
+        aa_df, _, _, _ = load_data_from_json(j, RESULTS_TYPE_DICT)
         assert "A_scores" in aa_df.columns
 
     def test_empty_tasks_returns_empty_dfs(self):
         j = {"global": {}, "tasks": {}}
-        aa_df, range_df, alns = load_data_from_json(j, RESULTS_TYPE_DICT)
+        aa_df, range_df, alns, iso_result = load_data_from_json(j, RESULTS_TYPE_DICT)
         assert len(aa_df) == 0
         assert len(range_df) == 0
         assert alns == []

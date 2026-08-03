@@ -312,7 +312,7 @@ def write_run_scores(run_json_path, config=None, output_path=None):
     with open(run_json_path) as f:
         run_json = json.load(f)
 
-    aa_df, range_df, _ = load_data_from_json(run_json, RESULTS_TYPE_DICT)
+    aa_df, range_df, _, _ = load_data_from_json(run_json, RESULTS_TYPE_DICT)
     meta = load_run_metadata(run_json)
     reagents_df = load_reagents_df(run_json)
 

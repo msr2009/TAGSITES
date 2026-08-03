@@ -1,7 +1,6 @@
 """utility functions for loading and visualizing analysis results"""
 
 import os
-import re
 import pandas as pd
 import json
 import plotly.graph_objs as go
@@ -56,60 +55,61 @@ def _merge_phobius_intervals(phobius_df):
     return pd.DataFrame(merged_rows, columns=["source", "start", "stop", "description"])
 
 
-def _isoform_n(iso_df):
-    """Parse the isoform denominator N from descriptions like 'constitutive (2/2 isoforms)'.
-
-    Returns the highest N found in the DataFrame, or 0 if none parse.
-    """
-    best = 0
-    for desc in iso_df["description"]:
-        m = re.search(r"/(\d+)\s+isoform", str(desc))
-        if m:
-            best = max(best, int(m.group(1)))
-    return best
+def _isoform_n(iso_result):
+    """Number of isoforms in an isoforms JSON dict."""
+    return len(iso_result.get("isoforms", []))
 
 
-def _isoform_nonconstit_coverage(iso_df):
-    """Sum of residue span for non-constitutive rows (unique + intermediate).
+def _isoform_nonconstit_coverage(iso_result):
+    """Sum of "skipped" residue span across non-query isoforms.
 
     Used as a tie-break: more differentiated coverage = more informative task.
     """
-    mask = ~iso_df["description"].str.startswith("constitutive")
-    rows = iso_df[mask]
-    return int((rows["stop"] - rows["start"] + 1).sum())
+    total = 0
+    for iso in iso_result.get("isoforms", []):
+        if iso.get("is_query"):
+            continue
+        for start, stop in iso.get("skipped", []):
+            total += stop - start + 1
+    return total
 
 
 def _select_isoform_candidate(candidates):
-    """Choose the most informative isoform DataFrame from a list of (task_name, iso_df).
+    """Choose the most informative isoforms dict from a list of (task_name, iso_result).
 
-    Ranking: highest N (isoform count) → most non-constitutive residue coverage →
-    original task order (stable). Returns the winning iso_df.
+    Ranking: UniProt-sourced over BLAST-inferred → highest isoform count →
+    most non-constitutive residue coverage → original task order (stable).
+    Returns the winning iso_result dict.
     """
     # sort is stable: last key dominates, so apply in reverse priority order
     ranked = sorted(
         candidates,
-        key=lambda item: (_isoform_n(item[1]), _isoform_nonconstit_coverage(item[1])),
+        key=lambda item: (item[1].get("source") == "uniprot",
+                           _isoform_n(item[1]), _isoform_nonconstit_coverage(item[1])),
         reverse=True,
     )
-    task_name, best_df = ranked[0]
-    n = _isoform_n(best_df)
+    task_name, best = ranked[0]
+    n = _isoform_n(best)
     if len(candidates) > 1:
-        print(f"Isoforms: selected task '{task_name}' (N={n}) from {len(candidates)} candidates.")
-    return best_df
+        print(f"Isoforms: selected task '{task_name}' (source={best.get('source')}, N={n}) "
+              f"from {len(candidates)} candidates.")
+    return best
 
 
 def load_data_from_json(json_in, type_dict):
     """Load per-task result TSVs referenced in the run JSON.
 
-    Returns (aa_df, range_df, aln_meta_list).
+    Returns (aa_df, range_df, aln_meta_list, iso_result).
     aln_meta_list: list of (aln_path, task_name, params_dict) for blast tasks.
+    iso_result: the isoforms JSON dict (see derive_isoforms.py) chosen from all blast
+    tasks, or None if no task produced isoform data.
     Tasks whose output files don't exist yet are skipped with a warning.
     """
     df = pd.DataFrame(columns=["pos"])
     range_cols = ["source", "start", "stop", "description"]
     dat = pd.DataFrame(columns=range_cols)
     alns = []  # list of (aln_path, task_name, params_dict)
-    iso_candidates = []  # list of (task_name, iso_df) from all blast tasks
+    iso_candidates = []  # list of (task_name, iso_result) from all blast tasks
 
     # accept dict, JSON string, or file path
     j = {}
@@ -194,14 +194,15 @@ def load_data_from_json(json_in, type_dict):
                     params = {k: val for k, val in v.get("args", {}).items()
                               if k not in _skip and val not in ("", None)}
                     alns.append((aln_path, task, params))
-                    # collect isoform segments from all blast tasks; best candidate
+                    # collect isoform records from all blast tasks; best candidate
                     # is selected after the loop to avoid first-task-wins ordering bias
                     iso_path = companion_path(output_path, "blast", "isoforms")
                     if os.path.exists(iso_path) and os.path.getsize(iso_path) > 0:
                         try:
-                            iso_df = pd.read_csv(iso_path, sep="\t",
-                                                 names=["source", "start", "stop", "description"])
-                            iso_candidates.append((task, iso_df))
+                            with open(iso_path) as f:
+                                iso_result = json.load(f)
+                            if iso_result.get("isoforms"):
+                                iso_candidates.append((task, iso_result))
                         except Exception as e:
                             print(f"Error loading isoform data for task '{task}': {e}")
             except Exception as e:
@@ -220,10 +221,9 @@ def load_data_from_json(json_in, type_dict):
             print(f"Unknown analysis type '{analysis}' for task '{task}'. Skipping.")
             continue
 
-    # pick the most informative isoform candidate and merge into range_df
-    if iso_candidates:
-        chosen_iso = _select_isoform_candidate(iso_candidates)
-        dat = pd.concat([dat, chosen_iso], ignore_index=True)
+    # pick the most informative isoform candidate; kept separate from range_df —
+    # isoforms get their own pane, not a row in the annotations feature panel
+    iso_result = _select_isoform_candidate(iso_candidates) if iso_candidates else None
 
     # translate verbose Phobius descriptions and merge overlapping intervals per label
     if not dat.empty:
@@ -232,7 +232,7 @@ def load_data_from_json(json_in, type_dict):
         phobius_merged = _merge_phobius_intervals(dat[mask])
         dat = pd.concat([dat[~mask], phobius_merged], ignore_index=True)
 
-    return df, dat, alns
+    return df, dat, alns, iso_result
 
 
 def load_run_metadata(json_in):
@@ -729,14 +729,26 @@ def residue_colors_jet(seq_len):
     return [_jet_hex(i / (seq_len - 1)) for i in range(seq_len)]
 
 
-def _isoform_class_key(description):
-    """Extract 'constitutive', 'intermediate', or 'unique' from a description string."""
-    desc_lower = description.lower()
-    if desc_lower.startswith("constitutive"):
+def _isoform_class_key(count, n_iso):
+    """Classify a residue as 'constitutive' (in every isoform), 'unique' (in only one),
+    or 'intermediate' (in some but not all), from its per-isoform presence count."""
+    if n_iso <= 0:
+        return "intermediate"
+    if count >= n_iso:
         return "constitutive"
-    if desc_lower.startswith("unique"):
+    if count <= 1:
         return "unique"
     return "intermediate"
+
+
+def _isoform_presence_counts(iso_result, seq_len):
+    """Per-residue count of how many isoforms contain each query position identically."""
+    counts = [0] * seq_len
+    for iso in iso_result.get("isoforms", []):
+        for start, stop in iso.get("present", []):
+            for pos in range(max(start, 1), min(stop, seq_len) + 1):
+                counts[pos - 1] += 1
+    return counts
 
 
 def _parse_patch_description(description):
@@ -775,27 +787,26 @@ def residue_colors_for_patches(range_df, seq_len):
     return colors, legend_items
 
 
-def residue_colors_for_isoforms(range_df, seq_len):
-    """Color structure by isoform class using the 3-class discrete color scheme.
+def residue_colors_for_isoforms(iso_result, seq_len):
+    """Color structure by isoform class (constitutive/intermediate/unique), derived from
+    each residue's presence count across the chosen isoforms JSON dict.
 
     Returns (per_residue_colors, legend_items).
     """
     colors = ["#e8e8e8"] * seq_len
-    iso_rows = range_df[range_df["source"] == "isoforms"]
-    for _, row in iso_rows.iterrows():
-        key = _isoform_class_key(str(row["description"]))
-        color = ISOFORM_CLASS_COLORS.get(key, "#888888")
-        start, stop = int(row["start"]), int(row["stop"])
-        for pos in range(start - 1, min(stop, seq_len)):
-            colors[pos] = color
-    # build legend from classes actually present
-    seen_classes = []
+    if not iso_result or not iso_result.get("isoforms"):
+        return colors, []
+
+    n_iso = len(iso_result["isoforms"])
+    counts = _isoform_presence_counts(iso_result, seq_len)
     seen_set = set()
-    for _, row in iso_rows.iterrows():
-        k = _isoform_class_key(str(row["description"]))
-        if k not in seen_set:
-            seen_set.add(k)
-            seen_classes.append(k)
+    for pos, count in enumerate(counts):
+        if count == 0:
+            continue  # no isoform data at this residue; leave default gray
+        key = _isoform_class_key(count, n_iso)
+        colors[pos] = ISOFORM_CLASS_COLORS.get(key, "#888888")
+        seen_set.add(key)
+
     legend_order = ["constitutive", "intermediate", "unique"]
     legend_items = [
         {"color": ISOFORM_CLASS_COLORS[k], "label": k.capitalize()}
@@ -804,15 +815,14 @@ def residue_colors_for_isoforms(range_df, seq_len):
     return colors, legend_items
 
 
-def build_plot_payload(aa_df, range_df, title="Results"):
+def build_plot_payload(aa_df, range_df, iso_result=None, title="Results"):
     """Serialize plot data for the native canvas renderer (tagsites_set_plot message).
 
-    Returns a dict with lineTracks, rangeFeatures, and title, ready for JSON serialization.
-    NaN values in aa_df are converted to None (→ null in JSON).
+    Returns a dict with lineTracks, rangeFeatures, isoformPane, and title, ready for
+    JSON serialization. NaN values in aa_df are converted to None (→ null in JSON).
     """
-    # isoforms row sits lowest (nearest the sequence strip); others stack above
-    y_positions = {"isoforms": 1, "Phobius": 3, "Pfam": 5, "modification": 7, "hydrophobic_patch": 9,
-                   "UniProt": 11, "UniProt_site": 13}
+    y_positions = {"Phobius": 1, "Pfam": 3, "modification": 5, "hydrophobic_patch": 7,
+                   "UniProt": 9, "UniProt_site": 11}
 
     line_tracks = []
     data_max = -float("inf")
@@ -846,13 +856,8 @@ def build_plot_payload(aa_df, range_df, title="Results"):
             src = row["source"]
             if src not in y_positions:
                 continue
-            # isoforms use the 3-class discrete palette; others use the annotation palette
-            if src == "isoforms":
-                key = _isoform_class_key(str(row["description"]))
-                color = ISOFORM_CLASS_COLORS.get(key, "#888888")
-            else:
-                key = (str(src), str(row["description"]))
-                color = color_map.get(key, "#888888")
+            key = (str(src), str(row["description"]))
+            color = color_map.get(key, "#888888")
             desc = str(row["description"])
             if src == "hydrophobic_patch":
                 color = _hex_to_rgba(color, patch_alpha.get(desc, 1.0))
@@ -867,7 +872,53 @@ def build_plot_payload(aa_df, range_df, title="Results"):
             })
 
     return {"title": title, "lineTracks": line_tracks, "rangeFeatures": range_features,
-            "yMax": y_max}
+            "yMax": y_max, "isoformPane": _build_isoform_pane(iso_result, range_df)}
+
+
+def _intersect_spans(spans_a, spans_b):
+    """Intersect two lists of inclusive [start, stop] spans; return list of overlaps."""
+    result = []
+    for a0, a1 in spans_a:
+        for b0, b1 in spans_b:
+            lo, hi = max(a0, b0), min(a1, b1)
+            if lo <= hi:
+                result.append([lo, hi])
+    return result
+
+
+def _build_isoform_pane(iso_result, range_df):
+    """Build the isoform-pane payload: one row per isoform, ordered longest-first, with
+    query Pfam domains projected onto each isoform's present spans.
+
+    Returns {"isoforms": [...], "exonBoundaries": [...]} — empty when there's <=1 isoform
+    (nothing to show; www/tagsites.js hides the pane in that case).
+    """
+    if not iso_result or len(iso_result.get("isoforms", [])) <= 1:
+        return {"isoforms": [], "exonBoundaries": []}
+
+    color_map = _annotation_color_map(range_df) if range_df is not None else {}
+    pfam_rows = (range_df[range_df["source"] == "Pfam"]
+                 if range_df is not None and not range_df.empty else pd.DataFrame())
+
+    isoforms_sorted = sorted(iso_result["isoforms"], key=lambda x: x.get("length", 0), reverse=True)
+    out = []
+    for iso in isoforms_sorted:
+        domains = []
+        for _, row in pfam_rows.iterrows():
+            color = color_map.get(("Pfam", str(row["description"])), "#888888")
+            span = [[int(row["start"]), int(row["stop"])]]
+            for lo, hi in _intersect_spans(iso.get("present", []), span):
+                domains.append({"start": lo, "stop": hi, "color": color,
+                                "desc": str(row["description"])})
+        out.append({
+            "label":   iso.get("name") or iso.get("accession") or "",
+            "isQuery": bool(iso.get("is_query")),
+            "present": iso.get("present", []),
+            "skipped": iso.get("skipped", []),
+            "inserts": iso.get("inserts", []),
+            "domains": domains,
+        })
+    return {"isoforms": out, "exonBoundaries": iso_result.get("exon_boundaries", [])}
 
 
 def _hex_to_rgb(hex_color):

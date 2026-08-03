@@ -83,7 +83,7 @@ def score_one_run(run_json_path, config):
     with one bool/None column per criterion plus "score" (see
     utils.scoring.score_tag_sites).
     """
-    aa_df, range_df, _alns = load_data_from_json(run_json_path, RESULTS_TYPE_DICT)
+    aa_df, range_df, _alns, _iso = load_data_from_json(run_json_path, RESULTS_TYPE_DICT)
     meta = load_run_metadata(run_json_path)
     reagents_df = load_reagents_df(run_json_path)
     scores_df = score_tag_sites(aa_df, range_df, meta.get("query_seq", ""), reagents_df, config)

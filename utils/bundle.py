@@ -2,7 +2,7 @@
 
 A bundle is a flat ZIP holding everything needed to restore a run on any
 instance (local or shinyapps.io): the run JSON, its status JSON, the query
-FASTA/PDB, every task output plus companions (.aln/.pdf/.isoforms/.sasa),
+FASTA/PDB, every task output plus companions (.aln/.pdf/.isoforms.json/.sasa),
 and the reagents TSV.
 
 Restore works by extracting the bundle into a directory and rewriting the

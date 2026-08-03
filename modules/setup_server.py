@@ -32,6 +32,7 @@ from modules.setup_logic import (
     make_task,
 )
 from scripts.site_selection_util import get_sequence, save_fasta, extract_bfactors_from_pdb
+from scripts.uniprot_api import fetch_isoform_sequences
 
 # ebi_rest / fetch_genomic_sequence live in scripts/; make them importable
 # regardless of working dir
@@ -145,62 +146,25 @@ def _format_fasta(hit):
 def _fetch_isoforms(canonical_acc, base_hit):
     """Expand a canonical UniProt entry into one hit dict per isoform.
 
-    Reads the ALTERNATIVE PRODUCTS comment for the isoform list, then fetches
-    each non-canonical isoform sequence from the per-accession FASTA endpoint.
-    Returns a list of hit dicts (canonical first), or [base_hit] on failure.
+    Delegates the ALTERNATIVE PRODUCTS lookup + per-isoform FASTA fetch to the shared
+    scripts.uniprot_api helper. Returns a list of hit dicts (canonical first), or
+    [base_hit] if the entry has no isoform annotation or the lookup fails.
     """
-    try:
-        resp = requests.get(
-            f"https://rest.uniprot.org/uniprotkb/{canonical_acc}",
-            params={"format": "json"},
-            timeout=15,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception:
-        return [base_hit]
-
-    alt = next(
-        (c for c in data.get("comments", []) if c.get("commentType") == "ALTERNATIVE PRODUCTS"),
-        None,
-    )
-    if not alt or not alt.get("isoforms"):
+    records = fetch_isoform_sequences(canonical_acc)
+    if not records:
         return [base_hit]
 
     hits = []
-    for iso in alt["isoforms"]:
-        iso_ids = iso.get("isoformIds", [])
-        if not iso_ids:
-            continue
-        iso_acc    = iso_ids[0]                               # e.g. "P04637-2"
-        iso_num    = iso_acc.rsplit("-", 1)[-1] if "-" in iso_acc else "1"
-        synonyms   = [s["value"] for s in iso.get("synonyms", [])]
-        iso_name   = synonyms[0] if synonyms else iso.get("name", {}).get("value", "")
-        status     = iso.get("isoformSequenceStatus", "")
-        safe_id    = iso_acc.replace("-", "_")                # safe Shiny input ID
-
-        if status == "Displayed":
-            # canonical isoform — sequence already in base_hit
-            hit = dict(base_hit)
-            hit.update(accession=iso_acc, isoform=iso_num,
-                       isoform_name=iso_name, safe_id=safe_id)
-        else:
-            try:
-                r2 = requests.get(
-                    f"https://rest.uniprot.org/uniprotkb/{iso_acc}.fasta",
-                    timeout=15,
-                )
-                if not r2.ok:
-                    continue
-                fasta_lines = r2.text.strip().splitlines()
-                seq = "".join(fasta_lines[1:])
-            except Exception:
-                continue
-            hit = dict(base_hit)
-            hit.update(accession=iso_acc, sequence=seq, length=str(len(seq)),
-                       isoform=iso_num, isoform_name=iso_name,
-                       has_afdb=False, safe_id=safe_id)  # AFDB covers canonical only
-
+    for rec in records:
+        iso_acc = rec["accession"]                      # e.g. "P04637-2"
+        safe_id = iso_acc.replace("-", "_")              # safe Shiny input ID
+        hit = dict(base_hit)
+        hit.update(accession=iso_acc, isoform=rec["isoform"],
+                    isoform_name=rec["isoform_name"], safe_id=safe_id)
+        if not rec["is_canonical"]:
+            # non-canonical isoform: sequence differs from base_hit; AFDB covers canonical only
+            hit.update(sequence=rec["sequence"], length=str(len(rec["sequence"])),
+                       has_afdb=False)
         hits.append(hit)
 
     return hits if hits else [base_hit]

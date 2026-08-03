@@ -55,7 +55,7 @@ def main(run_json, site, outfile, approximate=False, config=None):
     config = config or load_scoring_config()
     max_score = sum(c["weight"] for c in config["criteria"])
 
-    aa_df, range_df, _alns = load_data_from_json(run_json, RESULTS_TYPE_DICT)
+    aa_df, range_df, _alns, _iso = load_data_from_json(run_json, RESULTS_TYPE_DICT)
     site_score, criteria = score_at_site(run_json, aa_df, range_df, site, config)
 
     run_name = Path(run_json).name.removesuffix(".run.json")

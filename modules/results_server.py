@@ -57,7 +57,8 @@ _PLDDT_LEGEND = [
 ]
 
 
-def _build_colors_and_legend(track, task_name, scheme, aa_df, range_df, seq_len, hex_color):
+def _build_colors_and_legend(track, task_name, scheme, aa_df, range_df, seq_len, hex_color,
+                             iso_result=None):
     """Single entry point: compute per-residue structure colors AND the matching legend.
 
     Returns (colors, legend) where legend is a dict ready for JSON serialization,
@@ -77,9 +78,9 @@ def _build_colors_and_legend(track, task_name, scheme, aa_df, range_df, seq_len,
         return colors, {"type": "categorical", "items": items}
 
     if track == "__isoforms__":
-        if range_df is None or not seq_len:
+        if iso_result is None or not seq_len:
             return None, None
-        colors, items = residue_colors_for_isoforms(range_df, seq_len)
+        colors, items = residue_colors_for_isoforms(iso_result, seq_len)
         return colors, {"type": "categorical", "items": items}
 
     if track == "__hydrophobic_patch__":
@@ -118,6 +119,7 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
     # ── Per-run data ────────────────────────────────────────────────────────────
     aa_data     = reactive.Value()     # continuous scores DataFrame
     range_data  = reactive.Value()     # range annotations DataFrame
+    iso_data    = reactive.Value(None) # isoforms JSON dict (see derive_isoforms.py), or None
     aln_meta    = reactive.Value([])   # list of (path, task_name, params)
     run_name    = reactive.Value(None)
     run_meta    = reactive.Value({})   # {query_seq, pdb_path, seq_len}
@@ -134,11 +136,12 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
 
     async def _do_load(json_content):
         """Parse a loaded JSON dict and push all results to the UI."""
-        aa_df, range_df, alns = load_data_from_json(json_content, RESULTS_TYPE_DICT)
+        aa_df, range_df, alns, iso_result = load_data_from_json(json_content, RESULTS_TYPE_DICT)
         meta = load_run_metadata(json_content)
         aa_data.set(aa_df)
         range_data.set(range_df)
         aln_meta.set(alns)
+        iso_data.set(iso_result)
         run_name.set(json_content["global"]["run_name"])
         run_meta.set(meta)
         task_colors.set(assign_task_colors(aa_df) if aa_df is not None else {})
@@ -170,17 +173,17 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
                 choices["__domains__"] = "Domains"
             if not range_df[range_df["source"] == "Phobius"].empty:
                 choices["__phobius__"] = "Phobius"
-            if not range_df[range_df["source"] == "isoforms"].empty:
-                choices["__isoforms__"] = "Isoforms"
             if not range_df[range_df["source"] == "hydrophobic_patch"].empty:
                 choices["__hydrophobic_patch__"] = "Hydrophobic patches"
+        if iso_result and len(iso_result.get("isoforms", [])) > 1:
+            choices["__isoforms__"] = "Isoforms"
         scores = site_scores.get()
         if scores is not None and not scores.empty:
             choices["__score__"] = "Score"
         color_by_choices.set(choices)
         ui.update_select("color_by", choices=choices, selected="(none)")
 
-        await _send_plot(aa_df, range_df, meta, json_content["global"]["run_name"])
+        await _send_plot(aa_df, range_df, meta, json_content["global"]["run_name"], iso_result)
         # always reset structure colors on load — don't rely on color_by reactive firing
         # (it won't fire if color_by was already "(none)" before this load)
         jet_colors = residue_colors_jet(meta.get("seq_len", 0))
@@ -264,9 +267,9 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
             "remove_site":   session.ns("remove_site"),
         }
 
-    async def _send_plot(aa_df, range_df, meta, title):
+    async def _send_plot(aa_df, range_df, meta, title, iso_result=None):
         """Build and send all plot data to the native canvas renderer."""
-        payload = build_plot_payload(aa_df, range_df, title=title)
+        payload = build_plot_payload(aa_df, range_df, iso_result=iso_result, title=title)
         payload["seq"] = meta.get("query_seq", "")
         payload["inputs"] = _input_names()
 
@@ -450,6 +453,7 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
         colors, legend = _build_colors_and_legend(
             track, task_name, scheme,
             aa_data.get(), range_data.get(), seq_len, hex_color,
+            iso_result=iso_data.get(),
         )
         if colors is None:
             return
@@ -475,8 +479,9 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
             return ui.div()
         color_by_input_id = session.ns("color_by")
         _isoforms_tooltip = (
-            "Isoform regions inferred from same-organism BLAST hits (UniProt isoforms). "
-            "Segments reflect protein sequence coverage, not genomic exon boundaries."
+            "Isoform coverage from UniProt annotation where available, otherwise inferred from "
+            "same-organism BLAST hits. Segments reflect protein sequence coverage, not genomic "
+            "exon boundaries."
         )
         buttons = [
             ui.tags.button(

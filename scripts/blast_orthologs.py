@@ -16,7 +16,7 @@ from site_selection_util import read_fasta, resolve_taxids
 sys.path.insert(0, str(Path(__file__).parent))
 import ebi_rest
 from progress import report as _report, resolve_reporter, timed_poll_adapter
-from derive_isoforms import derive_isoform_segments
+from derive_isoforms import derive_isoforms
 
 
 def hit_to_dict(j):
@@ -107,7 +107,7 @@ def ensure_query_in_alignment_set(fasta_str_list, input_match, seq_name, seq):
 def main(fasta_in, email, workingdir, name, output,
          n, evalue, db, length_percent,
          align_full_seqs, taxid, clients_folder, exclude_paralogs,
-         taxid_file=None,
+         taxid_file=None, min_perfect_len=40,
          report=None, job_id_cb=None, resume_job_ids=None):
     """Run BLAST → filter hits → fetch full seqs → clustalo → JSD scoring.
 
@@ -184,16 +184,17 @@ def main(fasta_in, email, workingdir, name, output,
         return
     query_species = blast_output["hits"][0]["hit_os"]
 
-    # derive isoform coverage segments from same-organism hits while the full JSON is in memory
-    _report(reporter, "Detecting isoforms from same-organism hits…", stage="isoforms")
-    iso_segs = derive_isoform_segments(blast_output)
-    isoform_path = f"{out_prefix}.isoforms.tsv"
+    # derive per-isoform coordinate mappings (UniProt-first, BLAST fallback) while the
+    # full BLAST JSON is in memory
+    _report(reporter, "Detecting isoforms…", stage="isoforms")
+    iso_result = derive_isoforms(blast_output, min_perfect_len=min_perfect_len)
+    isoform_path = f"{out_prefix}.isoforms.json"
     with open(isoform_path, "w") as _f:
-        for _start, _stop, _desc in iso_segs:
-            _f.write(f"isoforms\t{_start}\t{_stop}\t{_desc}\n")
-    if iso_segs:
-        _report(reporter, f"Found {len(iso_segs)} isoform segment(s) across "
-                f"{iso_segs[-1][1]} residues.", stage="isoforms")
+        json.dump(iso_result, _f)
+    n_iso = len(iso_result["isoforms"])
+    if n_iso:
+        _report(reporter, f"Found {n_iso} isoform(s) (source: {iso_result['source']}).",
+                stage="isoforms")
     else:
         _report(reporter, "No additional isoforms detected (single-isoform gene).",
                 stage="isoforms")
@@ -391,10 +392,13 @@ if __name__ == "__main__":
         help="(unused; retained for CLI compatibility)", default="./scripts/")
     parser.add_argument("--exclude-paralogs", action="store_true", dest="EXCLUDE_PARALOGS",
         help="return only best match per non-subject species", default=False)
+    parser.add_argument("--min_perfect_len", action="store", type=int, dest="MIN_PERFECT_LEN",
+        help="min consecutive perfect-match run to count a BLAST hit as an isoform (40)",
+        default=40)
 
     args, unknowns = parser.parse_known_args()
 
     main(args.FASTA_IN, args.EMAIL, args.WORKINGDIR, args.NAME, args.OUTPUT,
          args.MAX_HITS, args.EVALUE, args.DB, args.LENGTH, args.FULLSEQS,
          args.TAXID, args.CLIENTS_FOLDER, args.EXCLUDE_PARALOGS,
-         taxid_file=args.TAX_FILE)
+         taxid_file=args.TAX_FILE, min_perfect_len=args.MIN_PERFECT_LEN)

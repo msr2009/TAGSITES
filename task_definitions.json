@@ -31,15 +31,16 @@
 			"selectable":    true,
 			"companions": {
 				"alignment": ".aln",
-				"isoforms":  ".isoforms.tsv"
+				"isoforms":  ".isoforms.json"
 			},
 			"params": {
-				"taxid":     { "default": "",          "tooltip": "UniProt taxonomic ID(s) to restrict the BLAST search (comma-separated list, e.g. 6239 for C. elegans). Leave blank to search all species." },
-				"taxid_file":{ "default": "",          "tooltip": "File containing one taxid per line — alternative to entering them manually" },
-				"evalue":    { "default": "1e-10",     "choices": ["", "1e-200", "1e-100", "1e-50", "1e-10", "1e-5", "1e-1", "1.0"], "tooltip": "E-value threshold: only BLAST hits better than this cutoff are kept" },
-				"max_hits":  { "default": "",          "tooltip": "Maximum number of BLAST hits to retrieve (default 100)" },
-				"db":        { "default": "uniprotkb", "choices": ["uniprotkb", "uniprotkb_swissprot", "uniprotkb_trembl"], "tooltip": "UniProt database to search: uniprotkb (all), swissprot (human-curated, smaller), trembl (computationally annotated, largest)" },
-				"length":    { "default": "",          "tooltip": "Minimum hit length as a fraction of your query length — filters out partial matches (0 = no filter)" }
+				"taxid":           { "default": "",          "tooltip": "UniProt taxonomic ID(s) to restrict the BLAST search (comma-separated list, e.g. 6239 for C. elegans). Leave blank to search all species." },
+				"taxid_file":      { "default": "",          "tooltip": "File containing one taxid per line — alternative to entering them manually" },
+				"evalue":          { "default": "1e-10",     "choices": ["", "1e-200", "1e-100", "1e-50", "1e-10", "1e-5", "1e-1", "1.0"], "tooltip": "E-value threshold: only BLAST hits better than this cutoff are kept" },
+				"max_hits":        { "default": "",          "tooltip": "Maximum number of BLAST hits to retrieve (default 100)" },
+				"db":              { "default": "uniprotkb", "choices": ["uniprotkb", "uniprotkb_swissprot", "uniprotkb_trembl"], "tooltip": "UniProt database to search: uniprotkb (all), swissprot (human-curated, smaller), trembl (computationally annotated, largest)" },
+				"length":          { "default": "",          "tooltip": "Minimum hit length as a fraction of your query length — filters out partial matches (0 = no filter)" },
+				"min_perfect_len": { "default": "40",        "tooltip": "BLAST-fallback isoform detection only: minimum consecutive perfect-match run required to count a hit as an isoform of the query" }
 			}
 		},
 

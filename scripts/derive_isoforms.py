@@ -1,18 +1,30 @@
-"""derive_isoforms.py — identify protein isoforms from BLAST hits.
+"""derive_isoforms.py — identify protein isoforms and map them onto query coordinates.
 
-Detects same-organism, near-100%-identity BLAST hits (UniProt isoforms) and
-classifies each query residue as constitutive, intermediate, or unique based on
-what fraction of isoforms contain it identically.
+Two sourcing strategies, tried in order:
+1. UniProt: pull the ALTERNATIVE PRODUCTS isoform list for the query accession, plus any
+   "computationally mapped potential isoform sequences" (Ensembl-predicted transcripts
+   UniProt imports into TrEMBL as separate entries sharing the same GeneID — see
+   scripts/uniprot_api.py:fetch_computationally_mapped_isoforms), and align each isoform
+   sequence to the query (scripts/isoform_align.py). Grounded in curated/computed
+   UniProtKB annotation rather than local sequence inference.
+2. BLAST fallback: infer isoforms from same-organism, same-gene, near-100%-identity BLAST
+   hits already fetched by blast_orthologs.py. Caveat: these are alignment-derived
+   segments, not genomic exon boundaries, and a point mutation can look identical to a
+   splice difference — used only when UniProt has no isoform data for the query at all.
 
-Caveats: these are isoform-coverage segments inferred from protein alignment, not
-genomic exon boundaries. Detection depends on isoforms being present in UniProtKB
-as separate accessions.
+Output is a JSON dict (see main()) rather than the flat presence-class TSV this script
+used to emit; every isoform is a distinct record so callers can render one row each,
+rather than a single collapsed constitutive/intermediate/unique track.
 """
 
 import json
 import sys
 from argparse import ArgumentParser
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from isoform_align import align_isoform_to_query, _spans_from_positions
+from uniprot_api import fetch_isoform_sequences
 
 
 def _hseq_sig(hsp):
@@ -41,34 +53,52 @@ def _check_identity(hsp, min_perfect_len):
     return max_run >= min_perfect_len
 
 
-def _mark_presence(hsp, presence, query_len):
-    """Increment presence[pos] for each query position covered identically by this HSP."""
+def _spans_from_hsp(hsp, query_len):
+    """Map one BLAST HSP's aligned strings onto query coordinates.
+
+    Positions outside the HSP's query span are marked skipped (the hit sequence
+    wasn't observed there), matching what align_isoform_to_query would report for
+    a fully-aligned pair.
+    """
     qseq = hsp.get("hsp_qseq", "")
     hseq = hsp.get("hsp_hseq", "")
     qfrom = int(hsp.get("hsp_query_from", 1))
-    if not qseq or not hseq:
-        # fallback when alignment strings are absent: mark the full span
-        qto = int(hsp.get("hsp_query_to", query_len))
-        for pos in range(qfrom, min(qto, query_len) + 1):
-            presence[pos] += 1
-        return
-    qpos = qfrom
+    qto = int(hsp.get("hsp_query_to", query_len))
+
+    present, skipped, inserts = [], [], []
+    qpos = qfrom - 1
+    cur_insert_len = 0
+
+    def _flush_insert():
+        nonlocal cur_insert_len
+        if cur_insert_len:
+            inserts.append({"after": qpos, "length": cur_insert_len})
+            cur_insert_len = 0
+
     for q, h in zip(qseq, hseq):
-        if q == "-":
-            continue  # query insertion — no query position consumed
-        # q is a real query residue; count it if hit has same residue at this column
-        if 1 <= qpos <= query_len and h != "-" and q == h:
-            presence[qpos] += 1
-        qpos += 1
+        if q != "-":
+            _flush_insert()
+            qpos += 1
+            (present if h != "-" else skipped).append(qpos)
+        elif h != "-":
+            cur_insert_len += 1
+    _flush_insert()
+
+    skipped.extend(range(1, qfrom))
+    skipped.extend(range(qto + 1, query_len + 1))
+
+    return {
+        "present": _spans_from_positions(sorted(set(present))),
+        "skipped": _spans_from_positions(sorted(set(skipped))),
+        "inserts": inserts,
+    }
 
 
-def derive_isoform_segments(blast_output, min_perfect_len=40):
-    """Classify query residues by isoform coverage from a BLAST result dict.
+def _blast_fallback_isoforms(blast_output, min_perfect_len=40):
+    """Infer per-isoform records from same-organism, same-gene BLAST hits.
 
-    Returns a list of (start, stop, description) tuples (1-based, inclusive),
-    or [] when <=1 distinct isoform is detected (single-isoform gene → no track).
-    Description is one of 'constitutive (N/N isoforms)', 'intermediate (k/N isoforms)',
-    or 'unique (1/N isoforms)'.
+    Returns a list of isoform records (see main() schema), or [] when fewer than
+    2 distinct isoforms are detected (single-isoform gene → no track).
     """
     hits = blast_output.get("hits", [])
     if not hits:
@@ -106,58 +136,91 @@ def derive_isoform_segments(blast_output, min_perfect_len=40):
             seen.add(sig)
             unique_hits.append(h)
 
-    n_iso = len(unique_hits)
-    if n_iso <= 1:
+    if len(unique_hits) <= 1:
         return []  # single isoform → nothing to show
 
-    # per-residue presence counts (1-based; index 0 unused)
-    presence = [0] * (query_len + 1)
+    records = []
     for h in unique_hits:
-        _mark_presence(h["hit_hsps"][0], presence, query_len)
+        hsp = h["hit_hsps"][0]
+        spans = _spans_from_hsp(hsp, query_len)
+        is_query = h is hits[0]
+        records.append({
+            "accession": h.get("hit_acc", ""),
+            "name": "query" if is_query else h.get("hit_acc", ""),
+            "length": len(hsp.get("hsp_hseq", "").replace("-", "")) or query_len,
+            "is_query": is_query,
+            **spans,
+        })
+    return records
 
-    # classify each position, then collapse consecutive same-class runs into segments
-    def classify(count):
-        if count >= n_iso:
-            return f"constitutive ({n_iso}/{n_iso} isoforms)"
-        elif count <= 1:
-            return f"unique (1/{n_iso} isoforms)"
-        else:
-            return f"intermediate ({count}/{n_iso} isoforms)"
 
-    segments = []
-    cur_start = 1
-    cur_cls = classify(presence[1])
-    for pos in range(2, query_len + 1):
-        cls = classify(presence[pos])
-        if cls != cur_cls:
-            segments.append((cur_start, pos - 1, cur_cls))
-            cur_start = pos
-            cur_cls = cls
-    segments.append((cur_start, query_len, cur_cls))
+def derive_isoforms(blast_output, min_perfect_len=40):
+    """Derive per-isoform records for a query, preferring UniProt over BLAST inference.
 
-    return segments
+    Returns a dict: {"query_len", "query_accession", "source", "isoforms", "caveat"?}.
+    "isoforms" is [] when only one isoform is detected (nothing to show).
+    """
+    hits = blast_output.get("hits", [])
+    query_len = int(blast_output.get("query_len", 0))
+    query_acc = hits[0].get("hit_acc", "") if hits else ""
+
+    if query_acc:
+        uniprot_records = fetch_isoform_sequences(query_acc)
+        if len(uniprot_records) >= 2:
+            query_seq = None
+            isoforms = []
+            for rec in uniprot_records:
+                if rec["is_canonical"]:
+                    query_seq = rec["sequence"]
+            for rec in uniprot_records:
+                if rec["is_canonical"]:
+                    spans = {"present": [[1, len(rec["sequence"])]], "skipped": [], "inserts": []}
+                else:
+                    spans = (align_isoform_to_query(query_seq, rec["sequence"])
+                             if query_seq else {"present": [], "skipped": [], "inserts": []})
+                isoforms.append({
+                    "accession": rec["accession"],
+                    "name": rec["isoform_name"] or rec["accession"],
+                    "length": len(rec["sequence"]),
+                    "is_query": rec["is_canonical"],
+                    **spans,
+                })
+            return {
+                "query_len": query_len,
+                "query_accession": query_acc,
+                "source": "uniprot",
+                "isoforms": isoforms,
+            }
+
+    # fallback: infer from BLAST hits
+    fallback = _blast_fallback_isoforms(blast_output, min_perfect_len=min_perfect_len)
+    result = {
+        "query_len": query_len,
+        "query_accession": query_acc,
+        "source": "blast",
+        "isoforms": fallback,
+    }
+    if fallback:
+        result["caveat"] = ("Isoforms inferred from BLAST identity, not UniProt annotation — "
+                             "a point mutation can appear identical to a splice difference.")
+    return result
 
 
 def main(blast_json_path, output_path, min_perfect_len=40):
-    """Derive isoform segments from a BLAST JSON file and write a range TSV."""
+    """Derive isoform records from a BLAST JSON file and write an isoforms JSON file."""
     with open(blast_json_path) as f:
         blast_output = json.load(f)
-    segments = derive_isoform_segments(
-        blast_output,
-        min_perfect_len=int(min_perfect_len),
-    )
+    result = derive_isoforms(blast_output, min_perfect_len=int(min_perfect_len))
     with open(output_path, "w") as f:
-        for start, stop, desc in segments:
-            f.write(f"isoforms\t{start}\t{stop}\t{desc}\n")
+        json.dump(result, f)
 
 
 if __name__ == "__main__":
-    sys.path.insert(0, str(Path(__file__).parent))
-    parser = ArgumentParser(description="Derive isoform coverage segments from BLAST hits")
+    parser = ArgumentParser(description="Derive per-isoform coordinate mappings from BLAST hits")
     parser.add_argument("-i", "--input", "--blast_json", dest="BLAST_JSON",
                         required=True, help="path to *.json.json BLAST output")
     parser.add_argument("-o", "--output", dest="OUTPUT", required=True,
-                        help="path to write isoforms TSV")
+                        help="path to write isoforms JSON")
     parser.add_argument("--min_perfect_len", dest="MIN_PERFECT_LEN", default=40, type=int,
                         help="minimum consecutive perfect-match run length (default 40)")
     args, _ = parser.parse_known_args()

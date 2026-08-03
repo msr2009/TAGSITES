@@ -1,9 +1,12 @@
 /**
  * tagsites.js — client-side logic for the Results page
  *
- * Native canvas multi-panel plot: line tracks (row 1) + feature annotations (row 2)
- * + sequence strip (row 3), all sharing one x-axis with drag-to-zoom, pan, scroll
- * zoom, hover tooltips, and a clickable legend.
+ * Native canvas multi-panel plot, top to bottom: line tracks (continuous scores),
+ * feature annotations, isoforms (one row per isoform, hidden when <= 1), score
+ * heatmap, and sequence strip. All panes share one x-axis with drag-to-zoom, pan,
+ * scroll zoom, hover tooltips, and a clickable legend. The line/annotations/isoform
+ * panes are content-driven with minimum heights; the score row and sequence strip
+ * are fixed height.
  *
  * Display hierarchy (sequence strip) by cell width:
  *   ≥ 9px  → bold ClustalX-colored letter (white when committed)
@@ -35,6 +38,11 @@
   var plotYMax      = 1.1;  // fixed y ceiling for the line panel
   var legendHitBoxes = [];  // [{name, x0, y0, x1, y1}] — rebuilt on each render
 
+  // Isoform pane (see utils/results.py build_plot_payload / _build_isoform_pane)
+  var isoIsoforms     = [];  // [{label, isQuery, present, skipped, inserts, domains}]
+  var isoExonBoundaries = [];  // [pos, ...] — reserved for future genewise integration; empty today
+  var isoHitBoxes      = [];  // [{isoIdx, x, y, r}] — insert-marker hit targets, rebuilt on each render
+
   // Tag-site score heatmap row (see utils/scoring.py, issue #32)
   var scoreTrack = [];   // scoreTrack[i] = int score at pos i+1, null = no data
   var scoreFlags = [];   // scoreFlags[i] = [failed-criterion labels] at pos i+1
@@ -60,8 +68,16 @@
   var SCORE_H      = 24 + SCORE_MARK_H;   // fixed height for the score heatmap row (fill + marker margin)
   var LEGEND_H     = 22;   // fixed-height legend band between line and feature panels
   var PANEL_GAP    = 8;    // gap between panels
-  // line panel gets 65% of the remaining height; feature panel gets the rest
-  var LINE_FRAC    = 0.65;
+
+  // The line, annotations, and isoform panes are content-driven with minimum heights;
+  // only the legend/score/sequence rows above have fixed heights.
+  var MIN_LINE_H   = 140;  // line panel minimum (continuous tracks)
+  var LINE_TRACK_H = 40;   // notional per-track height, scales the line panel with track count
+  var MIN_FEAT_H   = 80;   // annotations panel minimum (range features)
+  var FEAT_ROW_H   = 28;   // per-active-row height inside the annotations panel
+  var ISO_ROW_H    = 20;   // per-isoform row height inside the isoform pane
+  var ISO_PAD      = 10;   // top+bottom padding inside the isoform pane
+  var PANE_LABEL_H = 16;   // space reserved above each dynamic pane for its title
 
   /* ── ClustalX residue text colors ──────────────────────────────────────────── */
 
@@ -162,34 +178,73 @@
     return v.toFixed(2);
   }
 
-  // Compute panel boundary positions (all in CSS px, top-down).
+  // Range-feature rows that currently have data (order matches the annotations panel).
+  function activeFeatRows() {
+    return FEAT_ROWS.filter(function (name) {
+      return rangeFeatures.some(function (f) { return f.source === name; });
+    });
+  }
+
+  // Compute panel boundary + height positions (all in CSS px, top-down).
+  //
+  // The line, annotations, and isoform panes are content-driven with minimum heights;
+  // the legend band, score row, and sequence strip stay fixed. If the canvas is taller
+  // than the sum of natural heights, the line panel absorbs the extra space so the
+  // canvas is never under-filled.
   function getPanelLayout(cssH) {
-    // fixed overhead: title + legend band + score row + seq strip + 4 gaps
-    var contentH  = Math.max(cssH - TOP_GUTTER - LEGEND_H - SCORE_H - SEQ_H - PANEL_GAP * 4, 40);
-    var lineH     = Math.round(contentH * LINE_FRAC);
-    var featH     = contentH - lineH;
-    var lineTop   = TOP_GUTTER;
+    var lineH = Math.max(MIN_LINE_H, lineTracks.length * LINE_TRACK_H);
+    var featH = Math.max(MIN_FEAT_H, activeFeatRows().length * FEAT_ROW_H);
+    var isoH  = isoIsoforms.length > 1 ? isoIsoforms.length * ISO_ROW_H + ISO_PAD : 0;
+
+    // 5 gaps: line→legend, legend→feat, feat→iso (if present), iso/feat→score, score→seq
+    var nGaps = isoH > 0 ? 5 : 4;
+    // each dynamic pane (line/feat/iso) reserves PANE_LABEL_H above it for its title
+    var nLabels = 2 + (isoH > 0 ? 1 : 0);
+    var naturalTotal = TOP_GUTTER + PANE_LABEL_H * nLabels + lineH + LEGEND_H + featH + isoH
+      + SCORE_H + SEQ_H + PANEL_GAP * nGaps;
+    var slack = Math.max(cssH - naturalTotal, 0);
+    lineH += slack;  // give any leftover canvas height to the line panel
+
+    var lineLabelTop = TOP_GUTTER;
+    var lineTop   = lineLabelTop + PANE_LABEL_H;
     var legendTop = lineTop + lineH + PANEL_GAP;
-    var featTop   = legendTop + LEGEND_H + PANEL_GAP;
-    var scoreTop  = featTop + featH + PANEL_GAP;
+    var featLabelTop = legendTop + LEGEND_H + PANEL_GAP;
+    var featTop   = featLabelTop + PANE_LABEL_H;
+    var isoLabelTop = featTop + featH + PANEL_GAP;
+    var isoTop    = isoH > 0 ? isoLabelTop + PANE_LABEL_H : isoLabelTop;
+    var scoreTop  = isoTop + isoH + (isoH > 0 ? PANEL_GAP : 0);
     var seqTop    = scoreTop + SCORE_H + PANEL_GAP;
     return {
+      lineLabelTop: lineLabelTop,
       lineTop:   lineTop,
       lineH:     lineH,
       legendTop: legendTop,
       legendH:   LEGEND_H,
+      featLabelTop: featLabelTop,
       featTop:   featTop,
       featH:     featH,
+      isoLabelTop: isoLabelTop,
+      isoTop:    isoTop,
+      isoH:      isoH,
       scoreTop:  scoreTop,
       scoreH:    SCORE_H,
       seqTop:    seqTop,
       seqH:      SEQ_H,
+      naturalTotal: naturalTotal,
     };
   }
 
   /* ── Core render ───────────────────────────────────────────────────────────── */
 
   function render() {
+    // set the canvas's CSS height to fit its content-driven panes before measuring —
+    // getPanelLayout(0) reports the natural total height with zero slack.
+    var canvasEl = document.getElementById("ts_plot_div");
+    if (canvasEl) {
+      var naturalH = getPanelLayout(0).naturalTotal;
+      canvasEl.style.height = naturalH + "px";
+    }
+
     var inf = getCanvasInfo();
     if (!inf) return;
     var canvas = inf.canvas;
@@ -213,6 +268,7 @@
     drawLinePanel(ctx, inf, layout);
     drawLegendBand(ctx, inf, layout);
     drawFeaturePanel(ctx, inf, layout);
+    drawIsoformPane(ctx, inf, layout);
     drawScoreHeatmap(ctx, inf, layout);
     drawSeqStrip(ctx, inf, layout);
 
@@ -277,6 +333,15 @@
       ctx.restore();
     }
 
+    // pane title, above the panel
+    ctx.save();
+    ctx.font         = "bold 11px sans-serif";
+    ctx.fillStyle    = "#555";
+    ctx.textAlign    = "left";
+    ctx.textBaseline = "top";
+    ctx.fillText("Conservation and structure", LEFT_GUTTER, layout.lineLabelTop);
+    ctx.restore();
+
     if (lineTracks.length === 0) return;
 
     // y-axis is pinned to 0 at the bottom (scores are normalized to [0, 1])
@@ -338,7 +403,7 @@
 
   /* ── Feature panel (row 2: range annotations) ──────────────────────────────── */
 
-  var FEAT_ROWS = ["isoforms", "Phobius", "Pfam", "modification", "hydrophobic_patch", "UniProt", "UniProt_site"];
+  var FEAT_ROWS = ["Phobius", "Pfam", "modification", "hydrophobic_patch", "UniProt", "UniProt_site"];
   var FEAT_ROW_LABELS = {hydrophobic_patch: "Hydro. patch", UniProt: "UniProt", UniProt_site: "UniProt site"};
 
   function drawFeaturePanel(ctx, inf, layout) {
@@ -351,10 +416,17 @@
     ctx.lineWidth   = 1;
     ctx.strokeRect(LEFT_GUTTER, top, inf.dataW, h);
 
+    // pane title, above the panel
+    ctx.save();
+    ctx.font         = "bold 11px sans-serif";
+    ctx.fillStyle    = "#555";
+    ctx.textAlign    = "left";
+    ctx.textBaseline = "top";
+    ctx.fillText("Annotations", LEFT_GUTTER, layout.featLabelTop);
+    ctx.restore();
+
     // only show rows that actually have data
-    var activeRows = FEAT_ROWS.filter(function (name) {
-      return rangeFeatures.some(function (f) { return f.source === name; });
-    });
+    var activeRows = activeFeatRows();
     if (activeRows.length === 0) return;
 
     // assign evenly-spaced y positions within the panel
@@ -421,6 +493,150 @@
         ctx.textBaseline = "middle";
         ctx.fillText(label, (x0 + x1) / 2, py);
       }
+    });
+
+    ctx.restore();
+  }
+
+  /* ── Isoform pane (one row per isoform, longest first) ───────────────────────── */
+
+  function drawIsoformPane(ctx, inf, layout) {
+    isoHitBoxes = [];
+    if (layout.isoH <= 0 || isoIsoforms.length === 0) return;
+
+    var top = layout.isoTop, h = layout.isoH;
+
+    ctx.fillStyle   = "#fafafa";
+    ctx.fillRect(LEFT_GUTTER, top, inf.dataW, h);
+    ctx.strokeStyle = "#d8d8d8";
+    ctx.lineWidth   = 1;
+    ctx.strokeRect(LEFT_GUTTER, top, inf.dataW, h);
+
+    // pane title, above the panel
+    ctx.save();
+    ctx.font         = "bold 11px sans-serif";
+    ctx.fillStyle    = "#555";
+    ctx.textAlign    = "left";
+    ctx.textBaseline = "top";
+    ctx.fillText("Isoforms", LEFT_GUTTER, layout.isoLabelTop);
+    ctx.restore();
+
+    var n = isoIsoforms.length;
+    var innerH = h - ISO_PAD;
+    var rowH   = innerH / n;
+    var r      = getXRange();
+
+    // grey exon-boundary lines, drawn behind the isoform rows (reserved for future
+    // genewise integration — exonBoundaries is empty until that work lands)
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(LEFT_GUTTER, top, inf.dataW, h);
+    ctx.clip();
+    ctx.strokeStyle = "#ddd";
+    ctx.lineWidth   = 1;
+    isoExonBoundaries.forEach(function (pos) {
+      if (pos < r[0] || pos > r[1]) return;
+      var x = posToX(pos, inf);
+      ctx.beginPath();
+      ctx.moveTo(x, top + ISO_PAD / 2);
+      ctx.lineTo(x, top + h - ISO_PAD / 2);
+      ctx.stroke();
+    });
+    ctx.restore();
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(LEFT_GUTTER, top, inf.dataW, h);
+    ctx.clip();
+
+    isoIsoforms.forEach(function (iso, idx) {
+      var rowTop = top + ISO_PAD / 2 + idx * rowH;
+      var rowMid = rowTop + rowH / 2;
+      var barH   = Math.max(4, rowH * 0.55);
+
+      // row label in the left gutter
+      ctx.fillStyle    = iso.isQuery ? "#333" : "#888";
+      ctx.font         = (iso.isQuery ? "bold " : "") + "9px sans-serif";
+      ctx.textAlign    = "right";
+      ctx.textBaseline = "middle";
+      var label = iso.label.length > 12 ? iso.label.slice(0, 11) + "…" : iso.label;
+      ctx.fillText(label, LEFT_GUTTER - 3, rowMid);
+
+      // centerline under internal gaps only — i.e. "skipped" spans that fall strictly
+      // between two present spans, not before the first or after the last (no line
+      // is drawn for missing N-/C-terminal sequence, only for an internal deletion)
+      var presentSpans = iso.present || [];
+      if (presentSpans.length) {
+        var firstPos = presentSpans[0][0];
+        var lastPos  = presentSpans[presentSpans.length - 1][1];
+        ctx.strokeStyle = "#ccc";
+        ctx.lineWidth   = 1;
+        (iso.skipped || []).forEach(function (span) {
+          var start = span[0], stop = span[1];
+          if (start <= firstPos || stop >= lastPos) return;  // N-/C-terminal, skip
+          if (stop < r[0] || start > r[1]) return;
+          var x0 = posToX(start - 0.5, inf);
+          var x1 = posToX(stop + 0.5, inf);
+          ctx.beginPath();
+          ctx.moveTo(x0, rowMid);
+          ctx.lineTo(x1, rowMid);
+          ctx.stroke();
+        });
+      }
+
+      // present spans: grey by default, colored only where they overlap a projected
+      // Pfam domain (sub-segmented so the colored region matches the domain exactly)
+      var GREY = "#bbbbbb";
+      presentSpans.forEach(function (span) {
+        var start = span[0], stop = span[1];
+        if (stop < r[0] || start > r[1]) return;
+
+        var domains = (iso.domains || [])
+          .filter(function (d) { return d.stop >= start && d.start <= stop; })
+          .map(function (d) { return {start: Math.max(d.start, start), stop: Math.min(d.stop, stop),
+                                      color: d.color}; })
+          .sort(function (a, b) { return a.start - b.start; });
+
+        var segs = [];
+        var cursor = start;
+        domains.forEach(function (d) {
+          if (d.start > cursor) segs.push({start: cursor, stop: d.start - 1, color: GREY});
+          segs.push({start: d.start, stop: d.stop, color: d.color});
+          cursor = d.stop + 1;
+        });
+        if (cursor <= stop) segs.push({start: cursor, stop: stop, color: GREY});
+
+        segs.forEach(function (seg) {
+          var x0 = posToX(seg.start - 0.5, inf);
+          var x1 = posToX(seg.stop + 0.5, inf);
+          if (x1 <= x0 + 0.5) return;
+          ctx.globalAlpha = iso.isQuery ? 1.0 : 0.45;
+          ctx.fillStyle    = seg.color;
+          ctx.fillRect(x0, rowTop + (rowH - barH) / 2, x1 - x0, barH);
+          ctx.globalAlpha = 1;
+          if (iso.isQuery) {
+            ctx.strokeStyle = "#000";
+            ctx.lineWidth   = 1;
+            ctx.strokeRect(x0, rowTop + (rowH - barH) / 2, x1 - x0, barH);
+          }
+        });
+      });
+
+      // insertion markers: small upward caret at the insertion point, hoverable
+      (iso.inserts || []).forEach(function (ins) {
+        if (ins.after < r[0] || ins.after > r[1]) return;
+        var cx = posToX(ins.after + 0.5, inf);
+        var triW = 6, triH = barH * 0.7;
+        ctx.fillStyle = "#d84315";
+        ctx.beginPath();
+        ctx.moveTo(cx - triW / 2, rowTop + rowH);
+        ctx.lineTo(cx + triW / 2, rowTop + rowH);
+        ctx.lineTo(cx, rowTop + rowH - triH);
+        ctx.closePath();
+        ctx.fill();
+        isoHitBoxes.push({isoIdx: idx, insert: ins, x0: cx - 4, x1: cx + 4,
+                          y0: rowTop + rowH - triH, y1: rowTop + rowH});
+      });
     });
 
     ctx.restore();
@@ -737,6 +953,36 @@
       });
     }
 
+    // show isoform info when hovering the isoform pane
+    if (layout.isoH > 0 && cy >= layout.isoTop && cy <= layout.isoTop + layout.isoH) {
+      // insertion markers take priority — they're a point feature, not a span
+      var hitInsert = isoHitBoxes.find(function (box) {
+        return cx >= box.x0 && cx <= box.x1 && cy >= box.y0 && cy <= box.y1;
+      });
+      if (hitInsert) {
+        var isoLabel = isoIsoforms[hitInsert.isoIdx].label;
+        lines = ["+" + hitInsert.insert.length + " aa insert after " + hitInsert.insert.after +
+                 " — " + isoLabel];
+      } else {
+        var n = isoIsoforms.length;
+        var innerH = layout.isoH - ISO_PAD;
+        var rowH   = innerH / n;
+        var rowIdx = Math.floor((cy - layout.isoTop - ISO_PAD / 2) / rowH);
+        var iso    = isoIsoforms[rowIdx];
+        if (iso) {
+          var inPresent = (iso.present || []).some(function (s) { return pos >= s[0] && pos <= s[1]; });
+          if (inPresent) {
+            var domain = (iso.domains || []).find(function (d) { return pos >= d.start && pos <= d.stop; });
+            lines = [iso.label + (domain ? " — Pfam: " + domain.desc + " (" + domain.start +
+                     "–" + domain.stop + ")" : " — present")];
+          } else {
+            var skip = (iso.skipped || []).find(function (s) { return pos >= s[0] && pos <= s[1]; });
+            if (skip) lines = [iso.label + " — absent (" + skip[0] + "–" + skip[1] + ")"];
+          }
+        }
+      }
+    }
+
     // show tag-site score + failed-criterion flags when hovering the score row
     if (cy >= layout.scoreTop && cy <= layout.scoreTop + layout.scoreH) {
       var s = scoreTrack[pos - 1];
@@ -863,6 +1109,9 @@
         }
         return;
       }
+
+      // isoform pane click → no residue selection (rows aren't tag sites)
+      if (layout.isoH > 0 && cy >= layout.isoTop && cy <= layout.isoTop + layout.isoH) return;
 
       if (!inf || !inDataArea(cx, inf)) return;
       shinySetPos(inputNames.residue_click, xToPos(cx, inf));
@@ -1064,6 +1313,9 @@
     scoreMaskReasons = msg.scoreMaskReasons || [];
     scoreMax      = (typeof msg.scoreMax === "number" && msg.scoreMax > 0) ? msg.scoreMax : 1;
     suggestedSites = msg.suggestedSites || [];
+    var isoformPane   = msg.isoformPane || {};
+    isoIsoforms       = isoformPane.isoforms || [];
+    isoExonBoundaries = isoformPane.exonBoundaries || [];
     hiddenTracks  = new Set(defaultHidden);
     committedSet.clear();
     perResidueColors = [];

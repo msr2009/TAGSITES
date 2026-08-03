@@ -345,9 +345,10 @@ def test_full_pipeline_all_tasks(DATA, email, tmp_path):
     assert len(blast_lines) > 0, "blast JSD output is empty"
     isoforms_path = companion_path(blast_out, "blast", "isoforms")
     if isoforms_path and os.path.exists(isoforms_path):
-        iso_df = pd.read_csv(isoforms_path, sep="\t",
-                             names=["source", "start", "stop", "description"])
-        assert set(iso_df.columns) == {"source", "start", "stop", "description"}
+        with open(isoforms_path) as f:
+            iso_result = json.load(f)
+        assert set(iso_result) >= {"query_len", "query_accession", "source", "isoforms"}
+        assert iso_result["source"] in ("uniprot", "blast")
 
     # plddt: headerless 2-col TSV + sasa companion
     plddt_out = run_json["tasks"]["PLDDT_plddt"]["args"]["output"]
