@@ -88,7 +88,7 @@ def fetch_computationally_mapped_isoforms(base_acc, gene_id):
     try:
         resp = requests.get(
             "https://rest.uniprot.org/uniprotkb/search",
-            params={"query": f"xref:{gene_id}", "format": "json",
+            params={"query": f"xref:GeneID-{gene_id}", "format": "json",
                     "fields": "accession,protein_name,sequence", "size": 50},
             timeout=15,
         )
