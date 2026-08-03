@@ -35,11 +35,16 @@
   var rangeFeatures = [];   // [{source, start, stop, desc, color, yRow}]
   var hiddenTracks  = new Set();
   var plotTitle     = "";
-  var plotYMax      = 1.1;  // fixed y ceiling for the line panel
+  var plotYMax      = 1.0;  // fixed y ceiling for the line panel
   var legendHitBoxes = [];  // [{name, x0, y0, x1, y1}] — rebuilt on each render
 
   // Isoform pane (see utils/results.py build_plot_payload / _build_isoform_pane)
-  var isoIsoforms     = [];  // [{label, isQuery, present, skipped, inserts, domains}]
+  var isoIsoforms     = [];  // [{label, accession, isQuery, present, skipped, inserts, domains}]
+
+  // isoform label plus its UniProt accession, when known and not already the label itself
+  function isoLabelWithAcc(iso) {
+    return iso.label + (iso.accession && iso.accession !== iso.label ? " (" + iso.accession + ")" : "");
+  }
   var isoExonBoundaries = [];  // [pos, ...] — reserved for future genewise integration; empty today
   var isoHitBoxes      = [];  // [{isoIdx, x, y, r}] — insert-marker hit targets, rebuilt on each render
 
@@ -63,21 +68,23 @@
   var LEFT_GUTTER  = 62;   // y-axis labels
   var RIGHT_GUTTER = 14;
   var TOP_GUTTER   = 6;    // top margin
-  var SEQ_H        = 58;   // fixed height for sequence strip
+  var SCORE_FILL_H = 24;   // score heatmap bar height (excludes marker margin)
+  var SEQ_TICK_H   = 16;   // axis-number row above the sequence letters
+  var SEQ_H        = SCORE_FILL_H + SEQ_TICK_H;   // letters (= score bar height) + axis numbers
   var SCORE_MARK_H = 8;    // top margin reserved for suggested-site triangle markers
-  var SCORE_H      = 24 + SCORE_MARK_H;   // fixed height for the score heatmap row (fill + marker margin)
+  var SCORE_H      = SCORE_FILL_H + SCORE_MARK_H;   // total row height (fill + marker margin)
   var LEGEND_H     = 22;   // fixed-height legend band between line and feature panels
   var PANEL_GAP    = 8;    // gap between panels
 
   // The line, annotations, and isoform panes are content-driven with minimum heights;
   // only the legend/score/sequence rows above have fixed heights.
-  var MIN_LINE_H   = 140;  // line panel minimum (continuous tracks)
+  var MIN_LINE_H   = 80;   // line panel minimum (continuous tracks)
   var LINE_TRACK_H = 40;   // notional per-track height, scales the line panel with track count
   var MIN_FEAT_H   = 80;   // annotations panel minimum (range features)
-  var FEAT_ROW_H   = 28;   // per-active-row height inside the annotations panel
-  var ISO_ROW_H    = 20;   // per-isoform row height inside the isoform pane
+  var FEAT_ROW_H   = 34;   // per-active-row height inside the annotations panel
+  var ISO_ROW_H    = 26;   // per-isoform row height inside the isoform pane
   var ISO_PAD      = 10;   // top+bottom padding inside the isoform pane
-  var PANE_LABEL_H = 16;   // space reserved above each dynamic pane for its title
+  var PANE_LABEL_H = 18;   // space reserved above each dynamic pane for its title
 
   /* ── ClustalX residue text colors ──────────────────────────────────────────── */
 
@@ -288,17 +295,6 @@
     ctx.restore();
   }
 
-  /* ── Title ─────────────────────────────────────────────────────────────────── */
-
-  function drawTitle(ctx, inf, layout) {
-    if (!plotTitle) return;
-    ctx.fillStyle    = "#333";
-    ctx.font         = "bold 13px sans-serif";
-    ctx.textAlign    = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText(plotTitle, inf.cssW / 2, TOP_GUTTER / 2 + 1);
-  }
-
   /* ── Line panel (row 1: continuous per-position scores) ──────────────────── */
 
   function drawLinePanel(ctx, inf, layout) {
@@ -307,9 +303,6 @@
     // panel background + border
     ctx.fillStyle   = "#fff";
     ctx.fillRect(LEFT_GUTTER, top, inf.dataW, h);
-    ctx.strokeStyle = "#d8d8d8";
-    ctx.lineWidth   = 1;
-    ctx.strokeRect(LEFT_GUTTER, top, inf.dataW, h);
 
     // y-axis label "Value" (vertical, in gutter)
     ctx.save();
@@ -322,20 +315,9 @@
     ctx.fillText("Value", 0, 0);
     ctx.restore();
 
-    // run name in top-left corner of the panel
-    if (plotTitle) {
-      ctx.save();
-      ctx.font         = "bold 11px sans-serif";
-      ctx.fillStyle    = "#555";
-      ctx.textAlign    = "left";
-      ctx.textBaseline = "top";
-      ctx.fillText(plotTitle, LEFT_GUTTER + 5, top + 4);
-      ctx.restore();
-    }
-
     // pane title, above the panel
     ctx.save();
-    ctx.font         = "bold 11px sans-serif";
+    ctx.font         = "bold 13px sans-serif";
     ctx.fillStyle    = "#555";
     ctx.textAlign    = "left";
     ctx.textBaseline = "top";
@@ -418,7 +400,7 @@
 
     // pane title, above the panel
     ctx.save();
-    ctx.font         = "bold 11px sans-serif";
+    ctx.font         = "bold 13px sans-serif";
     ctx.fillStyle    = "#555";
     ctx.textAlign    = "left";
     ctx.textBaseline = "top";
@@ -514,7 +496,7 @@
 
     // pane title, above the panel
     ctx.save();
-    ctx.font         = "bold 11px sans-serif";
+    ctx.font         = "bold 13px sans-serif";
     ctx.fillStyle    = "#555";
     ctx.textAlign    = "left";
     ctx.textBaseline = "top";
@@ -614,28 +596,35 @@
           ctx.fillStyle    = seg.color;
           ctx.fillRect(x0, rowTop + (rowH - barH) / 2, x1 - x0, barH);
           ctx.globalAlpha = 1;
-          if (iso.isQuery) {
-            ctx.strokeStyle = "#000";
-            ctx.lineWidth   = 1;
-            ctx.strokeRect(x0, rowTop + (rowH - barH) / 2, x1 - x0, barH);
-          }
         });
       });
 
-      // insertion markers: small upward caret at the insertion point, hoverable
+      // insertion markers: downward-pointing caret above the bar, with a matching
+      // line on the bar itself marking the exact insertion site, hoverable
+      var barTop    = rowTop + (rowH - barH) / 2;
+      var barBottom = barTop + barH;
       (iso.inserts || []).forEach(function (ins) {
         if (ins.after < r[0] || ins.after > r[1]) return;
         var cx = posToX(ins.after + 0.5, inf);
-        var triW = 6, triH = barH * 0.7;
+        var triW = 9, triH = barH * 0.7 * 1.5;
+        var triBottom = barTop + barH * 0.7, triTop = triBottom - triH;
         ctx.fillStyle = "#d84315";
         ctx.beginPath();
-        ctx.moveTo(cx - triW / 2, rowTop + rowH);
-        ctx.lineTo(cx + triW / 2, rowTop + rowH);
-        ctx.lineTo(cx, rowTop + rowH - triH);
+        ctx.moveTo(cx - triW / 2, triTop);
+        ctx.lineTo(cx + triW / 2, triTop);
+        ctx.lineTo(cx, triBottom);
         ctx.closePath();
         ctx.fill();
+
+        ctx.strokeStyle = "#d84315";
+        ctx.lineWidth   = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(cx, barTop);
+        ctx.lineTo(cx, barBottom);
+        ctx.stroke();
+
         isoHitBoxes.push({isoIdx: idx, insert: ins, x0: cx - 4, x1: cx + 4,
-                          y0: rowTop + rowH - triH, y1: rowTop + rowH});
+                          y0: triTop, y1: barBottom});
       });
     });
 
@@ -791,7 +780,7 @@
 
   function drawSeqStrip(ctx, inf, layout) {
     var top      = layout.seqTop, h = layout.seqH;
-    var TICK_H   = 16;
+    var TICK_H   = SEQ_TICK_H;
     var LETTER_H = h - TICK_H;
     var LETTER_THRESHOLD = 9;
 
@@ -800,7 +789,6 @@
     ctx.fillRect(LEFT_GUTTER, top, inf.dataW, h);
     ctx.strokeStyle = "#d8d8d8";
     ctx.lineWidth   = 1;
-    ctx.strokeRect(LEFT_GUTTER, top, inf.dataW, h);
     ctx.beginPath();
     ctx.moveTo(LEFT_GUTTER, top + LETTER_H);
     ctx.lineTo(LEFT_GUTTER + inf.dataW, top + LETTER_H);
@@ -842,9 +830,11 @@
         var bgColor = isCommitted ? "#28a745" : "#ffffff";
         ctx.fillStyle = bgColor;
         ctx.fillRect(x0, top, w, LETTER_H);
-        ctx.strokeStyle = "#e0e0e0";
-        ctx.lineWidth   = 0.5;
-        ctx.strokeRect(x0, top, w, LETTER_H);
+        if (!isCommitted) {
+          ctx.strokeStyle = "#e0e0e0";
+          ctx.lineWidth   = 0.5;
+          ctx.strokeRect(x0, top, w, LETTER_H);
+        }
         var letterColor = isCommitted ? "#ffffff" : baseColor;
         var fontSize    = Math.min(14, Math.max(8, w * 0.75));
         ctx.fillStyle    = letterColor;
@@ -960,7 +950,7 @@
         return cx >= box.x0 && cx <= box.x1 && cy >= box.y0 && cy <= box.y1;
       });
       if (hitInsert) {
-        var isoLabel = isoIsoforms[hitInsert.isoIdx].label;
+        var isoLabel = isoLabelWithAcc(isoIsoforms[hitInsert.isoIdx]);
         lines = ["+" + hitInsert.insert.length + " aa insert after " + hitInsert.insert.after +
                  " — " + isoLabel];
       } else {
@@ -970,14 +960,15 @@
         var rowIdx = Math.floor((cy - layout.isoTop - ISO_PAD / 2) / rowH);
         var iso    = isoIsoforms[rowIdx];
         if (iso) {
+          var isoLbl = isoLabelWithAcc(iso);
           var inPresent = (iso.present || []).some(function (s) { return pos >= s[0] && pos <= s[1]; });
           if (inPresent) {
             var domain = (iso.domains || []).find(function (d) { return pos >= d.start && pos <= d.stop; });
-            lines = [iso.label + (domain ? " — Pfam: " + domain.desc + " (" + domain.start +
+            lines = [isoLbl + (domain ? " — Pfam: " + domain.desc + " (" + domain.start +
                      "–" + domain.stop + ")" : " — present")];
           } else {
             var skip = (iso.skipped || []).find(function (s) { return pos >= s[0] && pos <= s[1]; });
-            if (skip) lines = [iso.label + " — absent (" + skip[0] + "–" + skip[1] + ")"];
+            if (skip) lines = [isoLbl + " — absent (" + skip[0] + "–" + skip[1] + ")"];
           }
         }
       }
@@ -1299,7 +1290,9 @@
   Shiny.addCustomMessageHandler("tagsites_set_plot", function (msg) {
     inputNames    = msg.inputs || {};
     plotTitle     = msg.title  || "";
-    plotYMax      = (typeof msg.yMax === "number") ? msg.yMax : 1.1;
+    var runTitleEl = document.getElementById("ts-run-title");
+    if (runTitleEl) runTitleEl.textContent = plotTitle;
+    plotYMax      = 1.0;
     lineTracks    = msg.lineTracks    || [];
     // sasa and hydrophobicity lines clutter the default view — start them hidden
     var defaultHidden = lineTracks
@@ -1361,6 +1354,23 @@
     committedSet = new Set(msg.committed);
     render();
     applyViewerColors();
+  });
+
+  // Incremental rescore: score row + isoform pane only. Unlike tagsites_set_plot (the
+  // load handler), this preserves zoom, committed sites, hidden tracks, and drag mode —
+  // needed so toggling an Advanced/Rescoring control doesn't wipe the user's view.
+  Shiny.addCustomMessageHandler("tagsites_set_scores", function (msg) {
+    scoreTrack       = msg.scoreTrack       || [];
+    scoreFlags       = msg.scoreFlags       || [];
+    scoreMasked      = msg.scoreMasked      || [];
+    scoreMaskReasons = msg.scoreMaskReasons || [];
+    scoreMax         = (typeof msg.scoreMax === "number" && msg.scoreMax > 0) ? msg.scoreMax : 1;
+    suggestedSites   = msg.suggestedSites   || [];
+    if (msg.isoformPane) {
+      isoIsoforms       = msg.isoformPane.isoforms       || [];
+      isoExonBoundaries = msg.isoformPane.exonBoundaries || [];
+    }
+    render();
   });
 
   Shiny.addCustomMessageHandler("tagsites_set_colors", function (msg) {

@@ -41,6 +41,8 @@ from plasmid_assembly import (
 
 from modules.json_card import json_upload_card as _json_upload_card
 from modules.setup_ui import label_with_tip
+from utils.results import load_isoforms_from_json, load_run_metadata
+from utils.tag_filters import position_isoform_labels, describe_position_isoforms
 
 _TAGS_PATH = Path(__file__).parent.parent / "tables" / "tags.tsv"
 _TAGS = load_tags(_TAGS_PATH) if _TAGS_PATH.exists() else {}
@@ -71,6 +73,8 @@ def reagents_server(input, output, session, shared_json, shared_sites):
     reagents_df      = reactive.Value(None)   # full TSV as DataFrame or None
     selected_guides  = reactive.Value({})     # {residue_index (int): set(guide_id)}
     genotyping_results = reactive.Value({})   # {residue_index (int): {amplicon_type: {...}}}
+    iso_labels_by_pos = reactive.Value({})    # residue_index -> [isoform label, ...]; see _load_json
+    iso_all_labels    = reactive.Value([])    # every isoform label in the run, for constitutive detection
 
     # reactive path cell: drives _poll_for_tsv even when reagents_df stays None
     _tsv_path_cache = reactive.Value("")
@@ -140,6 +144,19 @@ def reagents_server(input, output, session, shared_json, shared_sites):
             shared_sites.set(sorted(int(s) for s in saved_sites))
 
         selected_guides.set({})
+
+        # isoform specificity annotation (never filters which sites get reagents designed —
+        # see utils/tag_filters.py; a user reviewing isoforms one at a time still gets
+        # reagents for every site they collect across all of them)
+        iso_result = load_isoforms_from_json(j)
+        isoforms = iso_result.get("isoforms", []) if iso_result else []
+        if len(isoforms) > 1:
+            seq_len = load_run_metadata(j).get("seq_len", 0)
+            iso_labels_by_pos.set(position_isoform_labels(isoforms, seq_len))
+            iso_all_labels.set([iso.get("name") or iso.get("accession") or "" for iso in isoforms])
+        else:
+            iso_labels_by_pos.set({})
+            iso_all_labels.set([])
 
     # ── poll for reagents TSV when it wasn't ready at load time ─────────────
 
@@ -669,7 +686,12 @@ def reagents_server(input, output, session, shared_json, shared_sites):
             if site_rows.empty:
                 continue
             aa = str(site_rows.iloc[0]["amino_acid"])
-            site_label = "{}{}".format(aa, rid)
+            specificity = describe_position_isoforms(rid, iso_labels_by_pos.get(), iso_all_labels.get())
+            site_label = (
+                ui.span("{}{}".format(aa, rid),
+                       ui.span(specificity, class_="iso-badge")) if specificity
+                else "{}{}".format(aa, rid)
+            )
 
             guide_divs = _build_guide_divs(site_rows, rid, content, recut)
             genotyping_div = _build_genotyping_div(
@@ -901,6 +923,8 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                         style="font-size:0.85em;margin:0.25rem 0;",
                     )
 
+            specificity = describe_position_isoforms(rid, iso_labels_by_pos.get(), iso_all_labels.get())
+
             meta_cells = []
             for label, val in [
                 ("Spacer", str(row["spacer"])),
@@ -909,7 +933,7 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                 ("Distance (bp)", str(dist)),
                 ("Recut block", str(row["recut_block_method"])),
                 ("Mutation", str(row["mutation_desc"]) or "—"),
-            ]:
+            ] + ([("Isoforms", specificity)] if specificity else []):
                 meta_cells.append(ui.div(label, class_="param-label"))
                 meta_cells.append(ui.div(val, class_="param-value"))
 

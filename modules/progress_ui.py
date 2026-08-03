@@ -106,7 +106,7 @@ def progress_ui():
         # ── sticky action bar ───────────────────────────────────────────────────
         ui.div(
             ui.input_action_button("run_analysis", "▶ Run Analysis",
-                                   disabled=True, class_="btn-primary btn-sm"),
+                                   disabled=True, class_="btn-success btn-sm"),
             ui.input_action_button("rerun_all", "↻ Re-run All",
                                    disabled=True, class_="btn-outline-warning btn-sm"),
             ui.download_button(

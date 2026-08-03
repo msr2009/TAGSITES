@@ -44,6 +44,8 @@ _STYLE = """
                     display: flex; align-items: center; gap: 0.5rem; }
     .dist-badge { font-size: 0.7rem; background: #e9ecef; border-radius: 3px;
                   padding: 1px 6px; color: #495057; }
+    .iso-badge { font-size: 0.7rem; background: #d1e7dd; border-radius: 3px;
+                 padding: 1px 6px; color: #0f5132; margin-left: 0.5rem; }
 
     /* ASCII diagram */
     .guide-diagram pre {

@@ -1,5 +1,5 @@
 from shiny import reactive, ui, render, module
-import base64, json, os
+import base64, json, os, re
 from modules.json_card import json_upload_card as _json_upload_card
 
 from utils.results import (
@@ -16,37 +16,30 @@ from utils.results import (
     residue_colors_jet,
     _guess_analysis_type,
     _pick_gradient_cmap,
+    _build_isoform_pane,
     _VIRIDIS, _PLASMA, _COOL, _BWR,
 )
 from utils.scoring import (
     score_tag_sites, failed_flags, mask_reasons, score_cmap_hex, score_max,
-    load_scoring_config,
+    load_scoring_config, pick_suggested_sites, position_mask_criterion, with_extra_criteria,
 )
+from utils.tag_filters import isoform_key, isoform_allowed_positions, topology_tag_allowed_positions
 from config import RESULTS_TYPE_DICT, DOMAIN_SOURCE_COLORS
-
-# "Add suggested" picks up to this many top-scoring, well-spaced positions
-_SUGGESTED_MAX_SITES = 3
-_SUGGESTED_MIN_SPACING = 10  # minimum residue gap between suggested sites
 
 # color for residues masked outright (issue #38) — distinct from the white->green
 # score gradient; must match the client-side MASKED_HEX in www/tagsites.js
 _MASKED_HEX = "#d9b3b3"
 
 
-def _pick_suggested_sites(scores):
-    """Top-scoring, well-spaced positions from a score_tag_sites() DataFrame (see on_add_suggested)."""
-    if scores is None or scores.empty:
-        return []
-    ranked = scores.sort_values("score", ascending=False)
-    picked = []
-    for pos in ranked.index:
-        if ranked.loc[pos, "score"] <= 0 or ranked.loc[pos].get("masked", False):
-            break
-        if all(abs(pos - p) >= _SUGGESTED_MIN_SPACING for p in picked):
-            picked.append(pos)
-        if len(picked) >= _SUGGESTED_MAX_SITES:
-            break
-    return [int(p) for p in picked]
+def _safe_id(s):
+    """Strip non-alphanumeric characters for use in a Shiny input ID."""
+    return re.sub(r'[^A-Za-z0-9]', '_', str(s))
+
+
+def _job_label(col, analysis):
+    """Strip the trailing '_<analysis>' suffix from a task column name, e.g. 'BROAD_blast' -> 'BROAD'."""
+    suffix = "_" + analysis
+    return col[:-len(suffix)] if col.lower().endswith(suffix) else col
 
 # pLDDT 4-band legend items (values stored 0-1 after /100 at load time)
 _PLDDT_LEGEND = [
@@ -117,20 +110,113 @@ def _build_colors_and_legend(track, task_name, scheme, aa_df, range_df, seq_len,
 def results_server(input, output, session, shared_json, shared_sites, shared_results_trigger=None):
 
     # ── Per-run data ────────────────────────────────────────────────────────────
-    aa_data     = reactive.Value()     # continuous scores DataFrame
-    range_data  = reactive.Value()     # range annotations DataFrame
-    iso_data    = reactive.Value(None) # isoforms JSON dict (see derive_isoforms.py), or None
-    aln_meta    = reactive.Value([])   # list of (path, task_name, params)
-    run_name    = reactive.Value(None)
-    run_meta    = reactive.Value({})   # {query_seq, pdb_path, seq_len}
-    task_colors = reactive.Value({})   # task_name → hex color (stable across renders)
-    site_scores = reactive.Value(None) # tag-site suggestion scores (see utils.scoring), indexed by pos
+    aa_data       = reactive.Value()     # continuous scores DataFrame
+    range_data    = reactive.Value()     # range annotations DataFrame
+    iso_data      = reactive.Value(None) # isoforms JSON dict (see derive_isoforms.py), or None
+    reagents_data = reactive.Value(None) # reagents-TSV subset used for scoring (see load_reagents_df)
+    aln_meta      = reactive.Value([])   # list of (path, task_name, params)
+    run_name      = reactive.Value(None)
+    run_meta      = reactive.Value({})   # {query_seq, pdb_path, seq_len}
+    task_colors   = reactive.Value({})   # task_name → hex color (stable across renders)
+    # bumped once per _do_load; lets _push_rescore skip the redundant incremental send
+    # that would otherwise immediately follow the full tagsites_set_plot on load. A
+    # plain mutable counter, NOT a reactive.Value: _do_load runs inside the
+    # auto_load_results effect, and a reactive.Value read-then-written by the same
+    # effect that produced it (x.set(x.get() + 1)) is a classic Shiny self-invalidation
+    # loop — the effect becomes a dependent of the very value it just changed, so it
+    # reruns forever. _push_rescore only needs this as a plain, non-reactive marker.
+    _plot_epoch = [0]
 
     # ── Color-by choices (drives the button row above the structure) ────────────
     color_by_choices = reactive.Value({})  # val → label dict, populated on load
 
     # canonical on-disk path (not the Shiny upload temp path) — used for saves
     json_path = reactive.Value(None)
+
+    # ── Advanced / Rescoring: isoform + topology restrictions (session-only) ────
+
+    def _checked(cid, default=True):
+        """Value of a dynamically rendered checkbox, or `default` before it exists."""
+        try:
+            v = input[cid]()
+        except Exception:
+            return default
+        return default if v is None else bool(v)
+
+    def _phobius_labels():
+        """Distinct Phobius topology labels present in the current run, in first-seen order."""
+        range_df = range_data.get()
+        if range_df is None or range_df.empty:
+            return []
+        phobius = range_df[range_df["source"] == "Phobius"]
+        return list(dict.fromkeys(phobius["description"]))
+
+    @reactive.calc
+    def user_filter_spec():
+        """(visible_keys, tagged_keys, constitutive, checked_topology) from the advanced controls."""
+        isoforms = (iso_data.get() or {}).get("isoforms", [])
+        visible_keys, tagged_keys = set(), set()
+        for i, iso in enumerate(isoforms):
+            k = isoform_key(iso, i)
+            if _checked(f"iso_show_{_safe_id(k)}", True):
+                visible_keys.add(k)
+            if _checked(f"iso_tag_{_safe_id(k)}", True):
+                tagged_keys.add(k)
+        constitutive = _checked("iso_constitutive_only", False)
+        checked_topology = {lbl for lbl in _phobius_labels()
+                            if _checked(f"topology_tag_{_safe_id(lbl)}", True)}
+        return visible_keys, tagged_keys, constitutive, checked_topology
+
+    def _visible_iso_result():
+        """iso_data with hidden isoforms filtered out (the query isoform is never hidden)."""
+        iso_result = iso_data.get()
+        if not iso_result:
+            return iso_result
+        visible_keys, _, _, _ = user_filter_spec()
+        isoforms = [iso for i, iso in enumerate(iso_result.get("isoforms", []))
+                   if iso.get("is_query") or isoform_key(iso, i) in visible_keys]
+        return {**iso_result, "isoforms": isoforms}
+
+    @reactive.calc
+    def site_scores():
+        """Tag-site scores for the loaded run under the current advanced-panel filters.
+
+        Returns (scores_df, merged_config) — the merged config (base + any synthesized
+        user-restriction criteria) must be reused by every mask_reasons()/failed_flags()
+        call downstream, or the tooltip silently loses the user-restriction labels.
+        """
+        aa_df, range_df = aa_data.get(), range_data.get()
+        meta = run_meta.get() or {}
+        seq_len = meta.get("seq_len", 0)
+        cfg = load_scoring_config()  # reloaded each time so config edits take effect
+
+        isoforms = (iso_data.get() or {}).get("isoforms", [])
+        visible_keys, tagged_keys, constitutive, checked_topology = user_filter_spec()
+        all_topology = set(_phobius_labels())
+        all_positions = set(range(1, seq_len + 1))
+
+        # isoform and topology restrictions are computed independently and each becomes
+        # its own mask criterion; since mask criteria OR together (any firing masks the
+        # position), the net effect is exactly their intersection — same as ANDing the
+        # two restrictions directly
+        extra = []
+        iso_allowed = isoform_allowed_positions(isoforms, visible_keys, tagged_keys,
+                                                constitutive, seq_len)
+        if iso_allowed is not None:
+            label = "not constitutive" if constitutive else "not in selected isoforms"
+            extra.append(position_mask_criterion(all_positions - iso_allowed,
+                                                  "user_isoform_mask", label))
+        topo_allowed = topology_tag_allowed_positions(range_df, all_topology, checked_topology, seq_len)
+        if topo_allowed is not None:
+            label = ("no topology tagged" if not checked_topology
+                     else "outside " + ", ".join(sorted(checked_topology)))
+            extra.append(position_mask_criterion(all_positions - topo_allowed,
+                                                  "user_topology_mask", label))
+        cfg = with_extra_criteria(cfg, extra)
+
+        scores_df = score_tag_sites(aa_df, range_df, meta.get("query_seq", ""),
+                                    reagents_data.get(), cfg)
+        return scores_df, cfg
 
     # ── Load results ────────────────────────────────────────────────────────────
 
@@ -147,27 +233,34 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
         task_colors.set(assign_task_colors(aa_df) if aa_df is not None else {})
 
         # tag-site suggestion scoring (see utils/scoring.py, issue #32) — reagents
-        # data is optional and only present once the Reagents task has run.
-        # scoring_cfg is reloaded on every load so edits to scores.config.json
-        # take effect without restarting the app
-        reagents_df = load_reagents_df(json_content)
-        scoring_cfg = load_scoring_config()
-        site_scores.set(score_tag_sites(aa_df, range_df, meta.get("query_seq", ""),
-                                        reagents_df, scoring_cfg))
+        # data is optional and only present once the Reagents task has run; site_scores()
+        # itself reloads scores.config.json each call so config edits take effect without
+        # restarting the app
+        reagents_data.set(load_reagents_df(json_content))
 
-        # build color-by button choices
+        # build color-by button choices, grouped by analysis type (BLAST jobs together,
+        # then pLDDT jobs together) rather than left in raw column order
         # pLDDT tracks use the standard AlphaFold 4-band categorical scheme only
         choices = {"(none)": "N→C"}
         if aa_df is not None:
+            blast_cols, plddt_cols, other_cols = [], [], []
             for col in aa_df.columns[1:]:
-                if _guess_analysis_type(col) == "plddt" and not col.endswith("_sasa"):
-                    choices[col] = col
+                if _guess_analysis_type(col) == "blast":
+                    blast_cols.append(col)
+                elif _guess_analysis_type(col) == "plddt" and not col.endswith("_sasa"):
+                    plddt_cols.append(col)
                 elif col.endswith("_sasa"):
-                    choices[col] = "Solv Access"
+                    other_cols.append((col, "Solv Access"))
                 elif col.endswith("_hydro"):
-                    choices[col] = "Hydrophobic exposure"
+                    other_cols.append((col, "Hydrophobic exposure"))
                 else:
-                    choices[col] = col
+                    other_cols.append((col, col))
+            for label, cols in (("BLAST", blast_cols), ("pLDDT", plddt_cols)):
+                for col in cols:
+                    job = _job_label(col, _guess_analysis_type(col))
+                    choices[col] = label if len(cols) == 1 else f"{label} ({job})"
+            for col, name in other_cols:
+                choices[col] = name
         if range_df is not None and not range_df.empty:
             if not range_df[range_df["source"].isin({"Pfam", "modification", "UniProt", "UniProt_site"})].empty:
                 choices["__domains__"] = "Domains"
@@ -177,13 +270,19 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
                 choices["__hydrophobic_patch__"] = "Hydrophobic patches"
         if iso_result and len(iso_result.get("isoforms", [])) > 1:
             choices["__isoforms__"] = "Isoforms"
-        scores = site_scores.get()
-        if scores is not None and not scores.empty:
+        # NOTE: deliberately not calling site_scores() here — this effect (via _do_load)
+        # is what sets aa_data/range_data/run_meta/iso_data/reagents_data, which
+        # site_scores() depends on; reading it from the same execution that just wrote
+        # those values made this effect a dependent of its own writes, causing an
+        # infinite invalidate/rerun loop. seq_len > 0 is exactly score_tag_sites'
+        # condition for producing a non-empty frame (see utils.scoring.score_tag_sites).
+        if meta.get("seq_len", 0) > 0:
             choices["__score__"] = "Score"
         color_by_choices.set(choices)
         ui.update_select("color_by", choices=choices, selected="(none)")
 
         await _send_plot(aa_df, range_df, meta, json_content["global"]["run_name"], iso_result)
+        _plot_epoch[0] += 1  # marks the full payload just sent above as current
         # always reset structure colors on load — don't rely on color_by reactive firing
         # (it won't fire if color_by was already "(none)" before this load)
         jet_colors = residue_colors_jet(meta.get("seq_len", 0))
@@ -267,45 +366,74 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
             "remove_site":   session.ns("remove_site"),
         }
 
+    def _score_payload(scores, cfg, seq_len):
+        """Build the score* payload keys shared by the full plot and incremental rescore.
+
+        `cfg` must be the merged config that produced `scores` (base criteria plus any
+        synthesized user-restriction ones) or mask_reasons() will silently drop the
+        user-restriction tooltip labels.
+        """
+        if scores is None or scores.empty or not seq_len:
+            return {"scoreTrack": [], "scoreFlags": [], "scoreMasked": [],
+                    "scoreMaskReasons": [], "scoreMax": 1, "suggestedSites": []}
+        by_pos = scores["score"]
+        flags_by_pos = dict(zip(scores.index, failed_flags(scores, cfg)))
+        masked_by_pos = scores["masked"]
+        mask_reasons_by_pos = dict(zip(scores.index, mask_reasons(scores, cfg)))
+        return {
+            "scoreTrack": [int(by_pos[p]) if p in by_pos.index else None
+                          for p in range(1, seq_len + 1)],
+            "scoreFlags": [flags_by_pos.get(p, []) for p in range(1, seq_len + 1)],
+            "scoreMasked": [bool(masked_by_pos[p]) if p in masked_by_pos.index else False
+                           for p in range(1, seq_len + 1)],
+            "scoreMaskReasons": [mask_reasons_by_pos.get(p, []) for p in range(1, seq_len + 1)],
+            "scoreMax": max(1, int(score_max(cfg))),
+            "suggestedSites": pick_suggested_sites(scores),
+        }
+
     async def _send_plot(aa_df, range_df, meta, title, iso_result=None):
-        """Build and send all plot data to the native canvas renderer."""
+        """Build and send all plot data to the native canvas renderer.
+
+        Called from _do_load, so this computes scores directly with score_tag_sites()
+        rather than through the site_scores() calc — site_scores() depends (via
+        user_filter_spec) on the Advanced/Rescoring checkboxes, and _do_load is what
+        (re)renders those checkboxes each load; calling site_scores() from here would
+        make the load effect a listener of its own dynamically-recreated inputs and
+        loop forever. No user restriction has been set yet at load time anyway (the
+        panel is session-only and starts unrestricted), so this matches site_scores()'s
+        unfiltered case exactly. See _push_rescore for the filtered incremental path.
+        """
         payload = build_plot_payload(aa_df, range_df, iso_result=iso_result, title=title)
         payload["seq"] = meta.get("query_seq", "")
         payload["inputs"] = _input_names()
 
         # tag-site score heatmap row (see utils/scoring.py, issue #32)
-        scores = site_scores.get()
-        seq_len = meta.get("seq_len", 0)
-        if scores is not None and not scores.empty and seq_len:
-            scoring_cfg = load_scoring_config()
-            by_pos = scores["score"]
-            payload["scoreTrack"] = [
-                int(by_pos[p]) if p in by_pos.index else None for p in range(1, seq_len + 1)
-            ]
-            flags_by_pos = dict(zip(scores.index, failed_flags(scores, scoring_cfg)))
-            payload["scoreFlags"] = [
-                flags_by_pos.get(p, []) for p in range(1, seq_len + 1)
-            ]
-            masked_by_pos = scores["masked"]
-            payload["scoreMasked"] = [
-                bool(masked_by_pos[p]) if p in masked_by_pos.index else False
-                for p in range(1, seq_len + 1)
-            ]
-            mask_reasons_by_pos = dict(zip(scores.index, mask_reasons(scores, scoring_cfg)))
-            payload["scoreMaskReasons"] = [
-                mask_reasons_by_pos.get(p, []) for p in range(1, seq_len + 1)
-            ]
-            payload["scoreMax"] = max(1, int(score_max(scoring_cfg)))
-            payload["suggestedSites"] = _pick_suggested_sites(scores)
-        else:
-            payload["scoreTrack"] = []
-            payload["scoreFlags"] = []
-            payload["scoreMasked"] = []
-            payload["scoreMaskReasons"] = []
-            payload["scoreMax"] = 1
-            payload["suggestedSites"] = []
+        cfg = load_scoring_config()
+        scores = score_tag_sites(aa_df, range_df, meta.get("query_seq", ""),
+                                 reagents_data.get(), cfg)
+        payload.update(_score_payload(scores, cfg, meta.get("seq_len", 0)))
 
         await session.send_custom_message("tagsites_set_plot", payload)
+
+    _last_full_plot_epoch = {"v": None}
+
+    @reactive.effect
+    async def _push_rescore():
+        """Push an incremental score/isoform-pane update when the advanced controls change.
+
+        Skips the first invalidation after each _do_load — that rescore was already
+        covered by the full tagsites_set_plot send — so only later advanced-panel edits
+        trigger this (issue: don't wipe zoom/committed sites with a full plot re-send).
+        """
+        scores, cfg = site_scores()
+        epoch = _plot_epoch[0]  # plain read, not reactive — see _plot_epoch's definition
+        if _last_full_plot_epoch["v"] != epoch:
+            _last_full_plot_epoch["v"] = epoch
+            return
+        meta = run_meta.get() or {}
+        payload = _score_payload(scores, cfg, meta.get("seq_len", 0))
+        payload["isoformPane"] = _build_isoform_pane(_visible_iso_result(), range_data.get())
+        await session.send_custom_message("tagsites_set_scores", payload)
 
     async def _send_struct(pdb_path):
         """Read PDB file and send to 3Dmol viewer; clears the viewer if unreadable."""
@@ -375,7 +503,8 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
     @reactive.event(input.add_suggested_button)
     def on_add_suggested():
         """Add the top-scoring, well-spaced tag sites (see utils.scoring.score_tag_sites)."""
-        picked = _pick_suggested_sites(site_scores.get())
+        scores, _ = site_scores()
+        picked = pick_suggested_sites(scores) if scores is not None and not scores.empty else []
         if not picked:
             return
         sites = sorted(set(shared_sites.get()) | set(picked))
@@ -410,9 +539,13 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
     # ── Color-by handler ─────────────────────────────────────────────────────────
 
     @reactive.effect
-    @reactive.event(input.color_by)
     async def sync_js_colors():
-        """Compute per-residue colors for the selected track and send to 3D viewer."""
+        """Compute per-residue colors for the selected track and send to 3D viewer.
+
+        Not gated with @reactive.event(input.color_by) — the __score__ branch below reads
+        site_scores(), so a live rescore (advanced-panel change) also refreshes the
+        structure coloring, not just an explicit color_by change.
+        """
         track = input.color_by()
         if not track or track == "(none)":
             meta = run_meta.get()
@@ -424,7 +557,7 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
             return
 
         if track == "__score__":
-            scores = site_scores.get()
+            scores, _ = site_scores()
             meta = run_meta.get()
             seq_len = meta.get("seq_len", 0) if meta else 0
             vmax = max(1, int(scores["score"].max())) if scores is not None and not scores.empty else 1
@@ -453,7 +586,7 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
         colors, legend = _build_colors_and_legend(
             track, task_name, scheme,
             aa_data.get(), range_data.get(), seq_len, hex_color,
-            iso_result=iso_data.get(),
+            iso_result=_visible_iso_result(),
         )
         if colors is None:
             return
@@ -523,6 +656,140 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
             )
             chips.append(chip)
         return ui.div(*chips, id="ts-sites-box")
+
+    @render.ui
+    def advanced_panel():
+        """Advanced / Rescoring accordion — isoform + topology tag restrictions.
+
+        Restricts scoring/suggested-sites/structure coloring only — never which sites get
+        reagents designed (Reagents tab annotates isoform specificity instead; see
+        modules/reagents_server.py). Hidden entirely when there's nothing to restrict.
+
+        Deliberately depends only on iso_data/range_data (i.e. re-renders on a new run
+        load), NOT on site_scores() — site_scores() itself depends on the checkboxes this
+        function creates, so reading it here would re-render the checkboxes every time
+        their own value changes, which re-fires their "set" event and never settles. The
+        live position count instead lives in the separate filter_summary output below.
+        """
+        iso_result = iso_data.get() or {}
+        isoforms = sorted(iso_result.get("isoforms", []), key=lambda x: x.get("length", 0),
+                          reverse=True)
+        topology_labels = _phobius_labels()
+        if len(isoforms) <= 1 and not topology_labels:
+            return ui.div()
+
+        body = []
+
+        if len(isoforms) > 1:
+            # Show before Tag so Tag ends up the rightmost column in both matrices —
+            # matches the Phobius matrix below (Name, Tag) at the same 340px width, so
+            # the Tag checkboxes line up vertically between the two matrices.
+            header = ui.div(
+                ui.span("Isoform (Uniprot ID)", class_="ts-matrix-name-label"),
+                ui.span("Show", class_="ts-matrix-col-label"),
+                ui.span("Tag", class_="ts-matrix-col-label"),
+                class_="ts-iso-matrix-row ts-matrix-header",
+            )
+            iso_rows = []
+            for i, iso in enumerate(isoforms):
+                k = _safe_id(isoform_key(iso, i))
+                # UniProt accession is the preferred row label — it's the stable,
+                # unambiguous identifier; fall back to name/index for BLAST-inferred
+                # isoforms that have no accession (see derive_isoforms.py)
+                label = iso.get("accession") or iso.get("name") or f"isoform {i + 1}"
+                length = iso.get("length")
+                if length:
+                    label += f" ({length} aa)"
+                is_query = bool(iso.get("is_query"))
+                # the query row's Show is a real (Bootstrap-styled) checkbox, same as the
+                # other rows, just disabled client-side below — a raw unstyled <input>
+                # looked visually different (no Bootstrap checkbox skin) from the rest
+                show_class = "ts-query-show-cell" if is_query else ""
+                iso_rows.append(ui.div(
+                    ui.span(label + (" (query)" if is_query else ""), class_="ts-matrix-name"),
+                    ui.div(ui.input_checkbox(f"iso_show_{k}", "", value=True, width="auto"),
+                          class_=show_class),
+                    ui.div(ui.input_checkbox(f"iso_tag_{k}", "", value=True, width="auto"),
+                          class_="ts-iso-tag-cell"),
+                    class_="ts-iso-matrix-row",
+                ))
+            body.append(ui.div(
+                header, *iso_rows,
+                id="ts-iso-matrix",
+                class_="ts-matrix",
+            ))
+            body.append(ui.div(
+                ui.input_switch("iso_constitutive_only", "Constitutive only", value=False),
+                ui.span("— overrides the Tag column above (disables those checkboxes); "
+                        "restricts tagging to sequence present in every shown isoform.",
+                        class_="ts-filter-hint"),
+                class_="ts-constitutive-toggle",
+            ))
+            # purely client-side: disables the isoform matrix's Tag checkboxes while
+            # Constitutive-only is on, and permanently disables the query row's Show
+            # checkbox (it's always visible; the input is never read server-side).
+            # Not done by re-rendering this output on the switch's value (see the
+            # docstring above — that would recreate the switch itself and reset it,
+            # since this whole function would become a dependent of its own
+            # dynamically-created input).
+            toggle_id = session.ns("iso_constitutive_only")
+            body.append(ui.tags.script(ui.HTML(f"""
+                (function() {{
+                  var toggle = document.getElementById("{toggle_id}");
+                  var tagBoxes = document.querySelectorAll("#ts-iso-matrix .ts-iso-tag-cell input[type=checkbox]");
+                  function sync() {{
+                    tagBoxes.forEach(function(cb) {{ cb.disabled = toggle.checked; }});
+                  }}
+                  if (toggle) {{ toggle.addEventListener("change", sync); sync(); }}
+                  document.querySelectorAll("#ts-iso-matrix .ts-query-show-cell input[type=checkbox]")
+                    .forEach(function(cb) {{ cb.disabled = true; cb.title = "The query isoform can't be hidden"; }});
+                }})();
+            """)))
+
+        if len(isoforms) > 1 and topology_labels:
+            body.append(ui.tags.hr(class_="ts-filter-divider"))
+
+        if topology_labels:
+            topo_header = ui.div(
+                ui.span("Topology (Phobius)", class_="ts-matrix-name-label"),
+                ui.span("Tag", class_="ts-matrix-col-label"),
+                class_="ts-topo-matrix-row ts-matrix-header",
+            )
+            topo_rows = [
+                ui.div(
+                    ui.span(lbl, class_="ts-matrix-name"),
+                    ui.div(ui.input_checkbox(f"topology_tag_{_safe_id(lbl)}", "", value=True,
+                                             width="auto")),
+                    class_="ts-topo-matrix-row",
+                )
+                for lbl in topology_labels
+            ]
+            body.append(ui.div(
+                topo_header, *topo_rows,
+                class_="ts-matrix",
+            ))
+
+        body.append(ui.output_text("filter_summary"))
+
+        return ui.accordion(
+            ui.accordion_panel("Rescoring (Advanced)", *body),
+            open=False, id="advanced_accordion", class_="ts-advanced-accordion",
+        )
+
+    @render.text
+    def filter_summary():
+        """Live '412 / 854 positions available' line — separate from advanced_panel
+
+        so a rescore updates the count without re-rendering (and re-triggering) the
+        Show/Tag checkboxes themselves.
+        """
+        scores, _ = site_scores()
+        meta = run_meta.get() or {}
+        seq_len = meta.get("seq_len", 0)
+        if scores is None or scores.empty or not seq_len:
+            return ""
+        available = int((~scores["masked"]).sum())
+        return f"{available} / {seq_len} positions available"
 
     @render.ui
     def alignments_container():

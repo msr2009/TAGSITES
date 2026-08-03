@@ -27,7 +27,7 @@ def results_ui():
 
         ui.output_ui("json_upload_card"),
 
-        ui.h4("Analysis Results"),
+        ui.h4(ui.tags.span(id="ts-run-title", class_="ts-run-title")),
 
         # ── Main content: plot (left) + structure (right) ─────────────────────
         ui.layout_columns(
@@ -93,6 +93,9 @@ def results_ui():
             class_="ts-sites-row",
         ),
         ui.br(),
+
+        # ── Advanced / Rescoring: isoform + topology tag restrictions ─────────
+        ui.output_ui("advanced_panel"),
 
         # ── Alignment accordion ───────────────────────────────────────────────
         ui.output_ui("alignments_container"),

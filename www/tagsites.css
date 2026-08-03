@@ -1,3 +1,11 @@
+/* ── Results header: run name ─────────────────────────────────────────────────── */
+
+.ts-run-title {
+  font-size: 1em;
+  font-weight: bold;
+  color: inherit;
+}
+
 /* ── Bundle upload spinner ───────────────────────────────────────────────────── */
 
 .ts-bundle-spinner {
@@ -270,6 +278,157 @@
   color: #999;
   font-style: italic;
   font-size: 13px;
+}
+
+
+/* ── Advanced / Rescoring panel ─────────────────────────────────────────────── */
+
+.ts-advanced-accordion {
+  margin-bottom: 16px;
+}
+
+.ts-matrix {
+  max-width: 340px;
+  margin-bottom: 10px;
+}
+
+/* isoform matrix: name column flexes, Tag/Show columns are fixed-width and centered */
+.ts-iso-matrix-row {
+  display: grid;
+  grid-template-columns: 1fr 44px 44px;
+  align-items: center;
+  column-gap: 6px;
+  padding: 5px 0;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+/* Phobius matrix: same pattern, one fewer column */
+.ts-topo-matrix-row {
+  display: grid;
+  grid-template-columns: 1fr 44px;
+  align-items: center;
+  column-gap: 6px;
+  padding: 5px 0;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.ts-iso-matrix-row:last-child, .ts-topo-matrix-row:last-child {
+  border-bottom: none;
+}
+
+.ts-matrix-header {
+  border-bottom: 1px solid #dee2e6;
+  padding-bottom: 4px;
+  margin-bottom: 2px;
+}
+
+.ts-matrix-name-label {
+  color: #495057;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.ts-matrix-col-label {
+  color: #495057;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-align: center;
+}
+
+.ts-matrix-name {
+  font-weight: 500;
+  font-size: 0.9rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* center each row's checkbox under its column header, both horizontally and
+   vertically against the name label — Bootstrap's .checkbox wrapper otherwise
+   adds top padding that nudges the box down relative to the text */
+.ts-iso-matrix-row > div, .ts-topo-matrix-row > div {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+/* neutralize Shiny's default input-container spacing so rows don't jump around —
+   .form-group's own margin-bottom otherwise wins over .shiny-input-container's
+   (same specificity, later in the cascade) and pushes the checkbox up off-center */
+.ts-iso-matrix-row .shiny-input-container,
+.ts-topo-matrix-row .shiny-input-container,
+.ts-iso-matrix-row .form-group,
+.ts-topo-matrix-row .form-group {
+  margin: 0;
+  min-width: 0;
+}
+
+.ts-iso-matrix-row .checkbox,
+.ts-topo-matrix-row .checkbox {
+  margin: 0;
+  padding: 0;
+}
+
+.ts-iso-matrix-row .checkbox label,
+.ts-topo-matrix-row .checkbox label {
+  display: flex;
+  align-items: center;
+  margin: 0;
+  padding: 0;
+}
+
+.ts-iso-matrix-row input[type="checkbox"],
+.ts-topo-matrix-row input[type="checkbox"] {
+  margin: 0;
+}
+
+/* toggle + its explanation sit on one line, not stacked */
+.ts-constitutive-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 10px;
+}
+
+/* Shiny's default .shiny-input-container is width:100% (max-width:400px), which
+   stretches this flex item and shoves the explanation span far to the right —
+   shrink it back down to its content so the two sit next to each other */
+.ts-constitutive-toggle .shiny-input-container {
+  width: auto;
+  max-width: none;
+  margin: 0;
+  flex: 0 0 auto;
+}
+
+/* the switch's own label sits inside a .form-check that isn't flexed by default,
+   so its text baseline drifts from the hint span next to it — center them */
+.ts-constitutive-toggle .form-check {
+  display: flex;
+  align-items: center;
+  min-height: 0;
+}
+
+.ts-constitutive-toggle .form-check-label {
+  margin: 0;
+}
+
+.ts-filter-divider {
+  border: none;
+  border-top: 1px solid #dee2e6;
+  margin: 12px 0;
+}
+
+.ts-filter-hint {
+  color: #999;
+  font-style: italic;
+  font-size: 12px;
+  margin: 2px 0 6px;
+}
+
+.ts-filter-summary {
+  color: #555;
+  font-size: 13px;
+  margin-top: 4px;
 }
 
 

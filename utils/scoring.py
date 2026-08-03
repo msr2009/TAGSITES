@@ -13,6 +13,11 @@ the weighted sum; instead, if any of them fires, the position's score is forced
 to 0 regardless of the other criteria — used for categorical disqualifiers
 (transmembrane/signal/propeptide spans, high-confidence modifications) that
 should never be tagged (issue #38).
+
+Keys starting with "user_" are reserved for runtime mask criteria synthesized
+from user choices (isoform/topology restrictions — see utils/tag_filters.py and
+position_mask_criterion() below) rather than scores.config.json; don't use that
+prefix for a config-authored criterion key.
 """
 
 import json
@@ -66,6 +71,49 @@ def score_max(config=None):
     """Sum of weights over non-mask criteria — the normalization ceiling for the score track."""
     config = config or load_scoring_config()
     return sum(c["weight"] for c in config["criteria"] if not c.get("mask"))
+
+
+def position_mask_criterion(masked_positions, key, label):
+    """Build a runtime mask criterion (weight 0) blocking an explicit set of positions.
+
+    Used to fold a user-driven restriction (see utils/tag_filters.py) into the same
+    config-criteria pipeline as scores.config.json's mask criteria, so masked/score/
+    mask_reasons all pick it up with no other code changes.
+    """
+    return {"key": key, "label": label, "weight": 0, "mask": True,
+            "type": "position_masked", "params": {"positions": set(masked_positions)}}
+
+
+def with_extra_criteria(config, extra):
+    """Shallow copy of a scoring config with extra runtime criteria appended."""
+    if not extra:
+        return config
+    out = dict(config)
+    out["criteria"] = list(config["criteria"]) + list(extra)
+    return out
+
+
+_SUGGESTED_MAX_SITES = 3
+_SUGGESTED_MIN_SPACING = 10
+
+
+def pick_suggested_sites(scores, max_sites=_SUGGESTED_MAX_SITES, min_spacing=_SUGGESTED_MIN_SPACING):
+    """Rank positions by score and return up to max_sites, each at least min_spacing apart.
+
+    Stops at the first masked or non-positive-scoring position in descending-score order,
+    since scores are already 0-forced at masked positions — used both by the Results tab
+    (issue #32) and scripts/suggest_sites.py.
+    """
+    ranked = scores.sort_values("score", ascending=False)
+    picked = []
+    for pos in ranked.index:
+        if ranked.loc[pos, "score"] <= 0 or ranked.loc[pos].get("masked", False):
+            break
+        if all(abs(pos - p) >= min_spacing for p in picked):
+            picked.append(pos)
+        if len(picked) >= max_sites:
+            break
+    return [int(p) for p in picked]
 
 
 def score_cmap_hex(frac):
@@ -234,6 +282,12 @@ def _handle_flank_small_fraction(positions, params, ctx):
     ]
 
 
+def _handle_position_masked(positions, params, ctx):
+    """True where the position is in params['positions'] — a runtime user-supplied mask."""
+    blocked = params["positions"]
+    return [p in blocked for p in positions]
+
+
 SCORE_HANDLERS = {
     "range_absent":         _handle_range_absent,
 	"range_present":		_handle_range_present,
@@ -241,6 +295,7 @@ SCORE_HANDLERS = {
     "reagent_min_below":    _handle_reagent_min_below,
     "reagent_min_above":    _handle_reagent_min_above,
     "flank_small_fraction": _handle_flank_small_fraction,
+    "position_masked":      _handle_position_masked,
 }
 
 
@@ -295,6 +350,54 @@ def score_tag_sites(aa_df, range_df, query_seq, reagents_df=None, config=None):
     out.loc[out["masked"], "score"] = 0
 
     return out
+
+
+def build_user_criteria(run_json, isoform_mode="none", isoform_names=None, topology_labels=None):
+    """Build extra runtime mask criteria for CLI isoform/topology restriction flags.
+
+    isoform_mode: "none" (no restriction, the default — returns [] unchanged), "constitutive"
+    (mask anything not present in every isoform), or "tagged" (mask anything not present in
+    exactly the isoforms named by isoform_names, matched against accession or name). Used by
+    scripts/rescore.py and scripts/suggest_sites.py to let large-scale batch runs design
+    constitutive and isoform-unique sites without going through the Results-tab UI.
+    """
+    # local imports avoid a hard circular dependency at module load time
+    from config import RESULTS_TYPE_DICT
+    from utils.results import load_data_from_json, load_run_metadata
+    from utils.tag_filters import isoform_key, isoform_allowed_positions, topology_allowed_positions
+
+    if isoform_mode == "none" and not topology_labels:
+        return []
+
+    aa_df, range_df, _, iso_result = load_data_from_json(run_json, RESULTS_TYPE_DICT)
+    meta = load_run_metadata(run_json)
+    seq_len = meta.get("seq_len", 0)
+    isoforms = (iso_result or {}).get("isoforms", [])
+    all_positions = set(range(1, seq_len + 1))
+    extra = []
+
+    if isoform_mode != "none":
+        keys = [isoform_key(iso, i) for i, iso in enumerate(isoforms)]
+        visible_keys = set(keys)
+        if isoform_mode == "constitutive":
+            allowed = isoform_allowed_positions(isoforms, visible_keys, set(), True, seq_len)
+            label = "not constitutive"
+        else:  # "tagged"
+            names = set(isoform_names or [])
+            tagged_keys = {k for k in keys if k in names}
+            allowed = isoform_allowed_positions(isoforms, visible_keys, tagged_keys, False, seq_len)
+            label = "not in selected isoforms"
+        if allowed is not None:
+            extra.append(position_mask_criterion(all_positions - allowed,
+                                                 "user_isoform_mask", label))
+
+    if topology_labels:
+        topo_allowed = topology_allowed_positions(range_df, topology_labels, seq_len)
+        if topo_allowed is not None:
+            extra.append(position_mask_criterion(all_positions - topo_allowed,
+                                                 "user_topology_mask",
+                                                 "outside " + ", ".join(topology_labels)))
+    return extra
 
 
 def write_run_scores(run_json_path, config=None, output_path=None):

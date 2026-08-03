@@ -235,6 +235,46 @@ def load_data_from_json(json_in, type_dict):
     return df, dat, alns, iso_result
 
 
+def load_isoforms_from_json(json_in):
+    """Load just the winning isoforms dict for a run, without loading any task TSVs.
+
+    Cheaper than load_data_from_json for callers (e.g. the Reagents tab) that only need
+    isoform records for annotation, not the full continuous/range track data. Same
+    companion-file discovery and candidate selection as load_data_from_json above.
+    """
+    j = {}
+    if isinstance(json_in, dict):
+        j = json_in
+    elif isinstance(json_in, str):
+        try:
+            j = json.loads(json_in)
+        except ValueError:
+            try:
+                with open(json_in, "r") as f:
+                    j = json.load(f)
+            except (ValueError, FileNotFoundError):
+                raise IOError(f"Cannot read JSON from: {json_in}")
+
+    iso_candidates = []
+    for task, v in j.get("tasks", {}).items():
+        if v.get("type", "") != "blast":
+            continue
+        output_path = v.get("args", {}).get("output", "")
+        if not output_path:
+            continue
+        iso_path = companion_path(output_path, "blast", "isoforms")
+        if os.path.exists(iso_path) and os.path.getsize(iso_path) > 0:
+            try:
+                with open(iso_path) as f:
+                    iso_result = json.load(f)
+                if iso_result.get("isoforms"):
+                    iso_candidates.append((task, iso_result))
+            except Exception as e:
+                print(f"Error loading isoform data for task '{task}': {e}")
+
+    return _select_isoform_candidate(iso_candidates) if iso_candidates else None
+
+
 def load_run_metadata(json_in):
     """Extract run-level metadata needed by the results UI (sequence, PDB path, task params).
 
@@ -911,12 +951,13 @@ def _build_isoform_pane(iso_result, range_df):
                 domains.append({"start": lo, "stop": hi, "color": color,
                                 "desc": str(row["description"])})
         out.append({
-            "label":   iso.get("name") or iso.get("accession") or "",
-            "isQuery": bool(iso.get("is_query")),
-            "present": iso.get("present", []),
-            "skipped": iso.get("skipped", []),
-            "inserts": iso.get("inserts", []),
-            "domains": domains,
+            "label":     iso.get("name") or iso.get("accession") or "",
+            "accession": iso.get("accession", ""),
+            "isQuery":   bool(iso.get("is_query")),
+            "present":   iso.get("present", []),
+            "skipped":   iso.get("skipped", []),
+            "inserts":   iso.get("inserts", []),
+            "domains":   domains,
         })
     return {"isoforms": out, "exonBoundaries": iso_result.get("exon_boundaries", [])}
 
