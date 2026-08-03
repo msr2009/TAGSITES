@@ -79,7 +79,7 @@ def _spans_from_hsp(hsp, query_len):
         if q != "-":
             _flush_insert()
             qpos += 1
-            (present if h != "-" else skipped).append(qpos)
+            (present if h == q else skipped).append(qpos)
         elif h != "-":
             cur_insert_len += 1
     _flush_insert()
