@@ -87,7 +87,7 @@
       "key": "low_plddt",
       "type": "column_below",
       "weight": 1,
-      "label": "pLDDT<0.5",
+      "label": "pLDDT>0.5",
       "note": "1 pt if AlphaFold pLDDT is below threshold (disordered/flexible)",
       "params": {
         "analysis": "plddt",
@@ -98,7 +98,7 @@
       "key": "low_conservation",
       "type": "column_below",
       "weight": 1,
-      "label": "SJD<0.5",
+      "label": "SJD>0.5",
       "note": "1 pt if BLAST conservation (SJD) is below threshold",
       "params": {
         "analysis": "blast",
