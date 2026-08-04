@@ -70,7 +70,8 @@
   var TOP_GUTTER   = 6;    // top margin
   var SCORE_FILL_H = 24;   // score heatmap bar height (excludes marker margin)
   var SEQ_TICK_H   = 16;   // axis-number row above the sequence letters
-  var SEQ_H        = SCORE_FILL_H + SEQ_TICK_H;   // letters (= score bar height) + axis numbers
+  var SEQ_MARK_H   = 8;    // top margin reserved for committed-site triangle markers
+  var SEQ_H        = SEQ_MARK_H + SCORE_FILL_H + SEQ_TICK_H;   // markers + letters (= score bar height) + axis numbers
   var SCORE_MARK_H = 8;    // top margin reserved for suggested-site triangle markers
   var SCORE_H      = SCORE_FILL_H + SCORE_MARK_H;   // total row height (fill + marker margin)
   var LEGEND_H     = 22;   // fixed-height legend band between line and feature panels
@@ -278,6 +279,7 @@
     drawIsoformPane(ctx, inf, layout);
     drawScoreHeatmap(ctx, inf, layout);
     drawSeqStrip(ctx, inf, layout);
+    drawCommittedMarkers(ctx, inf, layout);
 
     // drag-to-zoom rubber band overlaid on top
     if (dragState && wasDrag && dragState.mode === "zoom") {
@@ -291,6 +293,35 @@
       ctx.lineWidth   = 1;
       ctx.strokeRect(rb0, rbTop, rb1 - rb0, rbBot - rbTop);
     }
+
+    ctx.restore();
+  }
+
+  // Downward-facing green triangle above each committed site, in the sequence strip's
+  // reserved top margin — keeps selections visible even when the strip's per-residue
+  // cells shrink below 1px, without the visual noise of a line spanning every panel.
+  function drawCommittedMarkers(ctx, inf, layout) {
+    if (committedSet.size === 0) return;
+    var r = getXRange();
+    var markTop = layout.seqTop, markH = SEQ_MARK_H;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(LEFT_GUTTER, markTop, inf.dataW, markH);
+    ctx.clip();
+    ctx.fillStyle = "#28a745";
+
+    committedSet.forEach(function (pos) {
+      if (pos < r[0] || pos > r[1]) return;
+      var cx = posToX(pos, inf);
+      var triW = 8, triH = markH - 1;
+      ctx.beginPath();
+      ctx.moveTo(cx - triW / 2, markTop);
+      ctx.lineTo(cx + triW / 2, markTop);
+      ctx.lineTo(cx, markTop + triH);
+      ctx.closePath();
+      ctx.fill();
+    });
 
     ctx.restore();
   }
@@ -779,7 +810,7 @@
   /* ── Sequence strip (row 3) ────────────────────────────────────────────────── */
 
   function drawSeqStrip(ctx, inf, layout) {
-    var top      = layout.seqTop, h = layout.seqH;
+    var top      = layout.seqTop + SEQ_MARK_H, h = layout.seqH - SEQ_MARK_H;
     var TICK_H   = SEQ_TICK_H;
     var LETTER_H = h - TICK_H;
     var LETTER_THRESHOLD = 9;
