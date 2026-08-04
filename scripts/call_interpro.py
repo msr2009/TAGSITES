@@ -84,9 +84,20 @@ def main(fasta_in, email, workingdir, clients_folder, outputfile, report=None,
     with open(intermediate, "wb") as f:
         f.write(tsv_bytes)
 
+    domain_rows = iprscan_tsv_to_domains(tsv_bytes.decode())
     with open(outputfile, "w") as f_out:
-        for row in iprscan_tsv_to_domains(tsv_bytes.decode()):
+        for row in domain_rows:
             print("\t".join(row), file=f_out)
+
+    descriptions = sorted({row[3] for row in domain_rows if row[3]})
+    if domain_rows:
+        shown = ", ".join(descriptions[:5])
+        if len(descriptions) > 5:
+            shown += ", ..."
+        summary = f"Found {len(domain_rows)} domain hit(s): {shown}"
+    else:
+        summary = "Found 0 domain hits"
+    _report(reporter, summary, stage="done")
 
 
 if __name__ == "__main__":

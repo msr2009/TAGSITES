@@ -151,7 +151,7 @@ def run_plddt(args, report=None, job_id_cb=None, resume_job_ids=None):
     if not pdb_path:
         raise RuntimeError("No PDB path set for pLDDT — AFDB lookup may have failed or no PDB was provided.")
 
-    extract_from_pdb.main(pdb_path, output)
+    extract_from_pdb.main(pdb_path, output, report=report)
 
 
 def run_modifications(args, report=None, job_id_cb=None, resume_job_ids=None):
@@ -161,7 +161,7 @@ def run_modifications(args, report=None, job_id_cb=None, resume_job_ids=None):
     sites_file = _str(args.get("sites_file"))
     output    = _str(args.get("output"))
     with open(output, "w") as fout:
-        regex_sites.main(fasta_in, sites_file, fout)
+        regex_sites.main(fasta_in, sites_file, fout, report=report)
 
 
 def run_domains(args, report=None, job_id_cb=None, resume_job_ids=None):

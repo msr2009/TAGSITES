@@ -10,21 +10,34 @@ Matt Rich, 4/2024
 """
 
 from site_selection_util import read_fasta
+from progress import report as _report, resolve_reporter
 
-def main(fasta_in, site_res, fout):
+def main(fasta_in, site_res, fout, report=None):
+
+	reporter = resolve_reporter(report)
 
 	#read sequence from fasta
 	name, seq = read_fasta(fasta_in)
-	
+
 	site_ranges = []
+	counts = {}
 
 	for line in open(site_res, "r"):
 		l = line.strip().split("\t")
-		description = l[0] 
+		description = l[0]
 		regex = l[1]
 		for match in re.finditer(regex, str(seq)):
 			site_ranges = ["modification", match.start()+1, match.end()+1, description]
 			print("\t".join(str(x) for x in site_ranges), file=fout)
+			counts[description] = counts.get(description, 0) + 1
+
+	total = sum(counts.values())
+	if total:
+		breakdown = ", ".join(f"{n} {desc}" for desc, n in counts.items())
+		summary = f"Found {total} modification site(s): {breakdown}"
+	else:
+		summary = "Found 0 modification sites"
+	_report(reporter, summary, stage="done")
 
 if __name__ == "__main__":
 	

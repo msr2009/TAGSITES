@@ -3,12 +3,16 @@ import sys
 from site_selection_util import save_fasta, check_input_type, three_to_one
 from site_selection_util import extract_bfactors_from_pdb, calc_sasa_shrakerupley, calc_hydrophobic_patches
 from calculate_protein_scores import load_scores
+from progress import report as _report, resolve_reporter
 
 #default hydrophobicity table, resolved relative to the repo so the CLI doesn't need a new required arg
 DEFAULT_HYDRO_TABLE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tables",
 									"hydrophobicity_kyte-doolittle.tsv")
 
-def main(input_file, output_file, hydro_table=None, dilation_radius=4.0, min_seed_size=3, min_total_hydro=10.0):
+def main(input_file, output_file, hydro_table=None, dilation_radius=4.0, min_seed_size=3, min_total_hydro=10.0,
+		report=None):
+
+	reporter = resolve_reporter(report)
 
 	#output name = "xxx.x_plddt.txt"
 
@@ -52,6 +56,11 @@ def main(input_file, output_file, hydro_table=None, dilation_radius=4.0, min_see
 			print("\t".join(["hydrophobic_patch", str(resnum), str(resnum), description]), file=patches_out)
 		n += 1
 	patches_out.close()
+
+	mean_plddt = sum(bf) / len(bf) if bf else 0.0
+	summary = (f"Extracted pLDDT for {len(bf)} residue(s) (mean {mean_plddt:.1f}); "
+			f"found {n} hydrophobic patch(es)")
+	_report(reporter, summary, stage="done")
 
 if __name__ == "__main__":
 
