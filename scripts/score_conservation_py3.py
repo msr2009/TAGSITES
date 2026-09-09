@@ -7,6 +7,7 @@ Matt Rich, 2024
 """
 
 import math, sys
+import numpy as np
 
 PSEUDOCOUNT = .0000001
 
@@ -202,14 +203,14 @@ def vn_entropy(col, sim_matrix, bg_distr, seq_weights, gap_penalty=1):
 
 	row_i = 0
 	col_i = 0
-	dm = zeros((dm_size, dm_size), Float32)
+	dm = np.zeros((dm_size, dm_size), dtype=np.float32)
 	for i in range(dm_size):
 		row_i = dm_aas[i]
 		for j in range(dm_size):
 			col_i = dm_aas[j]
 			dm[i][j] = aa_counts[row_i] * sim_matrix[row_i][col_i]
 
-	ev = la.eigenvalues(dm).real
+	ev = np.linalg.eigvals(dm).real
 
 	temp = 0.
 	for e in ev:
@@ -424,8 +425,8 @@ def read_scoring_matrix(sm_file):
 				first_line = 0
 				if len(amino_acids) == 0:
 					for c in line.split():
-						aa_to_index[string.lower(c)] = aa_index
-						amino_acids.append(string.lower(c))
+						aa_to_index[c.lower()] = aa_index
+						amino_acids.append(c.lower())
 						aa_index += 1
 
 			elif line[0] != '#' and first_line == 0:
@@ -435,7 +436,7 @@ def read_scoring_matrix(sm_file):
 
 	except IOError:
 		print("Could not load similarity matrix: %s. Using identity matrix..." % sm_file)
-		return identity(20)
+		return np.identity(20).tolist()
 	
 	# if matrix is stored in lower tri form, copy to upper
 	if len(list_sm[0]) < 20:
@@ -518,7 +519,7 @@ def get_distribution_from_file(fname):
 			if line[0] == '#': continue
 			line = line[:-1]
 			distribution = line.split()
-			distribution = map(float, distribution)
+			distribution = list(map(float, distribution))
 		
 	except IOError:
 		print("Using default (BLOSUM62) background.")
