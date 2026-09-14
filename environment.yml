@@ -18,6 +18,8 @@ dependencies:
   - xmltramp2       # required by EBI REST clients
   - primer3-py
   - pytest
+  - diamond         # scripts/conservation_local.py — batch-mode ortholog search
+  - mafft           # scripts/conservation_local.py — batch-mode alignment
   - pip:
     - ridgeplot
     - kaleido==0.2.1

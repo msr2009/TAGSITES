@@ -16,6 +16,9 @@ Ensembl's plain FTP mirror instead — same WBcel235 assembly and gene models):
   interpro  protein2ipr.dat.gz (~13 GB compressed, all of UniProt), streamed
             and filtered down to the accessions in the UniProt proteome FASTA
             without ever writing the full decompressed file to disk
+  orthologs reviewed (Swiss-Prot) proteomes for the species in config.py's
+            DEFAULT_SPECIES, concatenated and indexed with `diamond makedb` —
+            the local search target for scripts/conservation_local.py
 
 All downloads are resumable (curl -C -) and skipped if the target file already
 exists with a non-zero size — re-running this script after an interrupted
@@ -52,6 +55,11 @@ DEFAULTS = {
     "ensembl_species": "caenorhabditis_elegans",
     "ensembl_assembly": "WBcel235",
     "interpro_release": "110.0",
+    # taxids for the local ortholog reference DB — mirrors config.py's
+    # DEFAULT_SPECIES (excluding its "Other (search...)" sentinel); kept as a
+    # plain literal here rather than importing config.py, so reference_data.py
+    # has no import-time dependency on the Shiny app's module graph
+    "ortholog_reference_taxids": [9606, 10090, 10116, 7955, 7227, 6239, 8364, 559292, 562],
 }
 
 
@@ -293,12 +301,56 @@ def fetch_interpro(cfg, force=False):
     print(f"[interpro] done: {matched:,} matching rows out of {total:,} scanned -> {dest}")
 
 
+# ── Local ortholog reference DB (conservation_local.py's DIAMOND search target) ──
+
+def fetch_orthologs(cfg, force=False):
+    """Download the reviewed (Swiss-Prot) proteome for each of
+    ortholog_reference_taxids, concatenate into one FASTA, and build a DIAMOND
+    database from it. This is what scripts/conservation_local.py searches
+    against instead of submitting an EBI BLAST job.
+    """
+    out = _out_dir(cfg)
+    combined_fasta = out / "ortholog_reference.fasta"
+    db_path = out / "ortholog_reference.dmnd"
+
+    if combined_fasta.exists() and combined_fasta.stat().st_size > 0 and not force:
+        print(f"[skip] {combined_fasta} already present ({combined_fasta.stat().st_size:,} bytes)")
+    else:
+        per_species_paths = []
+        for taxid in cfg["ortholog_reference_taxids"]:
+            dest = out / f"ortholog_ref_{taxid}.fasta.gz"
+            url = (
+                "https://rest.uniprot.org/uniprotkb/stream"
+                f"?query=reviewed:true+AND+organism_id:{taxid}&format=fasta&compressed=true"
+            )
+            _curl_download(url, dest, force=force, resumable=False, verify_gzip=True)
+            per_species_paths.append(dest)
+
+        print(f"[orthologs] concatenating {len(per_species_paths)} species -> {combined_fasta}")
+        with open(combined_fasta, "w") as out_f:
+            for p in per_species_paths:
+                with gzip.open(p, "rt") as f:
+                    out_f.write(f.read())
+
+    if db_path.exists() and not force:
+        print(f"[skip] {db_path} already present")
+        return
+
+    print(f"[orthologs] building DIAMOND database -> {db_path}")
+    subprocess.run(
+        ["diamond", "makedb", "--in", str(combined_fasta), "-d", str(db_path.with_suffix(""))],
+        check=True,
+    )
+    print(f"[orthologs] done -> {db_path}")
+
+
 STEPS = {
-    "uniprot":  fetch_uniprot,
-    "afdb":     fetch_afdb,
-    "genome":   fetch_genome,
-    "gff3":     fetch_gff3,
-    "interpro": fetch_interpro,  # depends on "uniprot" having run first
+    "uniprot":   fetch_uniprot,
+    "afdb":      fetch_afdb,
+    "genome":    fetch_genome,
+    "gff3":      fetch_gff3,
+    "interpro":  fetch_interpro,   # depends on "uniprot" having run first
+    "orthologs": fetch_orthologs,
 }
 
 
