@@ -164,11 +164,41 @@ def fetch_uniprot(cfg, force=False):
 # ── AlphaFold DB structures ───────────────────────────────────────────────────
 
 def fetch_afdb(cfg, force=False):
-    """Download the AFDB proteome tarball (one PDB per canonical UniProt entry)."""
+    """Download the AFDB proteome tarball, then extract just its .pdb.gz
+    members (skipping the .cif.gz half of each pair — the pipeline only ever
+    parses PDB) into out_dir/afdb_pdbs/, named AF-<accession>-F1-model_v6.pdb.gz,
+    so scripts/structure_bulk.py can open a specific accession's structure by
+    deterministic filename in O(1) rather than scanning the tar (which has no
+    index — a plain tarfile.extractfile(name) lookup is O(n) per call unless
+    the whole member list has already been built once).
+    """
+    import tarfile
+
     out = _out_dir(cfg)
     url = cfg["afdb_tarball_url"]
     dest = out / Path(url).name
-    _curl_download(url, dest, force=force)
+    downloaded = _curl_download(url, dest, force=force)
+
+    pdb_dir = out / "afdb_pdbs"
+    marker = pdb_dir / ".extracted"
+    if marker.exists() and not force and not downloaded:
+        print(f"[skip] {pdb_dir} already extracted")
+        return
+
+    pdb_dir.mkdir(parents=True, exist_ok=True)
+    print(f"[extract] {dest} .pdb.gz members -> {pdb_dir}")
+    n = 0
+    with tarfile.open(dest, "r") as tar:
+        for member in tar:
+            if not member.name.endswith(".pdb.gz"):
+                continue
+            with tar.extractfile(member) as src, open(pdb_dir / member.name, "wb") as dst:
+                dst.write(src.read())
+            n += 1
+            if n % 5000 == 0:
+                print(f"[extract] {n:,} structures so far…")
+    marker.write_text(f"{n}\n")
+    print(f"[extract] done: {n:,} structures -> {pdb_dir}")
 
 
 # ── Ensembl genome + annotation ───────────────────────────────────────────────
