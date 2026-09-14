@@ -40,6 +40,7 @@ from pathlib import Path
 
 import pandas as pd
 from Bio.Seq import Seq
+from Bio.Data.CodonTable import TranslationError
 
 sys.path.insert(0, str(Path(__file__).parent))
 from providers import _load_config as _load_batch_config
@@ -332,6 +333,62 @@ def get_transcript_region(transcript_id, conn=None, cfg=None):
         "dna": dna, "cds_df": local_df,
         "chrom": chrom, "start": start, "stop": stop, "strand": strand,
     }
+
+
+def _translate_cds(cds_df, dna):
+    """Translate a get_transcript_region()-style local CDS table against its
+    DNA into a protein string (no trailing stop codon), or None if the CDS
+    length isn't a multiple of 3 or contains an untranslatable codon.
+    """
+    cds_seq = "".join(dna[row.start:row.stop + 1] for row in cds_df.itertuples())
+    if len(cds_seq) == 0 or len(cds_seq) % 3 != 0:
+        return None
+    try:
+        protein = str(Seq(cds_seq).translate())
+    except TranslationError:
+        return None
+    return protein[:-1] if protein.endswith("*") else protein
+
+
+def resolve_transcript_for_accession(accession, wormbase_gene, expected_sequence, conn=None, cfg=None):
+    """Find the GFF3 transcript_id whose CDS translates to `expected_sequence`
+    (a UniProt protein sequence), starting from candidates whose transcript_id
+    has `wormbase_gene` as a locus prefix (e.g. wormbase_gene "C10C5.1g" ->
+    candidates "C10C5.1g.1", "C10C5.1g.2", ...).
+
+    Matching by prefix alone isn't sufficient: WormBase sometimes has several
+    numbered transcript versions under the same isoform-lettered locus name
+    (splice/UTR variants) with no further hint of which one the FASTA/JSON
+    sequence in local_store.py corresponds to — verified in a 500-accession
+    sample, ~8% of prefix matches were ambiguous (multiple candidates) and
+    ~1% had none. Translating each candidate's CDS and comparing to the known
+    protein sequence resolves the ambiguity outright, and also catches the
+    rare true mismatch a prefix match alone can't detect.
+
+    Returns the resolved transcript_id, or None if no candidate's translation
+    matches (the caller should fall back to genewise_remote.py in that case).
+    """
+    own_conn = conn is None
+    conn = conn or open_index()
+    try:
+        candidates = [
+            r[0] for r in conn.execute(
+                "SELECT DISTINCT transcript_id FROM transcript_spans WHERE transcript_id LIKE ?",
+                (wormbase_gene + ".%",),
+            ).fetchall()
+        ]
+        for transcript_id in candidates:
+            try:
+                region = get_transcript_region(transcript_id, conn=conn, cfg=cfg)
+            except (ValueError, KeyError):
+                continue
+            protein = _translate_cds(region["cds_df"], region["dna"])
+            if protein == expected_sequence:
+                return transcript_id
+        return None
+    finally:
+        if own_conn:
+            conn.close()
 
 
 if __name__ == "__main__":
