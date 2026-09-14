@@ -35,6 +35,11 @@ params/*.json
 data/*
 !data/.gitkeep
 
+# Local override for batch.config.json (see scripts/providers.py's
+# TAGSITES_BATCH_CONFIG) — machine-specific batch-mode settings that must
+# never silently become the committed backend defaults the Shiny app reads.
+batch.config.local.json
+
 # External tool clone with its own git repo — not tracked here
 webservice-clients/
 
