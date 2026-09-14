@@ -12,6 +12,10 @@ Schema (one row per canonical UniProt entry in the proteome):
   index on crc64 (mirrors uniprot_api.checksum_lookup()'s CRC64-of-sequence key,
   so identical sequences — including sibling isoforms — collapse to one lookup)
 
+  domains(accession, ipr_id, description, external_db_match_id, start, stop)
+  index on accession — one row per protein2ipr.dat match (see
+  reference_data.fetch_interpro()), backing scripts/domains_bulk.py
+
 wormbase_transcript/wormbase_gene come straight out of the UniProt JSON's
 genes[].orfNames — this is the accession<->WormBase-name cross-reference
 scripts/genome_regions.py (Phase A2) needs to look CDS exons up in the GFF3,
@@ -137,6 +141,75 @@ def build_index(cfg=None, force=False):
     return db_path
 
 
+def build_domains_index(cfg=None, force=False):
+    """Load protein2ipr.filtered.tsv (see reference_data.fetch_interpro()) into
+    the `domains` table of the same local_store.sqlite3 database, indexed by
+    accession. Raises FileNotFoundError pointing at that step if it hasn't run.
+    """
+    ref_dir, _ = _reference_dir(cfg)
+    tsv_path = ref_dir / "protein2ipr.filtered.tsv"
+    if not tsv_path.exists():
+        raise FileNotFoundError(
+            f"{tsv_path} not found — run `python scripts/reference_data.py "
+            "--only interpro` first."
+        )
+
+    db_path = _db_path(cfg)
+    conn = sqlite3.connect(db_path)
+    existing = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='domains'"
+    ).fetchone()
+    if existing:
+        if not force:
+            print(f"[skip] domains table already present in {db_path}; pass force=True to rebuild")
+            conn.close()
+            return db_path
+        conn.execute("DROP TABLE domains")
+
+    conn.execute("""
+        CREATE TABLE domains (
+            accession             TEXT,
+            ipr_id                TEXT,
+            description           TEXT,
+            external_db_match_id  TEXT,
+            start                 INTEGER,
+            stop                  INTEGER
+        )
+    """)
+    conn.execute("CREATE INDEX idx_domains_accession ON domains(accession)")
+
+    print(f"[local_store] loading {tsv_path} …")
+    rows = []
+    with open(tsv_path) as f:
+        for line in f:
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) != 6:
+                continue
+            acc, ipr_id, desc, ext_id, start, stop = parts
+            rows.append((acc, ipr_id, desc, ext_id, int(start), int(stop)))
+
+    conn.executemany("INSERT INTO domains VALUES (?, ?, ?, ?, ?, ?)", rows)
+    conn.commit()
+    print(f"[local_store] indexed {len(rows):,} domain matches -> {db_path}")
+    conn.close()
+    return db_path
+
+
+def lookup_domains_by_accession(accession, conn=None):
+    """Return all InterPro match rows for `accession` as a list of dicts."""
+    own_conn = conn is None
+    conn = conn or open_index()
+    try:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT * FROM domains WHERE accession = ?", (accession,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        if own_conn:
+            conn.close()
+
+
 def open_index(cfg=None):
     """Open a read-only connection to the built index; raises if it hasn't been built."""
     db_path = _db_path(cfg)
@@ -183,17 +256,25 @@ if __name__ == "__main__":
     from argparse import ArgumentParser
 
     parser = ArgumentParser(description=__doc__)
-    parser.add_argument("--build", action="store_true", help="(re)build the index")
+    parser.add_argument("--build", action="store_true", help="(re)build the proteins index")
+    parser.add_argument("--build-domains", action="store_true", help="(re)build the domains index")
     parser.add_argument("--force", action="store_true", help="rebuild even if the index already exists")
     parser.add_argument("--stats", action="store_true", help="print row counts for the existing index")
     args = parser.parse_args()
 
     if args.build:
         build_index(force=args.force)
+    if args.build_domains:
+        build_domains_index(force=args.force)
     if args.stats:
         conn = open_index()
         n = conn.execute("SELECT COUNT(*) FROM proteins").fetchone()[0]
         n_wb = conn.execute("SELECT COUNT(*) FROM proteins WHERE wormbase_transcript IS NOT NULL").fetchone()[0]
         print(f"proteins: {n:,}  (with WormBase transcript name: {n_wb:,})")
-    if not args.build and not args.stats:
-        parser.error("specify --build and/or --stats")
+        try:
+            n_dom = conn.execute("SELECT COUNT(*) FROM domains").fetchone()[0]
+            print(f"domain matches: {n_dom:,}")
+        except sqlite3.OperationalError:
+            pass
+    if not (args.build or args.build_domains or args.stats):
+        parser.error("specify --build, --build-domains, and/or --stats")
