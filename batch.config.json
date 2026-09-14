@@ -1,0 +1,29 @@
+{
+  "_comment": "Consolidated config for the proteome-scale batch pipeline (see ~/.claude/plans/i-m-considering-a-large-humble-sun.md). Absent entirely, every analysis resolves to its *_remote backend and the app's behavior is unchanged. Copy/edit this file to opt individual analyses into local/bulk backends once their reference data (see reference_data section) has been downloaded.",
+
+  "backends": {
+    "_comment": "analysis -> backend mode; providers.py imports scripts/<analysis>_<mode>.py. Omit an analysis (or set it to \"remote\") to keep today's EBI/Ensembl behavior.",
+    "domains": "remote",
+    "structure": "remote",
+    "genewise": "remote",
+    "conservation": "remote"
+  },
+
+  "reference_data": {
+    "_comment": "paths/URLs for scripts/reference_data.py's bulk downloads (Phase A). out_dir should point at large external storage.",
+    "out_dir": "data/reference",
+    "uniprot_proteome_id": "UP000001940",
+    "afdb_tarball_url": "https://ftp.ebi.ac.uk/pub/databases/alphafold/latest/UP000001940_6239_CAEEL_v6.tar",
+    "ensembl_release": "114",
+    "ensembl_species": "caenorhabditis_elegans",
+    "ensembl_assembly": "WBcel235",
+    "interpro_release": "110.0"
+  },
+
+  "batch_run": {
+    "_comment": "scripts/proteome_run.py knobs (Phase C, not yet implemented)",
+    "max_workers": null,
+    "max_concurrent_network_calls": 3,
+    "genomic_flank_bp": 2000
+  }
+}
