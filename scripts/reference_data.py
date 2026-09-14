@@ -71,7 +71,27 @@ def _out_dir(cfg):
     return d
 
 
-def _curl_download(url, dest, force=False, extra_args=None, resumable=True):
+def _verify_gzip(path):
+    """Raise if `path` isn't a valid, uncorrupted gzip stream.
+
+    UniProt's /stream endpoint has been observed to close the connection early
+    on a large uncompressed response without curl detecting it as an error (no
+    Content-Length on a streamed response, so curl can't tell truncation from
+    a normal end-of-stream) — the result is a silently truncated JSON file
+    that "skip if already present" would then trust forever. Requesting the
+    compressed form and verifying it here catches that: a truncated gzip
+    member fails integrity checking, where a truncated plain-text stream
+    would not have raised anything at all.
+    """
+    result = subprocess.run(["gzip", "-t", str(path)], capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"downloaded file {path} failed gzip integrity check (likely "
+            f"truncated mid-transfer): {result.stderr.strip()}"
+        )
+
+
+def _curl_download(url, dest, force=False, extra_args=None, resumable=True, verify_gzip=False):
     """Download via curl; skip if dest already has non-zero size and force isn't
     set. Returns True if a download ran, False if skipped.
 
@@ -80,6 +100,10 @@ def _curl_download(url, dest, force=False, extra_args=None, resumable=True):
     endpoints (e.g. UniProt's /stream) that don't reliably support Range —
     resuming against one of those risks silently splicing two different result
     orderings together instead of actually continuing the same download.
+
+    verify_gzip=True runs _verify_gzip() after a fresh download and deletes+
+    raises on failure, so a truncated transfer can't masquerade as a
+    successfully cached file on the next run.
     """
     dest = Path(dest)
     if dest.exists() and dest.stat().st_size > 0 and not force:
@@ -93,6 +117,12 @@ def _curl_download(url, dest, force=False, extra_args=None, resumable=True):
     if extra_args:
         cmd[1:1] = extra_args
     subprocess.run(cmd, check=True)
+    if verify_gzip:
+        try:
+            _verify_gzip(dest)
+        except RuntimeError:
+            dest.unlink(missing_ok=True)
+            raise
     return True
 
 
@@ -105,22 +135,30 @@ def fetch_uniprot(cfg, force=False):
     the JSON stream gives curated features (uniprot_features.py's network
     calls) and WormBase/Ensembl cross-references (the accession<->GFF-name map
     genome_regions.py needs — see the plan's Phase A2).
+
+    Both are requested compressed (format=...&compressed=true, saved as .gz)
+    rather than plain text: UniProt's /stream endpoint has been observed to
+    silently truncate a large plain response mid-transfer without curl
+    reporting an error, whereas a truncated gzip stream fails integrity
+    checking — see _verify_gzip()'s docstring.
     """
     out = _out_dir(cfg)
     pid = cfg["uniprot_proteome_id"]
 
     fasta_url = (
         "https://rest.uniprot.org/uniprotkb/stream"
-        f"?query=proteome:{pid}&format=fasta&includeIsoform=true"
+        f"?query=proteome:{pid}&format=fasta&includeIsoform=true&compressed=true"
     )
-    _curl_download(fasta_url, out / f"{pid}.fasta", force=force, resumable=False)
+    _curl_download(fasta_url, out / f"{pid}.fasta.gz", force=force,
+                   resumable=False, verify_gzip=True)
 
     # JSON stream: one array of full entry records (features, xrefs, CRC64 checksum)
     json_url = (
         "https://rest.uniprot.org/uniprotkb/stream"
-        f"?query=proteome:{pid}&format=json"
+        f"?query=proteome:{pid}&format=json&compressed=true"
     )
-    _curl_download(json_url, out / f"{pid}.json", force=force, resumable=False)
+    _curl_download(json_url, out / f"{pid}.json.gz", force=force,
+                   resumable=False, verify_gzip=True)
 
 
 # ── AlphaFold DB structures ───────────────────────────────────────────────────
@@ -141,7 +179,7 @@ def fetch_genome(cfg, force=False):
     release, species, assembly = cfg["ensembl_release"], cfg["ensembl_species"], cfg["ensembl_assembly"]
     fname = f"{species.capitalize()}.{assembly}.dna_sm.toplevel.fa.gz"
     url = f"https://ftp.ensembl.org/pub/release-{release}/fasta/{species}/dna/{fname}"
-    _curl_download(url, out / fname, force=force)
+    _curl_download(url, out / fname, force=force, verify_gzip=True)
 
 
 def fetch_gff3(cfg, force=False):
@@ -150,7 +188,7 @@ def fetch_gff3(cfg, force=False):
     release, species, assembly = cfg["ensembl_release"], cfg["ensembl_species"], cfg["ensembl_assembly"]
     fname = f"{species.capitalize()}.{assembly}.{release}.gff3.gz"
     url = f"https://ftp.ensembl.org/pub/release-{release}/gff3/{species}/{fname}"
-    _curl_download(url, out / fname, force=force)
+    _curl_download(url, out / fname, force=force, verify_gzip=True)
 
 
 # ── InterPro domain matches (filtered to this proteome's accessions) ─────────
@@ -158,14 +196,14 @@ def fetch_gff3(cfg, force=False):
 def _load_proteome_accessions(cfg):
     """Read accessions out of the UniProt proteome FASTA already downloaded by fetch_uniprot()."""
     out = _out_dir(cfg)
-    fasta_path = out / f"{cfg['uniprot_proteome_id']}.fasta"
+    fasta_path = out / f"{cfg['uniprot_proteome_id']}.fasta.gz"
     if not fasta_path.exists():
         raise FileNotFoundError(
             f"{fasta_path} not found — run fetch_uniprot() (or --only uniprot) first; "
             "the InterPro filter needs the proteome's accession list."
         )
     accessions = set()
-    with open(fasta_path) as f:
+    with gzip.open(fasta_path, "rt") as f:
         for line in f:
             if line.startswith(">"):
                 # UniProt FASTA header: >sp|ACCESSION|... or >tr|ACCESSION|...
