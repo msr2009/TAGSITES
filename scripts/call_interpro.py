@@ -1,7 +1,12 @@
 """
 call_interpro.py
 
-A script to perform an InterPro search via the EBI iprscan5 REST API.
+CLI entry point for InterPro domain annotation. The actual lookup is delegated
+to a backend resolved by scripts/providers.py — scripts/domains_remote.py (an
+EBI iprscan5 job) by default, or a bulk-precomputed lookup when
+batch.config.json sets backends.domains to a local mode. With no config file
+present this always resolves to "remote", so the Shiny app's behavior here is
+unchanged.
 
 Parameters:
     - fasta_in (str): name of fasta file containing seq
@@ -13,18 +18,14 @@ Parameters:
 Returns:
     - outputfile written with domain annotations
 
-Matt Rich, 4/2024 / updated 2026 — EBI REST calls via ebi_rest.py
+Matt Rich, 4/2024 / updated 2026 — EBI REST calls via ebi_rest.py; backend-split 2026
 """
 
-import os
 import sys
 from pathlib import Path
 
-from site_selection_util import read_fasta
-
 sys.path.insert(0, str(Path(__file__).parent))
-import ebi_rest
-from progress import report as _report, resolve_reporter, timed_poll_adapter
+from providers import resolve
 
 
 def iprscan_tsv_to_domains(tsv_text):
@@ -44,60 +45,16 @@ def iprscan_tsv_to_domains(tsv_text):
 
 def main(fasta_in, email, workingdir, clients_folder, outputfile, report=None,
          job_id_cb=None, resume_job_ids=None):
-    """Submit sequence to InterProScan5, parse TSV result, write output.
+    """Run domain annotation via the configured backend (EBI InterProScan5 by
+    default); same signature/return value as before the backend split.
 
     job_id_cb(index, jid) and resume_job_ids follow the same convention as
-    blast_orthologs.main(): this task makes one EBI submission, tagged index 0.
+    blast_orthologs.main(): the remote backend makes one EBI submission, tagged
+    index 0.
     """
-    reporter = resolve_reporter(report)
-    name, seq = read_fasta(fasta_in)
-
-    resume_id = (resume_job_ids or [None])[0]
-    if resume_id:
-        _report(reporter, "Checking previously-submitted InterProScan5 job…", stage="iprscan_submit")
-        state, payload = ebi_rest.resume_job(ebi_rest.IPRSCAN5, resume_id, "tsv")
-        if state == "pending":
-            return {"ebi_status": "pending", "detail": payload}
-        if state == "expired":
-            return {"ebi_status": "expired", "detail": payload}
-        tsv_bytes = payload
-    else:
-        params = {
-            "email":    email,
-            "stype":    "p",        # EBI iprscan5 uses 'p' for protein, not 'protein'
-            "sequence": str(seq),   # Biopython Seq objects must be coerced to str
-            "goterms":  "true",     # must be strings, not Python bools
-            "pathways": "true",
-        }
-
-        _report(reporter, "Submitting InterProScan5 job…", stage="iprscan_submit")
-        poll_cb = ebi_rest.combined_poll_cb(
-            ebi_rest.indexed_job_id_cb(job_id_cb, 0),
-            timed_poll_adapter(reporter, stage="iprscan_submit"),
-        )
-        job_id = ebi_rest.run_job(ebi_rest.IPRSCAN5, params, poll_cb=poll_cb)
-
-        # fetch TSV result and save intermediate file (mirrors old naming: name.interpro.tsv.tsv)
-        tsv_bytes = ebi_rest.fetch_result(ebi_rest.IPRSCAN5, job_id, "tsv")
-
-    intermediate = os.path.join(workingdir, f"{name}.interpro.tsv.tsv")
-    with open(intermediate, "wb") as f:
-        f.write(tsv_bytes)
-
-    domain_rows = iprscan_tsv_to_domains(tsv_bytes.decode())
-    with open(outputfile, "w") as f_out:
-        for row in domain_rows:
-            print("\t".join(row), file=f_out)
-
-    descriptions = sorted({row[3] for row in domain_rows if row[3]})
-    if domain_rows:
-        shown = ", ".join(descriptions[:5])
-        if len(descriptions) > 5:
-            shown += ", ..."
-        summary = f"Found {len(domain_rows)} domain hit(s): {shown}"
-    else:
-        summary = "Found 0 domain hits"
-    _report(reporter, summary, stage="done")
+    backend_main = resolve("domains")
+    return backend_main(fasta_in, email, workingdir, clients_folder, outputfile,
+                         report=report, job_id_cb=job_id_cb, resume_job_ids=resume_job_ids)
 
 
 if __name__ == "__main__":
