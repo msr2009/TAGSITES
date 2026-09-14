@@ -1,5 +1,6 @@
 import os
 import sys
+from Bio.PDB.PDBParser import PDBParser
 from site_selection_util import save_fasta, check_input_type, three_to_one
 from site_selection_util import extract_bfactors_from_pdb, calc_sasa_shrakerupley, calc_hydrophobic_patches
 from calculate_protein_scores import load_scores
@@ -16,27 +17,36 @@ def main(input_file, output_file, hydro_table=None, dilation_radius=4.0, min_see
 
 	#output name = "xxx.x_plddt.txt"
 
+	# parse the PDB once and share it (and the Shrake-Rupley SASA run) across all
+	# three extraction steps below instead of each one re-parsing/re-running it
+	struct = PDBParser().get_structure("foo", input_file)
+
 	#we extract the pLDDT values from bfactors
 	bf_out = open(output_file, "w")
 #	bf = []
-	bf = extract_bfactors_from_pdb(input_file)
+	bf = extract_bfactors_from_pdb(input_file, struct=struct)
 	for aa in range(len(bf)):
 		print("\t".join([str(aa+1), str(bf[aa])]), file=bf_out)
 	bf_out.close()
 
 	#now we extract SASA values; name matches companion_path convention (.txt → .sasa.txt)
 	sasa_out = open(output_file.replace(".txt", ".sasa.txt"), "w")
-	sasa = calc_sasa_shrakerupley(input_file)
+	sasa = calc_sasa_shrakerupley(input_file, struct=struct)
 	for s in sasa:
 		print("\t".join([s[0], s[1], three_to_one(s[2])]), file=sasa_out)
 	sasa_out.close()
 
 	#now we identify hydrophobic surface patches (see calc_hydrophobic_patches docstring
-	#for method reference); companions follow the same .txt-suffix-swap convention
+	#for method reference); companions follow the same .txt-suffix-swap convention.
+	#reuse the same Shrake-Rupley rsasa values computed for the SASA output above —
+	#calc_sasa_shrakerupley's return is [str(resnum), str(val), res_name]; convert back
+	#to the numeric [int, float, res_name] form calc_hydrophobic_patches expects.
+	rsasa_list = [[int(resnum), float(val), res_name] for resnum, val, res_name in sasa]
 	hydro_scores = load_scores(hydro_table or DEFAULT_HYDRO_TABLE)
 	scores, patches = calc_hydrophobic_patches(input_file, hydro_scores,
 												dilation_radius=dilation_radius,
-												min_seed_size=min_seed_size)
+												min_seed_size=min_seed_size,
+												struct=struct, rsasa_list=rsasa_list)
 
 	hydro_out = open(output_file.replace(".txt", ".hydro.txt"), "w")
 	seq = [three_to_one(s[2]) for s in sasa]

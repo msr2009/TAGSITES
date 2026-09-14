@@ -6,6 +6,7 @@ import json
 import plotly.graph_objs as go
 from plotly.subplots import make_subplots
 from Bio import SeqIO
+import numpy as np
 from numpy import linspace
 
 from config import ANALYSIS_COLORS, DOMAIN_SOURCE_COLORS, ISOFORM_CLASS_COLORS, GLOBAL_KEYS
@@ -644,8 +645,8 @@ def residue_colors_for_domains(range_df, seq_len):
         color = DOMAIN_SOURCE_COLORS.get(source, "#888888")
         for _, row in subset.iterrows():
             start, stop = int(row["start"]), int(row["stop"])
-            for pos in range(start - 1, min(stop, seq_len)):
-                colors[pos] = color
+            stop = min(stop, seq_len)
+            colors[start - 1:stop] = [color] * (stop - (start - 1))
     return colors
 
 
@@ -705,8 +706,8 @@ def residue_colors_for_annotations(range_df, seq_len):
             if color is None:
                 continue
             start, stop = int(row["start"]), int(row["stop"])
-            for pos in range(start - 1, min(stop, seq_len)):
-                colors[pos] = color
+            stop = min(stop, seq_len)
+            colors[start - 1:stop] = [color] * (stop - (start - 1))
 
     legend_items = [
         {"color": color, "label": f"{desc} ({src})"}
@@ -729,8 +730,8 @@ def residue_colors_for_phobius(range_df, seq_len):
         if color is None:
             continue
         start, stop = int(row["start"]), int(row["stop"])
-        for pos in range(start - 1, min(stop, seq_len)):
-            colors[pos] = color
+        stop = min(stop, seq_len)
+        colors[start - 1:stop] = [color] * (stop - (start - 1))
     legend_items = [
         {"color": color, "label": desc}
         for (src, desc), color in color_map.items()
@@ -783,12 +784,13 @@ def _isoform_class_key(count, n_iso):
 
 def _isoform_presence_counts(iso_result, seq_len):
     """Per-residue count of how many isoforms contain each query position identically."""
-    counts = [0] * seq_len
+    counts = np.zeros(seq_len, dtype=int)
     for iso in iso_result.get("isoforms", []):
         for start, stop in iso.get("present", []):
-            for pos in range(max(start, 1), min(stop, seq_len) + 1):
-                counts[pos - 1] += 1
-    return counts
+            lo, hi = max(start, 1) - 1, min(stop, seq_len)
+            if hi > lo:
+                counts[lo:hi] += 1
+    return counts.tolist()
 
 
 def _parse_patch_description(description):

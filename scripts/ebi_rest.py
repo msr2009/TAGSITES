@@ -10,6 +10,8 @@ No import-time network calls; safe to import anywhere.
 """
 
 import time
+from datetime import datetime
+from email.utils import parsedate_to_datetime
 import requests
 
 # canonical base URLs for each EBI REST service
@@ -23,17 +25,44 @@ DBFETCH_BASE = "https://www.ebi.ac.uk/Tools/dbfetch/dbfetch"
 
 RETRYABLE_EXCEPTIONS = (requests.exceptions.Timeout, requests.exceptions.ConnectionError)
 
+# HTTP statuses worth retrying: 429 (rate limited) and the common transient 5xx codes.
+# Batch-scale traffic hits these routinely; a plain 4xx (bad request, not found, ...)
+# still raises immediately since retrying it can't help.
+RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+
+
+def _retry_after_seconds(resp):
+    """Parse a response's Retry-After header (delta-seconds or HTTP-date); None if absent/unparsable."""
+    value = resp.headers.get("Retry-After")
+    if not value:
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        try:
+            dt = parsedate_to_datetime(value)
+            return max(0.0, (dt - datetime.now(dt.tzinfo)).total_seconds())
+        except Exception:
+            return None
+
 
 def _request_with_retries(method, url, retries=3, retry_wait=5, **kwargs):
-    """Call requests.<method>(url, **kwargs), retrying on transient timeout/connection errors.
+    """Call requests.<method>(url, **kwargs), retrying on transient timeout/connection errors
+    and on 429/5xx responses (honoring Retry-After when the server sends one).
 
-    EBI's REST endpoints occasionally hang past the read timeout; retrying the same
-    idempotent GET/POST a few times with a short wait clears most of these transparently.
+    EBI's REST endpoints occasionally hang past the read timeout, and under batch-scale
+    load return 429/503; retrying the same idempotent GET/POST a few times clears most
+    of these transparently. A non-retryable status (e.g. a plain 4xx) still raises
+    immediately via raise_for_status().
     """
     last_exc = None
     for attempt in range(retries + 1):
         try:
             resp = getattr(requests, method)(url, **kwargs)
+            if resp.status_code in RETRYABLE_STATUS and attempt < retries:
+                wait = _retry_after_seconds(resp)
+                time.sleep(wait if wait is not None else retry_wait)
+                continue
             resp.raise_for_status()
             return resp
         except RETRYABLE_EXCEPTIONS as exc:
@@ -85,20 +114,26 @@ def fmt_exp(value):
     return f"{mantissa}e{exp_sign}{exp_digits}"
 
 
-def run_job(base_url, params, poll_cb=None, poll_interval=5, backoff=1.5, max_interval=60):
+def run_job(base_url, params, poll_cb=None, poll_interval=5, backoff=1.5, max_interval=60,
+            max_wait=7200):
     """Submit a job, poll until FINISHED, return the jobId.
 
     poll_cb(job_id, status_str) is called after each status check when provided —
     use it to capture the jobId and surface intermediate status to callers.
-    Raises RuntimeError if the job ends in ERROR or FAILURE.
+    Raises RuntimeError if the job ends in ERROR or FAILURE, or if it is still
+    QUEUED/RUNNING after max_wait seconds of polling (default 2h) — a wall-clock
+    safety valve so a job stuck at the EBI end doesn't poll forever; pass
+    max_wait=None to disable it and poll indefinitely as before.
     """
     job_id = submit(base_url, params)
     if poll_cb:
         poll_cb(job_id, "QUEUED")
 
     interval = poll_interval
+    elapsed = 0.0
     while True:
         time.sleep(interval)
+        elapsed += interval
         current = get_status(base_url, job_id)
         if poll_cb:
             poll_cb(job_id, current)
@@ -106,6 +141,11 @@ def run_job(base_url, params, poll_cb=None, poll_interval=5, backoff=1.5, max_in
             return job_id
         if current in {"ERROR", "FAILURE", "NOT_FOUND"}:
             raise RuntimeError(f"EBI job {job_id} ended with status: {current}")
+        if max_wait is not None and elapsed >= max_wait:
+            raise RuntimeError(
+                f"EBI job {job_id} did not finish within {max_wait}s "
+                f"(last status: {current})"
+            )
         # exponential backoff up to max_interval
         interval = min(interval * backoff, max_interval)
 

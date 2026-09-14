@@ -334,13 +334,18 @@ def extract_seq_from_pdb(pdb_file):
 	seq = "".join([three_to_one(r.get_resname()) for r in PDB.Selection.unfold_entities(structure, "R")])
 	return seq
 
-def extract_bfactors_from_pdb(pdb_file):
+def extract_bfactors_from_pdb(pdb_file, struct=None):
 	"""
 	use biopython to extract b-factor values from a pdb file
+
+	struct, when given, is an already-parsed Bio.PDB structure for pdb_file —
+	callers that also need SASA/hydrophobicity from the same file can parse it
+	once and pass it in here instead of re-parsing.
 	"""
-	pdb_parser = PDB.PDBParser()
-	structure = pdb_parser.get_structure("foo", pdb_file)
-	bf = [float(r["CA"].get_bfactor()) for r in PDB.Selection.unfold_entities(structure, "R")]
+	if struct is None:
+		pdb_parser = PDB.PDBParser()
+		struct = pdb_parser.get_structure("foo", pdb_file)
+	bf = [float(r["CA"].get_bfactor()) for r in PDB.Selection.unfold_entities(struct, "R")]
 	return bf
 
 
@@ -372,14 +377,20 @@ def _compute_rsasa(struct, max_sasa_dict=None):
 	return rsasa_list
 
 
-def calc_sasa_shrakerupley(pdb_file, max_sasa_dict=None):
-
-	parser = PDBParser()
-	struct = parser.get_structure("foo", pdb_file)
-	rsasa = _compute_rsasa(struct, max_sasa_dict)
+def calc_sasa_shrakerupley(pdb_file, max_sasa_dict=None, struct=None, rsasa_list=None):
+	"""
+	struct/rsasa_list, when given, let a caller that already parsed the PDB and/or
+	ran Shrake-Rupley (e.g. to also call calc_hydrophobic_patches on the same
+	structure) skip redoing either step here.
+	"""
+	if rsasa_list is None:
+		if struct is None:
+			parser = PDBParser()
+			struct = parser.get_structure("foo", pdb_file)
+		rsasa_list = _compute_rsasa(struct, max_sasa_dict)
 
 	# preserve original string-typed return signature
-	return [[str(resnum), str(val), res_name] for resnum, val, res_name in rsasa]
+	return [[str(resnum), str(val), res_name] for resnum, val, res_name in rsasa_list]
 
 
 def _dilate_and_merge_patches(seed_patches, rep_atoms, atom_to_idx, ns, dilation_radius):
@@ -430,7 +441,8 @@ def _dilate_and_merge_patches(seed_patches, rep_atoms, atom_to_idx, ns, dilation
 
 
 def calc_hydrophobic_patches(pdb_file, hydro_scores, rsasa_cutoff=0.20, dist_cutoff=8.0,
-							  dilation_radius=4.0, min_seed_size=3, max_sasa_dict=None):
+							  dilation_radius=4.0, min_seed_size=3, max_sasa_dict=None,
+							  struct=None, rsasa_list=None):
 	"""
 	identify hydrophobic patches on the solvent-exposed surface of a structure.
 
@@ -455,6 +467,8 @@ def calc_hydrophobic_patches(pdb_file, hydro_scores, rsasa_cutoff=0.20, dist_cut
 		0 = no dilation, i.e. patch == core (default 4.0)
 	- min_seed_size (int): minimum seed-residue count for a core to be reported (default 3)
 	- max_sasa_dict (dict): optional override for per-residue-type max SASA (Tien 2013 default)
+	- struct/rsasa_list: optional pre-parsed structure / pre-computed Shrake-Rupley
+		result, for callers that already did either step on the same pdb_file
 
 	Returns:
 	- list: per-residue continuous "surface hydrophobic exposure" score, min-max normalized
@@ -464,9 +478,11 @@ def calc_hydrophobic_patches(pdb_file, hydro_scores, rsasa_cutoff=0.20, dist_cut
 		"total_area_A2": float (absolute exposed area of seed members)}
 	"""
 
-	parser = PDBParser()
-	struct = parser.get_structure("foo", pdb_file)
-	rsasa_list = _compute_rsasa(struct, max_sasa_dict)
+	if struct is None:
+		parser = PDBParser()
+		struct = parser.get_structure("foo", pdb_file)
+	if rsasa_list is None:
+		rsasa_list = _compute_rsasa(struct, max_sasa_dict)
 
 	residues = PDB.Selection.unfold_entities(struct, "R")
 	resnums   = [r[0] for r in rsasa_list]
