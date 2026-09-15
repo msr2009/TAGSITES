@@ -17,11 +17,29 @@
     "ensembl_release": "114",
     "ensembl_species": "caenorhabditis_elegans",
     "ensembl_assembly": "WBcel235",
-    "interpro_release": "110.0"
+    "interpro_release": "110.0",
+    "rhabditida_taxid": 6236,
+    "protein_fasta": "data/reference/c_elegans.canonical_bioproject.current.protein.fa.gz"
+  },
+
+  "conservation_local": {
+    "_comment": "scripts/conservation_local.py's DIAMOND search targets, each an independent database with its own search params (see scripts/reference_data.py's fetch_swissprot()/fetch_rhabditida_trembl()). Inert unless backends.conservation is set to \"local\". Every search runs with --ultra-sensitive (DIAMOND's closest approximation to real BLASTP sensitivity) unless a database entry overrides \"sensitivity\".",
+    "search_databases": [
+      { "name": "swissprot", "evalue": 1e-10, "max_target_seqs": 50 },
+      { "name": "rhabditida_trembl", "evalue": 1e-5, "max_target_seqs": 100 }
+    ]
+  },
+
+  "domains_scan": {
+    "_comment": "scripts/pfam_scan.py's local de novo Pfam-A scanning knobs (scripts/build_pfam_cache.py's bulk pass and scripts/domains_scan.py's on-demand fallback). Inert unless backends.domains is set to \"scan\". bit_cutoffs: \"gathering\" uses Pfam's own per-model gathering thresholds (matches InterProScan); clan_filter drops lower-scoring overlapping hits within the same Pfam clan; cache_profiles keeps Pfam-A's ~21k HMMs loaded in memory after first use (recommended for a long-lived batch worker); cpus: 0 = use all available cores.",
+    "bit_cutoffs": "gathering",
+    "clan_filter": true,
+    "cache_profiles": true,
+    "cpus": 0
   },
 
   "batch_run": {
-    "_comment": "scripts/proteome_run.py knobs (Phase C, not yet implemented)",
+    "_comment": "scripts/proteome_run.py knobs",
     "max_workers": null,
     "max_concurrent_network_calls": 3,
     "genomic_flank_bp": 2000

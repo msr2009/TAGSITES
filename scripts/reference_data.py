@@ -16,9 +16,21 @@ Ensembl's plain FTP mirror instead — same WBcel235 assembly and gene models):
   interpro  protein2ipr.dat.gz (~13 GB compressed, all of UniProt), streamed
             and filtered down to the accessions in the UniProt proteome FASTA
             without ever writing the full decompressed file to disk
-  orthologs reviewed (Swiss-Prot) proteomes for the species in config.py's
-            DEFAULT_SPECIES, concatenated and indexed with `diamond makedb` —
-            the local search target for scripts/conservation_local.py
+  swissprot        all of reviewed UniProt (Swiss-Prot, ~575k sequences),
+                   indexed with `diamond makedb` — one of two local search
+                   targets for scripts/conservation_local.py (see its own
+                   docstring and batch.config.json's conservation_local key)
+  rhabditida_trembl  all unreviewed UniProt entries under the Rhabditida
+                   order (taxid 6236, ~2.08M sequences) — the other local
+                   search target; a large one-time download, comparable in
+                   scale to the interpro step above. Rhabditida (not the
+                   full Nematoda phylum, taxid 6231, ~2.4M sequences) is the
+                   order that actually contains C. elegans, giving more
+                   taxonomically relevant hits per sequence searched.
+  pfam      Pfam-A.hmm + Pfam-A.clans.tsv (current_release) — the local Pfam
+            domain-scanning model library for scripts/pfam_scan.py, used by
+            scripts/build_pfam_cache.py (bulk pre-scan) and scripts/domains_scan.py
+            (per-protein backend, on-demand fallback for cache misses)
 
 All downloads are resumable (curl -C -) and skipped if the target file already
 exists with a non-zero size — re-running this script after an interrupted
@@ -55,11 +67,15 @@ DEFAULTS = {
     "ensembl_species": "caenorhabditis_elegans",
     "ensembl_assembly": "WBcel235",
     "interpro_release": "110.0",
-    # taxids for the local ortholog reference DB — mirrors config.py's
-    # DEFAULT_SPECIES (excluding its "Other (search...)" sentinel); kept as a
-    # plain literal here rather than importing config.py, so reference_data.py
-    # has no import-time dependency on the Shiny app's module graph
-    "ortholog_reference_taxids": [9606, 10090, 10116, 7955, 7227, 6239, 8364, 559292, 562],
+    # Rhabditida order taxid, for the rhabditida_trembl ortholog reference database
+    "rhabditida_taxid": 6236,
+    # Source protein FASTA for scripts/build_pfam_cache.py's bulk Pfam scan —
+    # organism-agnostic key so switching organisms only means pointing this
+    # (and out_dir) at a different config, no code changes.
+    "protein_fasta": str(
+        _REPO_ROOT / "data" / "reference"
+        / "c_elegans.canonical_bioproject.current.protein.fa.gz"
+    ),
 }
 
 
@@ -99,7 +115,8 @@ def _verify_gzip(path):
         )
 
 
-def _curl_download(url, dest, force=False, extra_args=None, resumable=True, verify_gzip=False):
+def _curl_download(url, dest, force=False, extra_args=None, resumable=True, verify_gzip=False,
+                   stream_retries=3):
     """Download via curl; skip if dest already has non-zero size and force isn't
     set. Returns True if a download ran, False if skipped.
 
@@ -108,6 +125,14 @@ def _curl_download(url, dest, force=False, extra_args=None, resumable=True, veri
     endpoints (e.g. UniProt's /stream) that don't reliably support Range —
     resuming against one of those risks silently splicing two different result
     orderings together instead of actually continuing the same download.
+
+    Non-resumable downloads use HTTP/1.1 (--http1.1) and retry the *whole*
+    transfer up to stream_retries times on failure: curl's own --retry only
+    covers a fresh connection attempt before any data arrives, not a stream
+    that fails partway through — observed in practice as "curl: (92) HTTP/2
+    stream ... INTERNAL_ERROR" after several minutes and tens of MB into a
+    large UniProt /stream response. Each retry deletes whatever partial file
+    is on disk first, since there's nothing to resume from.
 
     verify_gzip=True runs _verify_gzip() after a fresh download and deletes+
     raises on failure, so a truncated transfer can't masquerade as a
@@ -121,10 +146,23 @@ def _curl_download(url, dest, force=False, extra_args=None, resumable=True, veri
     cmd = ["curl", "-fL", "--retry", "5", "--retry-delay", "10"]
     if resumable:
         cmd += ["-C", "-"]
+    else:
+        cmd += ["--http1.1"]
     cmd += ["-o", str(dest), url]
     if extra_args:
         cmd[1:1] = extra_args
-    subprocess.run(cmd, check=True)
+
+    attempts = stream_retries if not resumable else 1
+    for attempt in range(1, attempts + 1):
+        try:
+            subprocess.run(cmd, check=True)
+            break
+        except subprocess.CalledProcessError:
+            dest.unlink(missing_ok=True)
+            if attempt == attempts:
+                raise
+            print(f"[retry] transfer failed (attempt {attempt}/{attempts}); restarting {url}")
+
     if verify_gzip:
         try:
             _verify_gzip(dest)
@@ -301,56 +339,114 @@ def fetch_interpro(cfg, force=False):
     print(f"[interpro] done: {matched:,} matching rows out of {total:,} scanned -> {dest}")
 
 
-# ── Local ortholog reference DB (conservation_local.py's DIAMOND search target) ──
-
-def fetch_orthologs(cfg, force=False):
-    """Download the reviewed (Swiss-Prot) proteome for each of
-    ortholog_reference_taxids, concatenate into one FASTA, and build a DIAMOND
-    database from it. This is what scripts/conservation_local.py searches
-    against instead of submitting an EBI BLAST job.
+def fetch_pfam(cfg, force=False):
+    """Download Pfam-A's HMM library and clan table for scripts/pfam_scan.py's
+    local de novo domain scanning (scripts/build_pfam_cache.py's bulk pass and
+    scripts/domains_scan.py's on-demand fallback). Uses Pfam's "current_release"
+    alias so this always pulls the latest models; the actual version string is
+    recorded separately (see _record_pfam_version below) so a cache built
+    against an older release can be detected and invalidated later.
     """
     out = _out_dir(cfg)
-    combined_fasta = out / "ortholog_reference.fasta"
-    db_path = out / "ortholog_reference.dmnd"
+    base = "https://ftp.ebi.ac.uk/pub/databases/Pfam/current_release"
 
-    if combined_fasta.exists() and combined_fasta.stat().st_size > 0 and not force:
-        print(f"[skip] {combined_fasta} already present ({combined_fasta.stat().st_size:,} bytes)")
-    else:
-        per_species_paths = []
-        for taxid in cfg["ortholog_reference_taxids"]:
-            dest = out / f"ortholog_ref_{taxid}.fasta.gz"
-            url = (
-                "https://rest.uniprot.org/uniprotkb/stream"
-                f"?query=reviewed:true+AND+organism_id:{taxid}&format=fasta&compressed=true"
-            )
-            _curl_download(url, dest, force=force, resumable=False, verify_gzip=True)
-            per_species_paths.append(dest)
+    hmm_gz = out / "Pfam-A.hmm.gz"
+    hmm_path = out / "Pfam-A.hmm"
+    clans_path = out / "Pfam-A.clans.tsv"
 
-        print(f"[orthologs] concatenating {len(per_species_paths)} species -> {combined_fasta}")
-        with open(combined_fasta, "w") as out_f:
-            for p in per_species_paths:
-                with gzip.open(p, "rt") as f:
-                    out_f.write(f.read())
+    _curl_download(f"{base}/Pfam-A.hmm.gz", hmm_gz, force=force, resumable=True)
+    if not hmm_path.exists() or force:
+        print(f"[gunzip] {hmm_gz} -> {hmm_path}")
+        with gzip.open(hmm_gz, "rb") as src, open(hmm_path, "wb") as dst:
+            dst.write(src.read())
 
+    clans_gz = out / "Pfam-A.clans.tsv.gz"
+    _curl_download(f"{base}/Pfam-A.clans.tsv.gz", clans_gz, force=force, resumable=True)
+    if not clans_path.exists() or force:
+        print(f"[gunzip] {clans_gz} -> {clans_path}")
+        with gzip.open(clans_gz, "rb") as src, open(clans_path, "wb") as dst:
+            dst.write(src.read())
+
+    _record_pfam_version(base, out, force=force)
+
+
+def _record_pfam_version(base_url, out_dir, force=False):
+    """Fetch Pfam.version.gz and write out/Pfam.version.txt (plain text) — the
+    release string scripts/build_pfam_cache.py stamps into its cache's
+    _meta.json so a later Pfam-A.hmm.gz update invalidates stale hit caches.
+    """
+    dest = out_dir / "Pfam.version.txt"
+    if dest.exists() and not force:
+        return
+    result = subprocess.run(
+        ["curl", "-fsL", f"{base_url}/Pfam.version.gz"], check=True, capture_output=True,
+    )
+    dest.write_bytes(gzip.decompress(result.stdout))
+    print(f"[pfam] recorded version info -> {dest}")
+
+
+# ── Local ortholog reference DBs (conservation_local.py's DIAMOND search targets) ──
+
+def _build_diamond_db(fasta_gz_path, db_path, force=False):
+    """Run `diamond makedb` directly against a gzipped FASTA (DIAMOND reads
+    gzip input natively — verified against the installed diamond v2.2.6 — so
+    there's no need to decompress to disk first).
+    """
     if db_path.exists() and not force:
         print(f"[skip] {db_path} already present")
         return
-
-    print(f"[orthologs] building DIAMOND database -> {db_path}")
+    print(f"[makedb] building DIAMOND database from {fasta_gz_path} -> {db_path}")
     subprocess.run(
-        ["diamond", "makedb", "--in", str(combined_fasta), "-d", str(db_path.with_suffix(""))],
+        ["diamond", "makedb", "--in", str(fasta_gz_path), "-d", str(db_path.with_suffix(""))],
         check=True,
     )
-    print(f"[orthologs] done -> {db_path}")
+    print(f"[makedb] done -> {db_path}")
+
+
+def fetch_swissprot(cfg, force=False):
+    """Download all of reviewed UniProt (Swiss-Prot, ~575k sequences) and
+    build a DIAMOND database from it — one of two local search targets for
+    scripts/conservation_local.py (see its docstring and batch.config.json's
+    conservation_local.search_databases list), used in place of the EBI BLAST
+    job scripts/conservation_remote.py submits.
+    """
+    out = _out_dir(cfg)
+    fasta_path = out / "swissprot.fasta.gz"
+    db_path = out / "swissprot.dmnd"
+    url = "https://rest.uniprot.org/uniprotkb/stream?query=reviewed:true&format=fasta&compressed=true"
+    _curl_download(url, fasta_path, force=force, resumable=False, verify_gzip=True)
+    _build_diamond_db(fasta_path, db_path, force=force)
+
+
+def fetch_rhabditida_trembl(cfg, force=False):
+    """Download all unreviewed UniProt entries under the Rhabditida order
+    (taxid 6236, ~2.08M sequences — a large one-time download, comparable in
+    scale to the interpro step) and build a DIAMOND database from it — the
+    other local search target for scripts/conservation_local.py. Restricted
+    to reviewed:false so there's no overlap with fetch_swissprot()'s output
+    (a reviewed nematode entry lives in Swiss-Prot, not TrEMBL).
+    """
+    out = _out_dir(cfg)
+    taxid = cfg["rhabditida_taxid"]
+    fasta_path = out / "rhabditida_trembl.fasta.gz"
+    db_path = out / "rhabditida_trembl.dmnd"
+    url = (
+        "https://rest.uniprot.org/uniprotkb/stream"
+        f"?query=taxonomy_id:{taxid}+AND+reviewed:false&format=fasta&compressed=true"
+    )
+    _curl_download(url, fasta_path, force=force, resumable=False, verify_gzip=True)
+    _build_diamond_db(fasta_path, db_path, force=force)
 
 
 STEPS = {
-    "uniprot":   fetch_uniprot,
-    "afdb":      fetch_afdb,
-    "genome":    fetch_genome,
-    "gff3":      fetch_gff3,
-    "interpro":  fetch_interpro,   # depends on "uniprot" having run first
-    "orthologs": fetch_orthologs,
+    "uniprot":           fetch_uniprot,
+    "afdb":              fetch_afdb,
+    "genome":            fetch_genome,
+    "gff3":              fetch_gff3,
+    "interpro":          fetch_interpro,   # depends on "uniprot" having run first
+    "swissprot":         fetch_swissprot,
+    "rhabditida_trembl": fetch_rhabditida_trembl,
+    "pfam":              fetch_pfam,
 }
 
 

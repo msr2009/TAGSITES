@@ -2,23 +2,38 @@
 conservation_local.py
 
 Local DIAMOND + MAFFT backend for ortholog conservation scoring — searches
-scripts/reference_data.py's local ortholog_reference.dmnd (reviewed Swiss-Prot
-proteomes for config.py's DEFAULT_SPECIES) instead of submitting an EBI BLAST
+one or more local DIAMOND databases built by scripts/reference_data.py
+(default: full Swiss-Prot plus all unreviewed Nematoda TrEMBL — see its
+fetch_swissprot()/fetch_rhabditida_trembl()) instead of submitting an EBI BLAST
 job, aligns with MAFFT instead of a Clustal Omega job, then feeds the
 alignment to the same score_conservation_py3.py used by conservation_remote.py
 — so downstream code (utils/results.py, utils/scoring.py) sees the exact same
 .aln/.jsd/.isoforms.json files regardless of which backend produced them.
 
+The set of databases to search — and each one's own evalue/max_target_seqs/
+sensitivity — is config-driven (batch.config.json's conservation_local.
+search_databases list), not hardcoded, so a database can be added, removed,
+or retuned without touching this file. Every search runs with
+--ultra-sensitive by default (DIAMOND's closest available approximation to
+real NCBI BLASTP sensitivity — conservation_remote.py submits an actual
+BLASTP job, so this backend shouldn't quietly trade sensitivity for DIAMOND's
+faster default mode) unless a database entry overrides "sensitivity".
+
 Reuses blast_orthologs.py's pure helpers (group_hits_by_species,
 format_seq_label, ensure_query_in_alignment_set) and derive_isoforms.py
 unchanged, by shaping DIAMOND's TSV output into the same "hits" list schema
-EBI's BLAST JSON uses (see _diamond_hits_to_blast_json_shape()) — no changes
-needed to either of those modules to support a second conservation backend.
+EBI's BLAST JSON uses — no changes needed to either of those modules to
+support a second conservation backend, or to support searching more than one
+database. Hits from every configured database are merged and re-sorted by
+ascending e-value before being handed off, since group_hits_by_species()/
+derive_isoforms() both assume the hit list arrives best-first (e.g.
+derive_isoforms()'s "first hit is the query's own species" heuristic) — a
+naive concatenation across databases would silently violate that whenever a
+later database's best hit actually outranks an earlier database's.
 
-Score/rank differences from conservation_remote.py are expected (DIAMOND is
-not NCBI BLAST, MAFFT is not Clustal Omega, and the reference set here is 9
-reviewed proteomes rather than all of UniProt) — see the plan's Verification
-step 1 for the parity bar (rank correlation, not byte equality).
+Score/rank differences from conservation_remote.py are still expected
+(DIAMOND is not NCBI BLAST, MAFFT is not Clustal Omega) — see the plan's
+Verification step 1 for the parity bar (rank correlation, not byte equality).
 """
 
 import json
@@ -32,18 +47,51 @@ from site_selection_util import read_fasta
 
 sys.path.insert(0, str(Path(__file__).parent))
 from progress import report as _report, resolve_reporter
-from derive_isoforms import derive_isoforms
 from providers import _load_config as _load_batch_config
+from derive_isoforms import derive_isoforms
 
 _STITLE_OS_RE = re.compile(r"OS=(.*?)\s+OX=")
 
+# default search-database list when batch.config.json has no conservation_local
+# key at all — keeps an unconfigured setup working (Swiss-Prot only) rather
+# than erroring outright
+_DEFAULT_SEARCH_DATABASES = [{"name": "swissprot", "evalue": 1e-10, "max_target_seqs": 50}]
 
-def _reference_paths(cfg=None):
+_DEFAULT_SENSITIVITY = "ultra-sensitive"
+
+
+def _reference_dir(cfg=None):
     cfg = cfg or _load_batch_config().get("reference_data", {})
     out_dir = Path(cfg.get("out_dir", "data/reference"))
     if not out_dir.is_absolute():
         out_dir = Path(__file__).parent.parent / out_dir
-    return out_dir / "ortholog_reference.dmnd"
+    return out_dir
+
+
+def _load_search_databases():
+    """Return the configured list of search-database dicts, each with a
+    resolved 'path' key added (out_dir/{name}.dmnd). Raises FileNotFoundError
+    naming any database file that doesn't exist yet and the fetch command to
+    build it, so a missing/mistyped database fails loudly rather than
+    silently searching fewer databases than configured.
+    """
+    ref_dir = _reference_dir()
+    entries = _load_batch_config().get("conservation_local", {}).get(
+        "search_databases", _DEFAULT_SEARCH_DATABASES
+    )
+    resolved = []
+    for entry in entries:
+        entry = dict(entry)
+        path = ref_dir / f"{entry['name']}.dmnd"
+        if not path.exists():
+            raise FileNotFoundError(
+                f"{path} not found — run `python scripts/reference_data.py "
+                f"--only {entry['name']}` first."
+            )
+        entry["path"] = path
+        entry.setdefault("sensitivity", _DEFAULT_SENSITIVITY)
+        resolved.append(entry)
+    return resolved
 
 
 def _parse_sseqid(sseqid):
@@ -62,24 +110,28 @@ def _parse_species(stitle):
     return m.group(1) if m else ""
 
 
-def _run_diamond_blastp(query_fasta, db_path, n, evalue, workdir):
-    """Run `diamond blastp` and return a list of hit dicts in the same raw
-    shape blast_orthologs.hit_to_dict() expects (i.e. one EBI-BLAST-JSON hit
-    record each), sorted as DIAMOND returns them (ascending e-value per query
-    by default — matches the assumption group_hits_by_species/derive_isoforms
-    make that the first hit is the best/self hit).
+def _run_diamond_blastp_one(query_fasta, db_entry, evalue, workdir):
+    """Run `diamond blastp` against one configured database and return a list
+    of hit dicts in the same raw shape blast_orthologs.hit_to_dict() expects
+    (i.e. one EBI-BLAST-JSON hit record each), each tagged with a "source_db"
+    key naming the database — a harmless extra field existing consumers
+    (hit_to_dict(), derive_isoforms()) simply don't read.
     """
-    out_tsv = Path(workdir) / "diamond.tsv"
+    out_tsv = Path(workdir) / f"diamond_{db_entry['name']}.tsv"
     fields = ["sseqid", "stitle", "pident", "evalue", "qstart", "qend",
               "sstart", "send", "full_sseq"]
+    max_target_seqs = db_entry.get("max_target_seqs", 50)
+    db_evalue = db_entry.get("evalue", evalue)
+    sensitivity = db_entry.get("sensitivity", _DEFAULT_SENSITIVITY)
     subprocess.run([
         "diamond", "blastp",
         "--query", str(query_fasta),
-        "--db", str(db_path),
+        "--db", str(db_entry["path"]),
         "--out", str(out_tsv),
         "--outfmt", "6", *fields,
-        "--max-target-seqs", str(max(n * 3, 50)),  # over-fetch; group_hits_by_species does its own filtering/capping
-        "--evalue", str(evalue),
+        "--max-target-seqs", str(max_target_seqs),
+        "--evalue", str(db_evalue),
+        f"--{sensitivity}",
         "--quiet",
     ], check=True)
 
@@ -90,6 +142,7 @@ def _run_diamond_blastp(query_fasta, db_path, n, evalue, workdir):
             hits.append({
                 "hit_acc": _parse_sseqid(sseqid),
                 "hit_os": _parse_species(stitle),
+                "source_db": db_entry["name"],
                 "hit_hsps": [{
                     "hsp_expect": ev,
                     "hsp_identity": pident,
@@ -99,6 +152,20 @@ def _run_diamond_blastp(query_fasta, db_path, n, evalue, workdir):
                 }],
             })
     return hits
+
+
+def _run_diamond_blastp(query_fasta, db_entries, n, evalue, workdir):
+    """Run diamond blastp against every configured database, merge the hit
+    lists, and re-sort by ascending e-value — group_hits_by_species()/
+    derive_isoforms() both assume the incoming hit list is already best-first
+    (see this module's docstring), which only holds automatically within a
+    single database's own output, not across several concatenated together.
+    """
+    all_hits = []
+    for db_entry in db_entries:
+        all_hits.extend(_run_diamond_blastp_one(query_fasta, db_entry, evalue, workdir))
+    all_hits.sort(key=lambda h: float(h["hit_hsps"][0]["hsp_expect"]))
+    return all_hits
 
 
 def main(fasta_in, email, workingdir, name, output,
@@ -122,22 +189,19 @@ def main(fasta_in, email, workingdir, name, output,
     seq_name, seq = read_fasta(fasta_in)
     seq_len = float(len(seq))
     out_prefix = str(Path(output).with_suffix(""))
-    db_path = _reference_paths()
-    if not db_path.exists():
-        raise FileNotFoundError(
-            f"{db_path} not found — run `python scripts/reference_data.py "
-            "--only orthologs` first."
-        )
+    db_entries = _load_search_databases()
 
     ###########################
     # DIAMOND SEARCH
     ###########################
 
-    _report(reporter, "Searching local ortholog reference DB (DIAMOND)…", stage="blast_submit")
+    db_names = ", ".join(e["name"] for e in db_entries)
+    _report(reporter, f"Searching local reference database(s) ({db_names}) with DIAMOND…",
+            stage="blast_submit")
     with tempfile.TemporaryDirectory() as tmpdir:
         query_fasta = Path(tmpdir) / "query.fa"
         query_fasta.write_text(f">{seq_name}\n{seq}\n")
-        raw_hits = _run_diamond_blastp(query_fasta, db_path, n, evalue, tmpdir)
+        raw_hits = _run_diamond_blastp(query_fasta, db_entries, n, evalue, tmpdir)
 
     blast_output = {"query_len": int(seq_len), "hits": raw_hits}
     blast_json_path = f"{out_prefix}.json.json"
