@@ -330,8 +330,11 @@ def design_pcr_primers(left_arm, right_arm, template, tm_target, phos,
     rev_result = _primer3_anchored_single(template, len(template) - 1, False, tm_target, max_bind_len)
 
     if fwd_result and rev_result:
+        # primer3's PRIMER_LEFT/RIGHT_0_SEQUENCE are already final, correctly
+        # oriented oligo sequences (RIGHT is already the reverse-complement
+        # binding to the top strand) — no further RC needed here.
         fwd_bind = fwd_result[0]
-        rev_bind = reverse_complement(rev_result[0])
+        rev_bind = rev_result[0]
     else:
         used_fallback = True
         fwd_bind, rev_bind = _tm_growth_bind_regions(template, tm_target)
