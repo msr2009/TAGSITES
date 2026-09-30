@@ -1484,10 +1484,45 @@
     });
   });
 
-  // Disable a "Fetch"/"Search" button and show its spinner while the (blocking,
-  // synchronous) server-side call is in flight, so repeat clicks can't queue up.
-  // doneMessage is sent by the server once the call finishes (success or failure).
-  function wireBlockingButton(btnClass, wrapClass, spinnerClass, doneMessage) {
+  // Disable a "Fetch"/"Search" button and show its spinner while the server-side
+  // call is in flight, so repeat clicks can't queue up. doneMessage is sent by the
+  // server once the call finishes (success, failure, or timeout).
+  //
+  // warnMs/failMs add progressive feedback beside the spinner, and the failMs timer
+  // doubles as a watchdog: it re-enables the button even if the done message never
+  // arrives at all (a dropped websocket on shinyapps.io, say), so the spinner can no
+  // longer be left running forever the way it was in issue #64.
+  function wireBlockingButton(btnClass, wrapClass, spinnerClass, doneMessage,
+                              warnMs, failMs, warnText, failText) {
+    var timers = [];
+
+    function clearTimers() {
+      timers.forEach(clearTimeout);
+      timers = [];
+    }
+
+    function noteEl(container) {
+      if (!container) return null;
+      var el = container.querySelector(".ts-blocking-note");
+      if (!el) {
+        el = document.createElement("span");
+        el.className = "ts-blocking-note";
+        el.style.marginLeft = "0.5rem";
+        el.style.fontSize = "0.85rem";
+        container.appendChild(el);
+      }
+      return el;
+    }
+
+    function release() {
+      document.querySelectorAll(btnClass).forEach(function (btn) {
+        btn.disabled = false;
+      });
+      document.querySelectorAll(spinnerClass).forEach(function (el) {
+        el.style.display = "none";
+      });
+    }
+
     document.addEventListener("click", function (e) {
       var btn = e.target.closest(btnClass);
       if (!btn) return;
@@ -1495,22 +1530,47 @@
       btn.disabled = true;
       var spinner = container && container.querySelector(spinnerClass);
       if (spinner) spinner.style.display = "flex";
+
+      clearTimers();
+      var note = noteEl(container);
+      if (note) note.textContent = "";
+      if (note && warnMs) {
+        timers.push(setTimeout(function () {
+          note.textContent = warnText;
+          note.style.color = "#b45309";      // amber
+        }, warnMs));
+      }
+      if (note && failMs) {
+        timers.push(setTimeout(function () {
+          note.textContent = failText;
+          note.style.color = "#b91c1c";      // red
+          release();
+        }, failMs));
+      }
     });
 
     Shiny.addCustomMessageHandler(doneMessage, function (msg) {
-      document.querySelectorAll(btnClass).forEach(function (btn) {
-        btn.disabled = false;
-      });
-      document.querySelectorAll(spinnerClass).forEach(function (el) {
-        el.style.display = "none";
-      });
+      clearTimers();
+      // a msg without ok:false is a success — clear the note. On a timeout the
+      // server stays quiet and leaves the red line the timer already wrote.
+      if (!msg || msg.ok !== false) {
+        document.querySelectorAll(".ts-blocking-note").forEach(function (el) {
+          el.textContent = "";
+        });
+      }
+      release();
     });
   }
 
+  // 20 s / 40 s match total_timeout_s and warn_at_s in ensembl.config.json
   wireBlockingButton(".ts-genomic-fetch-btn", ".ts-genomic-fetch-wrap",
-                      ".ts-genomic-spinner", "tagsites_genomic_fetch_done");
+                      ".ts-genomic-spinner", "tagsites_genomic_fetch_done",
+                      20000, 40000, "Taking a while…",
+                      "Fetch timed out. Try again?");
   wireBlockingButton(".ts-uniprot-search-btn", ".ts-uniprot-search-wrap",
-                      ".ts-uniprot-spinner", "tagsites_uniprot_search_done");
+                      ".ts-uniprot-spinner", "tagsites_uniprot_search_done",
+                      20000, 40000, "Taking a while…",
+                      "Search timed out. Try again?");
 
   Shiny.addCustomMessageHandler("tagsites_trigger_download", function (msg) {
     var link = document.getElementById("progress-download_results");

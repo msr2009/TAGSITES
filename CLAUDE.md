@@ -47,6 +47,10 @@ scripts/                # core analysis executables
   site_selection_util.py      # shared library: FASTA/PDB I/O, BLAST API, sequence utils
   existing_AF_model.py        # search AFDB for existing predictions
   uniprot_api.py               # shared UniProt REST helpers (checksum lookup, entry fetch)
+  http_retry.py               # shared bounded-retry + wall-clock-deadline wrapper around
+                              # requests; used by ebi_rest.py and ensembl_rest.py
+  ensembl_rest.py             # Ensembl REST client for the genomic-sequence auto-fetch
+                              # (knobs in ensembl.config.json)
   guide_efficiency.py         # RS3 on-target guide scoring (optional; fails soft)
   genbank_export.py           # annotated GenBank (.gb) records for ApE/SnapGene —
                               # two per selected guide, each spanning the WHOLE
@@ -88,6 +92,15 @@ option and decides. Guides are ordered by distance from cut to insertion site; R
 along as a badge and never participates in selection or sorting. A regression check for this
 is that the pre-existing columns of `{run}_reagents.tsv` are byte-identical with and without
 `rs3` installed.
+
+**Never call a blocking function directly from a Shiny effect**: Shiny's asyncio event
+loop serves *every* session, so one slow `requests.get` freezes the whole app — including
+its ability to notice a pasted sequence or enable a button. Route remote work through
+`modules/setup_server.py:_off_loop()` (`asyncio.to_thread`, plus an optional
+`asyncio.wait_for` budget) or `@reactive.extended_task` + `run_in_executor`
+(`modules/progress_server.py:293`). Note also that `requests`' `timeout=` is a per-socket
+read timeout, not a deadline: a response arriving a byte at a time never trips it at any
+setting. `scripts/http_retry.py` enforces a real wall-clock budget. See issue #64.
 
 **Alignment rendering**: sequence alignments are pre-rendered as matplotlib SVGs (stored in a dict keyed by alignment name) and displayed statically — this replaced an earlier real-time Plotly approach that was too slow.
 

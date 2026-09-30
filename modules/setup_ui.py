@@ -309,7 +309,7 @@ def setup_ui():
                 ui.div(
                     # auto-fetch genomic sequence from Ensembl
                     ui.div(
-                        ui.tags.label("Auto-fetch from Ensembl (this may timeout, but usually works after a few tries)", class_="form-label"),
+                        ui.tags.label("Auto-fetch from Ensembl (gives up after 40 s — paste or upload below if it fails)", class_="form-label"),
                         ui.div(
                             ui.input_text("genomic_gene_symbol", "",
                                           placeholder="Gene symbol (e.g. unc-18)"),

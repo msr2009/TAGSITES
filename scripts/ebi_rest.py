@@ -9,10 +9,17 @@ Use run_job() for the common submit-poll-fetch workflow.
 No import-time network calls; safe to import anywhere.
 """
 
+import sys
 import time
-from datetime import datetime
-from email.utils import parsedate_to_datetime
-import requests
+from pathlib import Path
+
+# requests is no longer called directly here (http_retry owns that), but it stays
+# imported as the patch seam the tests use: monkeypatching ebi_rest.requests.get
+# patches the one shared module object http_retry also calls through.
+import requests  # noqa: F401
+
+sys.path.insert(0, str(Path(__file__).parent))
+import http_retry
 
 # canonical base URLs for each EBI REST service
 NCBIBLAST = "https://www.ebi.ac.uk/Tools/services/rest/ncbiblast"
@@ -24,53 +31,14 @@ DBFETCH_BASE = "https://www.ebi.ac.uk/Tools/dbfetch/dbfetch"
 ENA_FASTA_BASE = "https://www.ebi.ac.uk/ena/browser/api/fasta"
 
 
-RETRYABLE_EXCEPTIONS = (requests.exceptions.Timeout, requests.exceptions.ConnectionError)
-
-# HTTP statuses worth retrying: 429 (rate limited) and the common transient 5xx codes.
-# Batch-scale traffic hits these routinely; a plain 4xx (bad request, not found, ...)
-# still raises immediately since retrying it can't help.
-RETRYABLE_STATUS = {429, 500, 502, 503, 504}
-
-
-def _retry_after_seconds(resp):
-    """Parse a response's Retry-After header (delta-seconds or HTTP-date); None if absent/unparsable."""
-    value = resp.headers.get("Retry-After")
-    if not value:
-        return None
-    try:
-        return float(value)
-    except ValueError:
-        try:
-            dt = parsedate_to_datetime(value)
-            return max(0.0, (dt - datetime.now(dt.tzinfo)).total_seconds())
-        except Exception:
-            return None
-
-
-def _request_with_retries(method, url, retries=3, retry_wait=5, **kwargs):
-    """Call requests.<method>(url, **kwargs), retrying on transient timeout/connection errors
-    and on 429/5xx responses (honoring Retry-After when the server sends one).
-
-    EBI's REST endpoints occasionally hang past the read timeout, and under batch-scale
-    load return 429/503; retrying the same idempotent GET/POST a few times clears most
-    of these transparently. A non-retryable status (e.g. a plain 4xx) still raises
-    immediately via raise_for_status().
-    """
-    last_exc = None
-    for attempt in range(retries + 1):
-        try:
-            resp = getattr(requests, method)(url, **kwargs)
-            if resp.status_code in RETRYABLE_STATUS and attempt < retries:
-                wait = _retry_after_seconds(resp)
-                time.sleep(wait if wait is not None else retry_wait)
-                continue
-            resp.raise_for_status()
-            return resp
-        except RETRYABLE_EXCEPTIONS as exc:
-            last_exc = exc
-            if attempt < retries:
-                time.sleep(retry_wait)
-    raise last_exc
+# The retry machinery moved to http_retry.py so ensembl_rest.py can share it.
+# Re-exported under the original names: every call site in this file and any
+# external reference keeps working, and the default deadline=None means the
+# behavior here is byte-for-byte what it was.
+RETRYABLE_EXCEPTIONS = http_retry.RETRYABLE_EXCEPTIONS
+RETRYABLE_STATUS = http_retry.RETRYABLE_STATUS
+_retry_after_seconds = http_retry.retry_after_seconds
+_request_with_retries = http_retry.request_with_retries
 
 
 def submit(base_url, params):

@@ -1,0 +1,26 @@
+{
+	"_comment": "Knobs for the Ensembl REST genomic-sequence auto-fetch (scripts/ensembl_rest.py, scripts/fetch_genomic_sequence.py, wired into the Setup tab by modules/setup_server.py). See issue #64: the fetch used to run on the Shiny event loop with only per-socket timeouts, so a slow-dribbling response could block every session indefinitely.",
+
+	"timeouts": {
+		"_comment": "total_timeout_s is a real wall-clock budget for the whole symbol->FASTA operation, enforced by clamping each request's read timeout against the time remaining (http_retry.clamp_timeout). requests' own timeout= is per-socket, not per-operation: a server sending one byte every few seconds resets the read timer forever and never trips it, which is exactly the hang in #64. Worst case before this budget existed was 6*60 + 30 + N*30 + 60 seconds, none of it technically a timeout. connect_timeout_s is short so a dead host fails fast rather than burning the budget on a connect. outer_grace_s is the slack asyncio.wait_for allows over the budget before it stops waiting on the worker thread; the thread may outlive it, but its result is discarded.",
+		"total_timeout_s":      40,
+		"warn_at_s":            20,
+		"connect_timeout_s":     5,
+		"read_timeout_s":       30,
+		"fasta_read_timeout_s": 40,
+		"outer_grace_s":         5,
+		"ui_watchdog_grace_s":   5
+	},
+
+	"retries": {
+		"_comment": "Deliberately low. ensembl_rest previously had no retries at all, which is why the Setup tab used to tell users 'this may timeout, but usually works after a few tries'. But with a 40 s budget, aggressive retrying just spends the budget on repeats of a failing call and never reaches the sequence fetch, so one retry with a short wait is the useful amount. Both are clamped by the deadline anyway.",
+		"retries":      1,
+		"retry_wait_s": 2
+	},
+
+	"limits": {
+		"_comment": "max_gene_candidates bounds a previously unbounded loop: a symbol matching N gene ids cost N serial lookup_id calls. Candidates are sorted before truncation so the choice stays deterministic. Symbols with more than a handful of matches are LRG-style duplicates, which gene_candidates() already filters. max_divisions bounds the /info/species walk used only for organisms outside FAST_PATH_SPECIES (which covers all nine presets), so this rarely fires at all.",
+		"max_gene_candidates": 5,
+		"max_divisions":       6
+	}
+}

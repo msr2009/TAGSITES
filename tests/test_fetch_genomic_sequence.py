@@ -12,25 +12,25 @@ from fetch_genomic_sequence import fetch_genomic_sequence
 
 
 def test_raises_when_organism_not_on_ensembl(monkeypatch):
-    monkeypatch.setattr(ensembl_rest, "resolve_species_slug", lambda taxid: None)
+    monkeypatch.setattr(ensembl_rest, "resolve_species_slug", lambda taxid, deadline=None: None)
     with pytest.raises(ValueError, match="not found on Ensembl"):
         fetch_genomic_sequence(taxid=1234567, gene_symbol="foo")
 
 
 def test_raises_when_gene_symbol_not_found(monkeypatch):
     monkeypatch.setattr(ensembl_rest, "resolve_species_slug",
-                        lambda taxid: "caenorhabditis_elegans")
-    monkeypatch.setattr(ensembl_rest, "xref_symbol", lambda species, symbol: [])
+                        lambda taxid, deadline=None: "caenorhabditis_elegans")
+    monkeypatch.setattr(ensembl_rest, "xref_symbol", lambda species, symbol, deadline=None: [])
     with pytest.raises(ValueError, match="No gene found"):
         fetch_genomic_sequence(taxid=6239, gene_symbol="nonexistent-gene")
 
 
 def test_success_path_returns_fasta_and_meta(monkeypatch):
     monkeypatch.setattr(ensembl_rest, "resolve_species_slug",
-                        lambda taxid: "caenorhabditis_elegans")
+                        lambda taxid, deadline=None: "caenorhabditis_elegans")
     monkeypatch.setattr(ensembl_rest, "xref_symbol",
-                        lambda species, symbol: [{"type": "gene", "id": "WBGene00006757"}])
-    monkeypatch.setattr(ensembl_rest, "lookup_id", lambda gene_id: {
+                        lambda species, symbol, deadline=None: [{"type": "gene", "id": "WBGene00006757"}])
+    monkeypatch.setattr(ensembl_rest, "lookup_id", lambda gene_id, deadline=None: {
         "seq_region_name": "X", "start": 7682896, "end": 7686037,
         "strand": 1, "assembly_name": "WBcel235",
     })
@@ -38,7 +38,7 @@ def test_success_path_returns_fasta_and_meta(monkeypatch):
     captured = {}
 
     def fake_fetch_region_fasta(species, seq_region, start, end, strand,
-                                expand_5prime=0, expand_3prime=0):
+                                expand_5prime=0, expand_3prime=0, deadline=None):
         captured.update(locals())
         return ">chromosome:WBcel235:X:7681896:7687037:1\nACGT\n"
 
@@ -62,10 +62,10 @@ def test_success_path_returns_fasta_and_meta(monkeypatch):
 def test_success_path_ecoli_assembly_qualified_slug(monkeypatch):
     """The E. coli fast-path slug is assembly-qualified; confirm it flows through unchanged."""
     ecoli_slug = "escherichia_coli_str_k_12_substr_mg1655_gca_000005845"
-    monkeypatch.setattr(ensembl_rest, "resolve_species_slug", lambda taxid: ecoli_slug)
+    monkeypatch.setattr(ensembl_rest, "resolve_species_slug", lambda taxid, deadline=None: ecoli_slug)
     monkeypatch.setattr(ensembl_rest, "xref_symbol",
-                        lambda species, symbol: [{"type": "gene", "id": "b0002"}])
-    monkeypatch.setattr(ensembl_rest, "lookup_id", lambda gene_id: {
+                        lambda species, symbol, deadline=None: [{"type": "gene", "id": "b0002"}])
+    monkeypatch.setattr(ensembl_rest, "lookup_id", lambda gene_id, deadline=None: {
         "seq_region_name": "Chromosome", "start": 337, "end": 2799,
         "strand": 1, "assembly_name": "ASM584v2",
     })
@@ -83,14 +83,14 @@ def test_success_path_ecoli_assembly_qualified_slug(monkeypatch):
 def test_lrg_duplicate_filtered_without_extra_lookup_call(monkeypatch):
     """The common human case (ENSG + LRG_) resolves via gene_candidates alone —
     _pick_most_complete_gene's span comparison should never kick in."""
-    monkeypatch.setattr(ensembl_rest, "resolve_species_slug", lambda taxid: "homo_sapiens")
-    monkeypatch.setattr(ensembl_rest, "xref_symbol", lambda species, symbol: [
+    monkeypatch.setattr(ensembl_rest, "resolve_species_slug", lambda taxid, deadline=None: "homo_sapiens")
+    monkeypatch.setattr(ensembl_rest, "xref_symbol", lambda species, symbol, deadline=None: [
         {"type": "gene", "id": "ENSG00000012048"}, {"type": "gene", "id": "LRG_292"},
     ])
 
     lookup_calls = []
 
-    def fake_lookup_id(gene_id):
+    def fake_lookup_id(gene_id, deadline=None):
         lookup_calls.append(gene_id)
         return {"seq_region_name": "17", "start": 43044292, "end": 43170245,
                 "strand": -1, "assembly_name": "GRCh38"}
@@ -109,13 +109,13 @@ def test_duplicate_annotation_prefers_longest_genomic_span(monkeypatch):
     """Two non-LRG gene ids (e.g. zebrafish tp53 primary + a shorter duplicate
     annotation) — the longer (more complete) span should be chosen, and the
     ambiguity surfaced to the caller."""
-    monkeypatch.setattr(ensembl_rest, "resolve_species_slug", lambda taxid: "danio_rerio")
-    monkeypatch.setattr(ensembl_rest, "xref_symbol", lambda species, symbol: [
+    monkeypatch.setattr(ensembl_rest, "resolve_species_slug", lambda taxid, deadline=None: "danio_rerio")
+    monkeypatch.setattr(ensembl_rest, "xref_symbol", lambda species, symbol, deadline=None: [
         {"type": "gene", "id": "ENSDARG00000035559"},
         {"type": "gene", "id": "ENSDARG00000115148"},
     ])
 
-    def fake_lookup_id(gene_id):
+    def fake_lookup_id(gene_id, deadline=None):
         if gene_id == "ENSDARG00000035559":
             # real span: 11,579 bp (the complete gene model)
             return {"seq_region_name": "5", "start": 24086227, "end": 24097805,
@@ -136,11 +136,11 @@ def test_duplicate_annotation_prefers_longest_genomic_span(monkeypatch):
 
 def test_equal_spans_falls_back_to_first_candidate(monkeypatch):
     """If every candidate has the same span, fall back to the first rather than picking arbitrarily."""
-    monkeypatch.setattr(ensembl_rest, "resolve_species_slug", lambda taxid: "danio_rerio")
-    monkeypatch.setattr(ensembl_rest, "xref_symbol", lambda species, symbol: [
+    monkeypatch.setattr(ensembl_rest, "resolve_species_slug", lambda taxid, deadline=None: "danio_rerio")
+    monkeypatch.setattr(ensembl_rest, "xref_symbol", lambda species, symbol, deadline=None: [
         {"type": "gene", "id": "GENE_A"}, {"type": "gene", "id": "GENE_B"},
     ])
-    monkeypatch.setattr(ensembl_rest, "lookup_id", lambda gene_id: {
+    monkeypatch.setattr(ensembl_rest, "lookup_id", lambda gene_id, deadline=None: {
         "seq_region_name": "5", "start": 1, "end": 100,
         "strand": 1, "assembly_name": "GRCz11",
     })
@@ -155,14 +155,14 @@ def test_equal_spans_falls_back_to_first_candidate(monkeypatch):
 def test_disambiguation_reuses_lookup_result_no_refetch(monkeypatch):
     """The winning candidate's coords (fetched while comparing spans) should be
     reused, not re-fetched via a second lookup_id call."""
-    monkeypatch.setattr(ensembl_rest, "resolve_species_slug", lambda taxid: "danio_rerio")
-    monkeypatch.setattr(ensembl_rest, "xref_symbol", lambda species, symbol: [
+    monkeypatch.setattr(ensembl_rest, "resolve_species_slug", lambda taxid, deadline=None: "danio_rerio")
+    monkeypatch.setattr(ensembl_rest, "xref_symbol", lambda species, symbol, deadline=None: [
         {"type": "gene", "id": "GENE_A"}, {"type": "gene", "id": "GENE_B"},
     ])
 
     lookup_calls = []
 
-    def fake_lookup_id(gene_id):
+    def fake_lookup_id(gene_id, deadline=None):
         lookup_calls.append(gene_id)
         span = {"GENE_A": (1, 1000), "GENE_B": (1, 100)}[gene_id]
         return {"seq_region_name": "5", "start": span[0], "end": span[1],
@@ -179,14 +179,14 @@ def test_disambiguation_reuses_lookup_result_no_refetch(monkeypatch):
 def test_disambiguation_falls_back_when_all_lookups_fail(monkeypatch):
     """If every candidate's lookup_id call fails, fall back to the first candidate
     and fetch its coords fresh rather than raising."""
-    monkeypatch.setattr(ensembl_rest, "resolve_species_slug", lambda taxid: "danio_rerio")
-    monkeypatch.setattr(ensembl_rest, "xref_symbol", lambda species, symbol: [
+    monkeypatch.setattr(ensembl_rest, "resolve_species_slug", lambda taxid, deadline=None: "danio_rerio")
+    monkeypatch.setattr(ensembl_rest, "xref_symbol", lambda species, symbol, deadline=None: [
         {"type": "gene", "id": "GENE_A"}, {"type": "gene", "id": "GENE_B"},
     ])
 
     calls = {"n": 0}
 
-    def fake_lookup_id(gene_id):
+    def fake_lookup_id(gene_id, deadline=None):
         calls["n"] += 1
         if calls["n"] <= 2:
             raise Exception("boom")

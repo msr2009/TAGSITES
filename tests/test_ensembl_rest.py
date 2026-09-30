@@ -27,10 +27,12 @@ def _fake_response(json_data=None, text=None, status_ok=True):
 
 @pytest.fixture(autouse=True)
 def _clear_division_cache():
-    """Each test gets a clean division cache so caching behavior is testable in isolation."""
+    """Each test gets clean caches so caching behavior is testable in isolation."""
     ensembl_rest._division_cache.clear()
+    ensembl_rest._species_slug_cache.clear()
     yield
     ensembl_rest._division_cache.clear()
+    ensembl_rest._species_slug_cache.clear()
 
 
 # ── xref_symbol / lookup_id / fetch_region_fasta / list_species ───────────────
@@ -187,7 +189,7 @@ class TestResolveSpeciesSlug:
     def test_dynamic_fallback_searches_divisions_in_order(self, monkeypatch):
         seen_divisions = []
 
-        def fake_list_species(division=None):
+        def fake_list_species(division=None, deadline=None):
             seen_divisions.append(division)
             if division == "EnsemblMetazoa":
                 return [{"name": "some_metazoan", "taxon_id": "99999"}]
@@ -201,7 +203,7 @@ class TestResolveSpeciesSlug:
     def test_dynamic_fallback_caches_division_listing(self, monkeypatch):
         call_count = {"n": 0}
 
-        def fake_list_species(division=None):
+        def fake_list_species(division=None, deadline=None):
             call_count["n"] += 1
             return [{"name": "some_vertebrate", "taxon_id": "12345"}]
 
@@ -211,11 +213,11 @@ class TestResolveSpeciesSlug:
         assert call_count["n"] == 1
 
     def test_returns_none_when_not_found_in_any_division(self, monkeypatch):
-        monkeypatch.setattr(ensembl_rest, "list_species", lambda division=None: [])
+        monkeypatch.setattr(ensembl_rest, "list_species", lambda division=None, deadline=None: [])
         assert ensembl_rest.resolve_species_slug(424242) is None
 
     def test_multiple_matches_returns_sorted_first(self, monkeypatch):
-        def fake_list_species(division=None):
+        def fake_list_species(division=None, deadline=None):
             if division == "EnsemblVertebrates":
                 return [{"name": "zzz_species", "taxon_id": "555"},
                         {"name": "aaa_species", "taxon_id": "555"}]

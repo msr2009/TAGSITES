@@ -38,7 +38,26 @@ from scripts.uniprot_api import fetch_isoform_sequences
 # regardless of working dir
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 import ebi_rest
+import ensembl_rest
 from fetch_genomic_sequence import fetch_genomic_sequence
+
+
+async def _off_loop(fn, *args, budget=None, grace=0, **kwargs):
+    """Run a blocking function in a worker thread, optionally under a wall-clock cap.
+
+    Every remote call on this page used to run directly on the asyncio event
+    loop, which in Shiny serves every session — so one slow response froze the
+    whole app, including its ability to notice a pasted sequence (issue #64).
+    Awaiting a thread yields the loop back while the call is in flight.
+
+    budget/grace add an outer asyncio.wait_for so the UI is released even if the
+    worker thread wedges inside requests. A thread orphaned that way is accepted:
+    its result is discarded and it ends at its own deadline.
+    """
+    call = asyncio.to_thread(lambda: fn(*args, **kwargs))
+    if budget is None:
+        return await call
+    return await asyncio.wait_for(call, timeout=budget + grace)
 
 _ROOT = Path(__file__).parent.parent
 _PARAMS_DIR = _ROOT / "params"
@@ -293,19 +312,28 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
     _lineage = reactive.Value([])  # [{"rank": str, "name": str, "taxid": str}, ...]
 
     @reactive.effect
-    def _fetch_lineage():
-        """Fetch taxonomic lineage from UniProt whenever the resolved taxid changes."""
+    async def _fetch_lineage():
+        """Fetch taxonomic lineage from UniProt whenever the resolved taxid changes.
+
+        Runs off the event loop: this fires on every organism change, and a slow
+        UniProt used to freeze the whole app for the duration (issue #64).
+        """
         tid = organism_taxid()
         if not tid:
             _lineage.set([])
             return
         try:
-            resp = requests.get(
+            resp = await _off_loop(
+                requests.get,
                 f"https://rest.uniprot.org/taxonomy/{tid}",
                 params={"format": "json"},
-                timeout=10,
+                timeout=(3.05, 10),
             )
             resp.raise_for_status()
+            # awaiting means the organism may have changed while this was in
+            # flight; a stale answer would overwrite the right one
+            if organism_taxid() != tid:
+                return
             data = resp.json()
             entries = [
                 {"rank": e["rank"], "name": e["scientificName"], "taxid": str(e["taxonId"])}
@@ -381,25 +409,40 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
         """
         taxid  = organism_taxid()
         symbol = input.genomic_gene_symbol().strip()
+        # these two early returns must still release the button: the client
+        # disables it on click and only re-enables on the done message
         if not taxid:
             ui.notification_show("Select an organism first.", type="warning", duration=5)
+            await session.send_custom_message("tagsites_genomic_fetch_done", {"ok": False})
             return
         if not symbol:
             ui.notification_show("Enter a gene symbol first.", type="warning", duration=5)
+            await session.send_custom_message("tagsites_genomic_fetch_done", {"ok": False})
             return
         try:
             flank_bp = int(input.genomic_flank_bp())
         except Exception:
             flank_bp = 2000
 
+        cfg = ensembl_rest.timeouts()
+        ok  = False
         try:
-            fasta_text, meta = fetch_genomic_sequence(taxid, symbol, flank_bp=flank_bp)
+            fasta_text, meta = await _off_loop(
+                fetch_genomic_sequence, taxid, symbol, flank_bp=flank_bp,
+                budget=cfg["total_timeout_s"], grace=cfg["outer_grace_s"],
+            )
+            ok = True
+        except (TimeoutError, asyncio.TimeoutError):
+            # the client already shows its own timed-out line at this point, so a
+            # notification here would just duplicate it
+            _genomic_fetch_status.set("")
+            return
         except Exception as e:
             _genomic_fetch_status.set("")
             ui.notification_show(f"Genomic fetch failed: {e}", type="error", duration=8)
             return
         finally:
-            await session.send_custom_message("tagsites_genomic_fetch_done", {})
+            await session.send_custom_message("tagsites_genomic_fetch_done", {"ok": ok})
 
         ui.update_text_area("genomic_seq_paste", value=fasta_text)
         status = f"Fetched {meta['gene_id']} ({meta['species']}) {meta['region']}"
@@ -507,10 +550,12 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
         3. For each hit, also expand curated isoforms via ALTERNATIVE PRODUCTS comment
            (e.g. TP53's 9 manually curated isoforms all live inside P04637).
         """
+        ok = False
         try:
             await _uniprot_search_impl()
+            ok = True
         finally:
-            await session.send_custom_message("tagsites_uniprot_search_done", {})
+            await session.send_custom_message("tagsites_uniprot_search_done", {"ok": ok})
 
     async def _uniprot_search_impl():
         q = input.uniprot_query().strip() if "uniprot_query" in input else ""
@@ -521,27 +566,32 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
         scope = f" AND taxonomy_id:{tid}" if tid else ""
         fields = "accession,gene_primary,protein_name,length,organism_name,organism_id,reviewed,sequence,xref_alphafolddb"
 
-        def _fetch_tsv(query):
+        def _fetch_tsv_blocking(query):
             resp = requests.get(
                 "https://rest.uniprot.org/uniprotkb/search",
                 params={"query": query, "format": "tsv", "fields": fields, "size": 25},
-                timeout=15,
+                timeout=(5, 15),
             )
             resp.raise_for_status()
             return resp.text
 
+        async def _fetch_tsv(query):
+            """Same search, run off the event loop so the app stays responsive."""
+            return await _off_loop(_fetch_tsv_blocking, query)
+
         try:
             # gene-field search is the primary path; returns all entries with gene name = q,
             # including computationally defined isoforms stored as separate TrEMBL entries
-            all_hits = _parse_tsv_hits(_fetch_tsv(f"gene:{q}{scope}"))
+            all_hits = _parse_tsv_hits(await _fetch_tsv(f"gene:{q}{scope}"))
 
             if not all_hits:
                 # q is likely an accession — fetch it directly rather than doing a
                 # free-text search (which returns many unrelated hits)
-                resp = requests.get(
+                resp = await _off_loop(
+                    requests.get,
                     f"https://rest.uniprot.org/uniprotkb/{q}",
                     params={"format": "json"},
-                    timeout=15,
+                    timeout=(5, 15),
                 )
                 if resp.ok:
                     entry = resp.json()
@@ -606,12 +656,19 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
 
         base_hits.sort(key=_hit_sort_key)
 
-        # expand curated isoforms (entries with ALTERNATIVE PRODUCTS comment, e.g. TP53)
-        seen = {}
-        for h in base_hits:
-            for exp_h in _fetch_isoforms(h["accession"], h):
-                if exp_h["accession"] not in seen:
-                    seen[exp_h["accession"]] = exp_h
+        # expand curated isoforms (entries with ALTERNATIVE PRODUCTS comment, e.g. TP53).
+        # One network call per hit, so the whole loop goes off the event loop in a
+        # single hop rather than 25 separate round trips blocking the app.
+        def _expand_all(hits):
+            """Expand every hit's isoforms; pure network + dict work, no UI."""
+            out = {}
+            for h in hits:
+                for exp_h in _fetch_isoforms(h["accession"], h):
+                    if exp_h["accession"] not in out:
+                        out[exp_h["accession"]] = exp_h
+            return out
+
+        seen = await _off_loop(_expand_all, base_hits)
 
         _selected_hit.set(None)
         _selected_pdb.set("")
