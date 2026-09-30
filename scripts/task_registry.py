@@ -28,7 +28,7 @@ SELECTABLE_TASKS  = [t for t, d in TASK_DEFS.items() if d.get("selectable", True
 # canonical set of keys that belong in the global block, not per-task args
 GLOBAL_KEYS = {
     "email", "working_dir", "run_name", "input_file",
-    "pdb", "scripts_folder", "genomic_file", "selected_sites",
+    "pdb", "scripts_folder", "genomic_file", "selected_sites", "taxid",
 }
 
 # --- per-type accessors ---

@@ -88,6 +88,7 @@ def build_protein_run_json(row, template, default_email, output_root, taxid="", 
         input_file=row["input_file"],
         pdb=row.get("pdb", ""),
         genomic_file=genomic_file,
+        taxid=row.get("taxid") or taxid,
     )
 
     task_entries = []

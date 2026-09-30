@@ -1303,6 +1303,7 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
             input_file   = input_file,
             pdb          = pdb_path,
             genomic_file = genomic_path,
+            taxid        = organism_taxid(),
         )
 
         # ── build per-task entries ────────────────────────────────────────────

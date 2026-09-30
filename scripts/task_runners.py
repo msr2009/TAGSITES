@@ -239,7 +239,7 @@ def run_reagents(args, report=None, job_id_cb=None, resume_job_ids=None):
         if recs:
             protein_length = len(recs[0].seq)
 
-    design_tag_reagents.main(
+    reagents_result = design_tag_reagents.main(
         genewise            = genewise_path,
         genomic_fasta       = _str(args.get("genomic_fasta")),
         output              = _str(args.get("output")),
@@ -257,8 +257,19 @@ def run_reagents(args, report=None, job_id_cb=None, resume_job_ids=None):
         flank_max           = _int(args.get("flank_max"), 150),
         rs3                 = _bool(args.get("rs3"), True),
         rs3_tracr           = _str(args.get("rs3_tracr"), "Hsu2013"),
+        offtarget           = _bool(args.get("offtarget"), True),
+        # taxid comes from the run JSON's global block (see setup_logic.build_global_block);
+        # email is likewise global and required by EBI
+        taxid               = _str(args.get("taxid")),
+        email               = _str(args.get("email")),
         report              = report,
+        job_id_cb           = job_id_cb,
+        resume_job_ids      = resume_job_ids,
     )
+    # the off-target screens submit EBI jobs at indices 2 and 3 (Genewise owns 0/1),
+    # so a queued job must surface the same sentinel Genewise uses above
+    if isinstance(reagents_result, dict) and "ebi_status" in reagents_result:
+        return reagents_result
 
 
 # map analysis type → runner function (used by progress_server and task_runners)

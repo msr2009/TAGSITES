@@ -1,0 +1,67 @@
+{
+	"_comment": "Knobs for the off-target / primer-specificity BLAST screens (scripts/offtarget_screen.py, scripts/offtarget_remote.py). Screen A queries the whole genomic region to find duplicated segments; Screen B concatenates all spacers into one query to find scattered guide near-matches. Both are annotation only and never filter or reorder guides.",
+
+	"databases": {
+		"_comment": "taxid -> ENA division. Use the STANDARD (em_std_*) divisions: ENA keeps transcript-derived records in separate divisions (em_cds, em_est_*, em_tsa_*, em_htc_*, em_ncr, em_rrna), so choosing Standard excludes them outright. Standard still carries annotated mRNA records, which exclude_transcripts filters per hit. Falling back to em_all puts transcript divisions back in scope and is logged as a warning.",
+		"6239":   "em_std_inv",
+		"7227":   "em_std_inv",
+		"9606":   "em_std_hum",
+		"10090":  "em_std_mus",
+		"10116":  "em_std_rod",
+		"7955":   "em_std_vrt",
+		"8364":   "em_std_vrt",
+		"559292": "em_std_fun",
+		"562":    "em_std_pro",
+		"default": "em_all"
+	},
+
+	"blast": {
+		"_comment": "evalue_region is deliberately permissive: a short but perfectly identical duplicated segment can score worse than 1e-5, so real hits are kept and removed later by the post_filter block instead of by BLAST statistics. evalue_spacer must be very loose because a 20 nt match has a poor E-value even when perfect. wordsize_spacer is attempted first and falls back to wordsize_fallback if EBI rejects it.",
+		"evalue_region":    "1e-2",
+		"evalue_spacer":    "1000",
+		"wordsize_region":  11,
+		"wordsize_spacer":  7,
+		"wordsize_fallback": 11,
+		"alignments":       500
+	},
+
+	"post_filter": {
+		"_comment": "Applied to Screen A hits after BLAST. This is where noise is removed.",
+		"min_identity":  80.0,
+		"min_align_len": 50,
+		"min_bitscore":  50.0
+	},
+
+	"transcripts": {
+		"_comment": "mRNA/cDNA records surviving the division choice. Classification is per accession, because BLAST splits an mRNA hit into one HSP per exon. The structural test needs positive proof of intron skipping across >=2 exons AND near-identity: a hit confined to a single exon proves nothing, since a paralogous gene's coding exon looks the same — that is the gene-family case this screen exists to find. Excluded hits stay in the sidecar under 'excluded' so they remain visible but uncounted. NOTE: this can still hide a genuine paralog whose only ENA record is an mRNA.",
+		"exclude_transcripts":  true,
+		"use_keywords":         true,
+		"keywords":             ["mrna", "cdna", "complete cds", "transcript", "ribosomal rna"],
+		"exon_coincidence":     0.90,
+		"transcript_identity":  99.0
+	},
+
+	"self_hit": {
+		"_comment": "The query came from the genome, so its own locus hits at ~100%. Provenance-free thresholds, because a user may paste their own genomic FASTA with no coordinates.",
+		"self_identity": 99.0,
+		"self_coverage": 90.0
+	},
+
+	"scoring": {
+		"_comment": "three_prime_len bases at the oligo's 3' end must be perfect: mismatches there abolish both primer extension and Cas9 cutting, while 5' mismatches largely do not (Primer-BLAST's criterion). max_product bounds a predicted spurious amplicon.",
+		"max_mismatch":    3,
+		"three_prime_len": 5,
+		"max_product":     5000
+	},
+
+	"identical": {
+		"_comment": "A perfectly identical second locus is the dangerous case — a guide cuts both copies and a primer pair amplifies both equally, so no efficiency score or Tm helps. Rare enough to warrant its own warning rather than being folded into a count; if it fires constantly for a species, the taxid scoping or database choice is probably wrong.",
+		"identical_min_len": 100
+	},
+
+	"spacer_query": {
+		"_comment": "Spacer+PAM blocks joined by runs of N. blastn will neither seed nor gap-extend across an N-run, so blocks stay independent and an HSP maps back to exactly one spacer by query coordinate.",
+		"separator_len": 25,
+		"max_spacers":   400
+	}
+}

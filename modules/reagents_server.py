@@ -18,6 +18,7 @@ from shiny import module, reactive, render, ui
 # ensure scripts/ is importable from the app context
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 from reagent_sequences import (
+    annotate_region_spans,
     ascii_diagram,
     build_ssodn,
     calc_tm,
@@ -29,6 +30,8 @@ from reagent_sequences import (
     truncate_arms,
     truncate_arms_with_tolerance,
 )
+from offtarget_remote import load_sidecar as load_offtarget_sidecar
+from offtarget_screen import predict_amplicons
 from plasmid_assembly import (
     OLIGO_MAX,
     SAPI_SITE,
@@ -62,6 +65,18 @@ _RS3_TIP = (
     "Higher is better: above +0.5 is strong, −0.5 to +0.5 is typical, below −0.5 is weak. "
     "Most NGG sites in a real locus score below 0, so a guide's rank among the region's "
     "candidates is usually more informative than the raw value."
+)
+
+# Hover guidance for the off-target badge. States plainly what the screen does and does
+# not cover, so a low count is never read as a clean bill of health.
+_OT_TIP = (
+    "Two taxid-scoped BLAST screens against ENA: the whole genomic region (finding "
+    "duplicated segments, e.g. paralogous gene families) and all spacers in one query "
+    "(finding scattered near-matches). A site is counted only when its 3' end is intact, "
+    "mismatches are within threshold, and the off-target carries its own PAM. "
+    "\"identical\" means a perfect second copy — the guide will cut both. "
+    "This is a BLAST screen, not exhaustive mismatch enumeration with bulges as CRISPOR "
+    "or Cas-OFFinder perform, so a count of 0 means \"nothing found\", not \"none exist\"."
 )
 
 
@@ -304,6 +319,31 @@ def reagents_server(input, output, session, shared_json, shared_sites):
             return recon[0], recon[1], True
         return str(row["left_arm"]), str(row["right_arm"]), False
 
+    @reactive.calc
+    def _offtarget_sidecar():
+        """Cached off-target BLAST hits written beside the reagents TSV, or None.
+
+        The expensive BLAST ran once in the pipeline; reading its parsed HSPs back
+        lets the genotyping primers designed on demand here be screened locally,
+        with no further EBI submission.
+        """
+        tsv = _tsv_path_cache.get()
+        if not tsv:
+            return None
+        return load_offtarget_sidecar(str(Path(tsv).with_suffix("")) + ".offtarget.json")
+
+    def _offtarget_caveat(row):
+        """One sentence stating what the off-target screen did or did not cover."""
+        raw = row.get("offtarget_count", "")
+        if raw is None or str(raw).strip() == "" or pd.isna(raw):
+            return ("No off-target search ran for this site — \"not checked\" means exactly "
+                    "that, not that a guide is clean; screen candidates externally "
+                    "(e.g. CRISPOR) before ordering.")
+        return ("Off-targets were screened by BLAST against this species, covering "
+                "duplicated segments and scattered near-matches with their own PAM. That is "
+                "a screen, not exhaustive enumeration with bulges, so confirm final "
+                "candidates in CRISPOR before ordering.")
+
     def _rs3_display(row):
         """Return (badge_text, css_class, grid_value) for a guide's RS3 score, or None."""
         # Absent column = a TSV written before RS3 existed; render exactly as before
@@ -324,17 +364,28 @@ def reagents_server(input, output, session, shared_json, shared_sites):
 
     def _offtarget_display(row):
         """Return (badge_text, css_class, grid_value) for a guide's off-target screen."""
-        # No off-target search is wired up yet. This deliberately reports "not checked"
-        # rather than a blank, 0 or "n/a": an empty field reads as "none found" and would
-        # invite skipping an external check, which is the opposite of the truth.
+        # A blank, "n/a" or 0 placeholder would read as "none found" and invite skipping
+        # the external check, so an unscreened guide always says "not checked" outright.
         raw = row.get("offtarget_count", "")
         if raw is None or str(raw).strip() == "" or pd.isna(raw):
-            return ("Off-target: not checked", "ot-badge ot-na",
-                    "not checked — screen externally (e.g. CRISPOR)")
+            status = str(row.get("offtarget_status", "") or "not_checked")
+            why = {
+                "failed":  "screen failed this run — screen externally (e.g. CRISPOR)",
+                "pending": "screen still running at EBI",
+            }.get(status, "not checked — needs a species; screen externally (e.g. CRISPOR)")
+            return ("Off-target: not checked", "ot-badge ot-na", why)
         n = int(float(raw))
+        detail = str(row.get("offtarget_detail", "") or "").strip()
+        ident = row.get("offtarget_identical", "")
+        has_identical = str(ident).strip() not in ("", "0") and not pd.isna(ident)
+        # An identical second locus is the dangerous case: the guide cuts both copies,
+        # so it is banded as a hit even though the count alone might look small
         band = "clean" if n == 0 else "hits"
-        return ("Off-target: {}".format(n), "ot-badge ot-{}".format(band),
-                "{} PAM-adjacent site{} found".format(n, "" if n == 1 else "s"))
+        label = "Off-target: {}".format(n)
+        if has_identical:
+            label += " (identical)"
+        return (label, "ot-badge ot-{}".format(band),
+                detail or ("{} site{} found".format(n, "" if n == 1 else "s")))
 
     # ── pre-compute guide content (diagrams + truncated arms) ─────────────────
 
@@ -516,6 +567,18 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                 )
             except Exception:
                 primers = {}
+            # Screen these primers against the cached BLAST hits. The arms are
+            # PAM-mutated but coordinates are unaffected, and the left flank starts
+            # at the same anchor the pipeline uses.
+            sidecar = _offtarget_sidecar()
+            if primers and sidecar:
+                annotate_region_spans(primers, len(left_flank), len(insert),
+                                      int(row["insert_pos"]) - len(left_flank))
+                for p in primers.values():
+                    if p.get("fwd_region_span") and p.get("rev_region_span"):
+                        p["offtarget_amplicons"] = predict_amplicons(
+                            sidecar.get("duplicates", []),
+                            p["fwd_region_span"], p["rev_region_span"])
             results[rid] = primers
 
         genotyping_results.set(results)
@@ -813,6 +876,20 @@ def reagents_server(input, output, session, shared_json, shared_sites):
         "3p_junction": "3′ junction",
     }
 
+    def _amplicon_warning(amps):
+        """Warn that a primer pair is predicted to amplify a duplicated locus too."""
+        if not amps:
+            return ui.span()
+        shown = ", ".join("{}{} ~{} bp".format(a["acc"], "*" if a["perfect"] else "",
+                                               a["product_size"]) for a in amps[:3])
+        if len(amps) > 3:
+            shown += ", +{} more".format(len(amps) - 3)
+        return ui.div(
+            "⚠ may also amplify {} locus/loci: {} (* = perfect match). Verify in "
+            "Primer-BLAST before ordering.".format(len(amps), shown),
+            class_="ts-warn",
+        )
+
     def _build_genotyping_div(primers, insert_len):
         """Site-level genotyping-primer display; empty span if none designed yet.
 
@@ -844,6 +921,9 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                 ui.br(),
                 ui.tags.code("R: {} (Tm {:.1f})".format(p["rev_seq"], p["rev_tm"])),
                 ui.span(" — product: " + size_text, style="color:#6c757d"),
+                # A spurious product needs BOTH primers in one duplicated locus, so this
+                # fires only on a predicted amplicon, not on a lone primer in a repeat
+                _amplicon_warning(p.get("offtarget_amplicons") or []),
                 class_="param-value",
             ))
         if not rows:
@@ -977,7 +1057,7 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                 ("Recut block", str(row["recut_block_method"])),
                 ("Mutation", str(row["mutation_desc"]) or "—"),
             ] + ([(label_with_tip("RS3 score", _RS3_TIP), rs3[2])] if rs3 else []) \
-              + [("Off-targets", offt[2])] \
+              + [(label_with_tip("Off-targets", _OT_TIP), offt[2])] \
               + ([("Isoforms", specificity)] if specificity else []):
                 meta_cells.append(ui.div(label, class_="param-label"))
                 meta_cells.append(ui.div(val, class_="param-value"))
@@ -989,7 +1069,7 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                     ui.span("{} bp from cut to insert".format(dist), class_="dist-badge"),
                     ui.tooltip(ui.span(rs3[0], class_=rs3[1]), _RS3_TIP,
                                placement="top") if rs3 else None,
-                    ui.span(offt[0], class_=offt[1]),
+                    ui.tooltip(ui.span(offt[0], class_=offt[1]), _OT_TIP, placement="top"),
                     plasmid_warning_div,
                     class_="guide-header",
                 ),
@@ -1015,10 +1095,7 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                 "RS3 predicts Cas9 cutting efficiency, not knock-in/HDR rate. It was trained "
                 "on pooled human and mouse screens, so treat it as a relative ranking between "
                 "these guides rather than an absolute number. Guides remain ordered by "
-                "distance to the insertion site, never by RS3. "
-                "No off-target search is performed — \"not checked\" means exactly that, not "
-                "that a guide is clean; screen candidates externally (e.g. CRISPOR) before "
-                "ordering.",
+                "distance to the insertion site, never by RS3. " + _offtarget_caveat(best_row),
                 style="color:#888;font-size:0.78em;margin:0.15rem 0 0.4rem;",
             ))
 

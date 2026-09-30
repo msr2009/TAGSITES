@@ -17,7 +17,7 @@ def make_task(task_type, label, params_cfg, tooltips_cfg, choices_cfg=None):
 
 
 def build_global_block(email, run_name, working_dir, input_file,
-                       pdb="", genomic_file="", scripts_folder="./scripts/"):
+                       pdb="", genomic_file="", scripts_folder="./scripts/", taxid=""):
     """Assemble the 'global' block that goes into the run JSON."""
     g = {
         "email":       email,
@@ -31,6 +31,11 @@ def build_global_block(email, run_name, working_dir, input_file,
     # only include genomic_file when a genomic FASTA was uploaded
     if genomic_file:
         g["genomic_file"] = genomic_file
+    # species taxid, when known — progress_logic.parse_run() merges the global block
+    # into every task's args, so this reaches any runner that wants it (the reagents
+    # off-target screen scopes its blastn by it). A task-level taxid still wins.
+    if taxid:
+        g["taxid"] = str(taxid)
     return g
 
 

@@ -356,6 +356,22 @@ def design_pcr_primers(left_arm, right_arm, template, tm_target, phos,
 
 # ── Genotyping (screening) primer design ─────────────────────────────────────
 
+def _primer3_offset(res, key):
+    """Turn primer3's (start, length) primer location into a half-open template interval.
+
+    primer3 reports PRIMER_LEFT_0 as (5'-most base, length) and PRIMER_RIGHT_0 as
+    (3'-most base, length) — the right primer's footprint therefore runs leftwards
+    from its start. Returns None when primer3 did not report a location.
+    """
+    loc = res.get(key)
+    if not loc:
+        return None
+    start, length = int(loc[0]), int(loc[1])
+    if key.startswith('PRIMER_LEFT'):
+        return (start, start + length)
+    return (start - length + 1, start + 1)
+
+
 def _primer3_pair(template, target_start, target_len, excluded_regions,
                   primer_opt_tm, product_opt_size, product_size_range):
     """Design one ordinary primer3 pair on template; returns dict or None if none found."""
@@ -387,6 +403,10 @@ def _primer3_pair(template, target_start, target_len, excluded_regions,
         'rev_seq': res['PRIMER_RIGHT_0_SEQUENCE'],
         'rev_tm': res['PRIMER_RIGHT_0_TM'],
         'product_size': res['PRIMER_PAIR_0_PRODUCT_SIZE'],
+        # captured so the off-target screen can place primers in genomic coordinates
+        # without having to search for their sequences (see _primer3_offset)
+        'fwd_offset': _primer3_offset(res, 'PRIMER_LEFT_0'),
+        'rev_offset': _primer3_offset(res, 'PRIMER_RIGHT_0'),
     }
 
 
@@ -464,6 +484,10 @@ def _primer3_paired_to_fixed(edited_seq, fixed_seq, fixed_is_forward,
         'rev_seq': res['PRIMER_RIGHT_0_SEQUENCE'],
         'rev_tm': res['PRIMER_RIGHT_0_TM'],
         'product_size': res['PRIMER_PAIR_0_PRODUCT_SIZE'],
+        # captured so the off-target screen can place primers in genomic coordinates
+        # without having to search for their sequences (see _primer3_offset)
+        'fwd_offset': _primer3_offset(res, 'PRIMER_LEFT_0'),
+        'rev_offset': _primer3_offset(res, 'PRIMER_RIGHT_0'),
     }
 
 
@@ -570,6 +594,36 @@ def design_genotyping_primers(left_flank, right_flank, insert_sequence,
         if j3:
             results['3p_junction'] = j3
 
+    return results
+
+
+def _to_region_span(offset, left_len, insert_len, left_region_start):
+    """Map an edited-allele interval to genomic region coords, or None if non-genomic.
+
+    The edited allele is left_flank + insert + right_flank, so only the two flanks
+    exist in the genome. A primer sitting in (or straddling) the insert has no
+    genomic coordinates and must be excluded from a genomic off-target screen —
+    junction pairs' internal primers are exactly that case.
+    """
+    if offset is None or left_region_start is None:
+        return None
+    a, b = offset
+    if b <= left_len:
+        return (left_region_start + a, left_region_start + b)
+    right_start = left_len + insert_len
+    if a >= right_start:
+        shift = left_region_start - insert_len
+        return (a + shift, b + shift)
+    return None
+
+
+def annotate_region_spans(results, left_len, insert_len, left_region_start):
+    """Add fwd_region_span / rev_region_span to each genotyping pair, in region coords."""
+    for pair in results.values():
+        pair['fwd_region_span'] = _to_region_span(
+            pair.get('fwd_offset'), left_len, insert_len, left_region_start)
+        pair['rev_region_span'] = _to_region_span(
+            pair.get('rev_offset'), left_len, insert_len, left_region_start)
     return results
 
 

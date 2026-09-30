@@ -45,6 +45,17 @@ Output TSV (one row per residue × guide):
                     Display-only: never affects guide choice or ordering.
   rs3_percentile    rank percentile of this guide's RS3 score among all
                     candidate guides in this region (blank if unavailable)
+  offtarget_count   PAM-bearing near-matches found elsewhere in the genome.
+                    BLANK (not 0) when no screen ran, so an unscreened guide is
+                    never mistaken for a clean one. Display-only.
+  offtarget_identical  of those, how many are perfect matches with a PAM — the
+                    dangerous case, since a guide cuts both copies equally
+  offtarget_detail  human-readable breakdown, e.g. '2 sites (1 identical, 1 near)'
+  offtarget_status  'screened' / 'not_checked' / 'failed' / 'pending'
+
+The companion .genotyping.tsv additionally carries offtarget_amplicons (count of
+predicted spurious products where BOTH primers bind one duplicated locus) and
+offtarget_detail (their accessions and sizes; '*' marks a perfect match).
 
 A companion <output>.genotyping.tsv is always written (genomic sequence is
 always available): one row per residue x amplicon_type. 'external' alone
@@ -66,8 +77,14 @@ from crispr_util import find_guides, build_frame_lookup, disrupt_pam
 from parse_genewise import parse_genewise, enumerate_insertion_sites, \
     parse_genewise_score, parse_genewise_gff_score, cds_coverage
 from guide_efficiency import guide_key, rs3_percentiles, score_guides
+from offtarget_screen import (
+    load_config as load_offtarget_config,
+    predict_amplicons,
+    screen_guide,
+    summarise as offtarget_summarise,
+)
 from progress import report as _report, resolve_reporter
-from reagent_sequences import design_genotyping_primers
+from reagent_sequences import annotate_region_spans, design_genotyping_primers
 
 
 def _case_arm(arm_seq, arm_start, frame_lookup):
@@ -79,7 +96,8 @@ def _case_arm(arm_seq, arm_start, frame_lookup):
 
 
 def _design_genotyping_rows(sites, dna, L, insert_sequence, internal_threshold,
-                            primer_opt_tm, product_opt_size, flank_min, flank_max):
+                            primer_opt_tm, product_opt_size, flank_min, flank_max,
+                            offtarget_hsps=None, offtarget_cfg=None):
     """One row per (residue x amplicon_type) genotyping primer pair.
 
     Pulls flanking sequence directly from the full genomic record around each
@@ -101,7 +119,15 @@ def _design_genotyping_rows(sites, dna, L, insert_sequence, internal_threshold,
             product_opt_size=product_opt_size,
             flank_min=flank_min, flank_max=flank_max,
         )
+        # place each primer in genomic coordinates so it can be screened for
+        # co-amplification; a primer inside the insert maps to None and is skipped
+        annotate_region_spans(primers, len(left_flank), len(insert_sequence),
+                              insert_pos - len(left_flank))
         for amplicon_type, p in primers.items():
+            amps = []
+            if offtarget_hsps and p.get('fwd_region_span') and p.get('rev_region_span'):
+                amps = predict_amplicons(offtarget_hsps, p['fwd_region_span'],
+                                         p['rev_region_span'], offtarget_cfg)
             rows.append({
                 'residue_index': int(site['residue_index']),
                 'amino_acid':    site['amino_acid'],
@@ -112,8 +138,81 @@ def _design_genotyping_rows(sites, dna, L, insert_sequence, internal_threshold,
                 'rev_seq':       p['rev_seq'],
                 'rev_tm':        p['rev_tm'],
                 'product_size':  p['product_size'],
+                'offtarget_amplicons': len(amps),
+                'offtarget_detail':    _amplicon_detail(amps),
             })
     return pd.DataFrame(rows)
+
+
+def _exon_intervals(cds_df):
+    """Annotated exon intervals in region coords, for transcript-vs-genomic hit calling."""
+    if cds_df is None or len(cds_df) == 0:
+        return []
+    return [(int(r['start']), int(r['stop']) + 1) for _, r in cds_df.iterrows()]
+
+
+def _run_offtarget(dna, guides, guide_length, pam, taxid, email, sidecar_path,
+                   cds_df, cfg, reporter, job_id_cb, resume_job_ids):
+    """Run the off-target screens; returns (status, hsps, spacer_hits, spacer_index, pending).
+
+    pending is the {"ebi_status": ...} sentinel when a job is still queued, which the
+    caller must return unchanged so progress_server.py can resume the task.
+    """
+    if not taxid or str(taxid).strip() in ('1', '1.0', 'None'):
+        _report(reporter, 'Off-target screen skipped: no species taxid for this run',
+                stage='offtarget', level='warning')
+        return 'not_checked', [], {}, {}, None
+    if not email:
+        _report(reporter, 'Off-target screen skipped: EBI submissions require an email',
+                stage='offtarget', level='warning')
+        return 'not_checked', [], {}, {}, None
+
+    # imported here rather than at module top so the CLI still runs with no network
+    # stack available, matching how the other remote backends are reached
+    import offtarget_remote
+
+    # Screen only the guides that can actually appear in output rows, deduped —
+    # a region holds hundreds of candidates but the user sees a handful per site
+    spacer_index = {}
+    spacer_list = []
+    for g in guides:
+        key = guide_key(g)
+        if key in spacer_index:
+            continue
+        spacer_index[key] = len(spacer_list)
+        spacer_list.append(g['spacer'] + g['pam_seq'])
+
+    sidecar_path = sidecar_path or 'offtarget.json'
+    try:
+        result = offtarget_remote.run_screens(
+            dna, spacer_list, email, taxid, sidecar_path,
+            exons=_exon_intervals(cds_df), pam=pam, cfg=cfg, report=reporter,
+            job_id_cb=job_id_cb, resume_job_ids=resume_job_ids)
+    except Exception as e:
+        # A failed screen must never fail the whole reagents run, and must never
+        # look like "no off-targets found" — the status stays not_checked
+        _report(reporter, 'Off-target screen failed ({}: {}); guides will show as '
+                          'not checked'.format(type(e).__name__, e),
+                stage='offtarget', level='warning')
+        return 'failed', [], {}, {}, None
+
+    if isinstance(result, dict) and 'ebi_status' in result:
+        return 'pending', [], {}, {}, result
+
+    hsps = result.get('duplicates', [])
+    spacer_hits = {int(k): v for k, v in (result.get('spacer_hits') or {}).items()}
+    return 'screened', hsps, spacer_hits, spacer_index, None
+
+
+def _amplicon_detail(amps):
+    """Compact description of predicted spurious products for the genotyping TSV."""
+    if not amps:
+        return ''
+    parts = ['{}{} ~{}bp'.format(a['acc'], '*' if a['perfect'] else '', a['product_size'])
+             for a in amps[:3]]
+    if len(amps) > 3:
+        parts.append('+{} more'.format(len(amps) - 3))
+    return '; '.join(parts)
 
 
 # ── Core logic ────────────────────────────────────────────────────────────────
@@ -135,7 +234,13 @@ def design_reagents(
     flank_max=150,
     rs3=True,
     rs3_tracr='Hsu2013',
+    offtarget=True,
+    taxid='',
+    email='',
+    offtarget_sidecar='',
     report=None,
+    job_id_cb=None,
+    resume_job_ids=None,
 ):
     """
     Full pipeline: Genewise output + genomic FASTA → reagent table (DataFrame).
@@ -244,6 +349,22 @@ def design_reagents(
         if rs3_note:
             _report(reporter, rs3_note, stage='guides')
 
+    # 5c. Off-target / primer-specificity screen. Two EBI blastn jobs: the whole
+    # region (duplicated segments -> primer co-amplification and guides in repeats)
+    # and all spacers concatenated into one query (scattered guide near-matches).
+    # Annotation only: nothing below selects or orders guides by these results.
+    ot_cfg = load_offtarget_config()
+    ot_hsps = []
+    ot_spacer_hits = {}
+    ot_spacer_index = {}
+    ot_status = 'not_checked'
+    if offtarget:
+        ot_status, ot_hsps, ot_spacer_hits, ot_spacer_index, pending = _run_offtarget(
+            dna, guides, guide_length, pam, taxid, email, offtarget_sidecar,
+            cds_df, ot_cfg, reporter, job_id_cb, resume_job_ids)
+        if pending:
+            return pending
+
     pam_len = len(pam)
     rows = []
 
@@ -341,6 +462,19 @@ def design_reagents(
             right_arm_wt = _case_arm(right_arm_raw, insert_pos, frame_lookup)
 
             gkey = guide_key(g)
+            # Combine both screens for this guide: duplicated-segment sites from the
+            # region query plus scattered near-matches from the spacer query
+            ot_n = ot_ident = ot_unver = 0
+            if ot_status == 'screened':
+                region_hit = screen_guide(ot_hsps, {'pam_fwd_start': pam_fwd_start,
+                                                    'guide_strand': g['strand']},
+                                          guide_length, pam, ot_cfg)
+                spacer_sites = ot_spacer_hits.get(ot_spacer_index.get(gkey, -1), [])
+                ot_n = region_hit['n_total'] + len(spacer_sites)
+                ot_ident = region_hit['n_identical'] + sum(
+                    1 for s in spacer_sites if s['perfect'] and s['pam_ok'])
+                ot_unver = region_hit['n_pam_unverified'] + sum(
+                    1 for s in spacer_sites if s['pam_unverified'])
             rows.append({
                 'residue_index':       int(site['residue_index']),
                 'amino_acid':          site['amino_acid'],
@@ -364,6 +498,12 @@ def design_reagents(
                 'right_arm_wt':        right_arm_wt,
                 'rs3_score':           rs3_scores.get(gkey, ''),
                 'rs3_percentile':      rs3_pct.get(gkey, ''),
+                # blank, not 0, when nothing was screened — a 0 would read as "clean"
+                'offtarget_count':     ot_n if ot_status == 'screened' else '',
+                'offtarget_identical': ot_ident if ot_status == 'screened' else '',
+                'offtarget_detail':    offtarget_summarise(ot_n, ot_ident, ot_unver)
+                                       if ot_status == 'screened' else '',
+                'offtarget_status':    ot_status,
             })
             n_kept += 1
 
@@ -394,9 +534,17 @@ def design_reagents(
     genotyping_df = _design_genotyping_rows(
         sites, dna, L, insert_sequence.upper(), internal_threshold,
         primer_opt_tm, product_opt_size, flank_min, flank_max,
+        offtarget_hsps=ot_hsps if ot_status == 'screened' else None,
+        offtarget_cfg=ot_cfg,
     )
     _report(reporter, '{} genotyping primer pairs designed'.format(len(genotyping_df)),
            stage='genotyping_primers')
+    if ot_status == 'screened' and 'offtarget_amplicons' in genotyping_df:
+        n_flagged = int((genotyping_df['offtarget_amplicons'] > 0).sum())
+        if n_flagged:
+            _report(reporter, '{} genotyping pair(s) may also amplify a duplicated '
+                              'locus'.format(n_flagged),
+                    stage='genotyping_primers', level='warning')
 
     return df, genotyping_df
 
@@ -407,9 +555,10 @@ def main(genewise, genomic_fasta, output, protein_length=None, n_guides=5,
          arm_length=1000, pam='NGG', guide_length=20, cut_offset=3,
          insert_sequence='', internal_threshold=500, primer_opt_tm=60.0,
          product_opt_size=200, flank_min=50, flank_max=150, rs3=True,
-         rs3_tracr='Hsu2013', report=None):
+         rs3_tracr='Hsu2013', offtarget=True, taxid='', email='',
+         report=None, job_id_cb=None, resume_job_ids=None):
     """Entry point for in-process calls from task_runners."""
-    df, genotyping_df = design_reagents(
+    result = design_reagents(
         genewise_out       = genewise,
         genomic_fasta      = genomic_fasta,
         protein_length     = protein_length,
@@ -426,8 +575,21 @@ def main(genewise, genomic_fasta, output, protein_length=None, n_guides=5,
         flank_max          = flank_max,
         rs3                = rs3,
         rs3_tracr          = rs3_tracr,
+        offtarget          = offtarget,
+        taxid              = taxid,
+        email              = email,
+        # sidecar sits beside the reagents TSV so the UI can screen its own
+        # on-demand primers without resubmitting a BLAST
+        offtarget_sidecar  = str(Path(output).with_suffix('')) + '.offtarget.json',
         report             = report,
+        job_id_cb          = job_id_cb,
+        resume_job_ids     = resume_job_ids,
     )
+    # a queued EBI job returns the sentinel instead of DataFrames; propagate it so
+    # progress_server.py marks the task resumable rather than failed
+    if isinstance(result, dict) and 'ebi_status' in result:
+        return result
+    df, genotyping_df = result
     df.to_csv(output, sep='\t', index=False)
     if genotyping_df is not None:
         genotyping_out = str(Path(output).with_suffix('')) + '.genotyping.tsv'
@@ -489,6 +651,16 @@ if __name__ == '__main__':
     parser.add_argument('--rs3_tracr', type=str, default='Hsu2013',
                         choices=['Hsu2013', 'Chen2013'],
                         help='tracrRNA scaffold assumed by the RS3 model (default: Hsu2013)')
+    parser.add_argument('--no_offtarget', action='store_true',
+                        help='Skip the off-target / primer-specificity BLAST screens. Results '
+                             'are display-only and never change which guides are chosen, so '
+                             'skipping only blanks the offtarget_* columns')
+    parser.add_argument('--taxid', type=str, default='',
+                        help='Species taxid scoping the off-target blastn search. Without it '
+                             'the screens are skipped (a genome-wide search needs a species)')
+    parser.add_argument('--email', type=str, default='',
+                        help='E-mail address for EBI job submission, required by their REST '
+                             'API; needed only when the off-target screens run')
     args, unknowns = parser.parse_known_args()
 
     protein_length = None
@@ -505,7 +677,7 @@ if __name__ == '__main__':
     print('  arm_length    : {}'.format(args.arm_length), file=sys.stderr)
     print('  n_guides      : {}'.format(args.n_guides), file=sys.stderr)
 
-    df, genotyping_df = design_reagents(
+    cli_result = design_reagents(
         genewise_out        = args.genewise,
         genomic_fasta       = args.genomic_fasta,
         protein_length      = protein_length,
@@ -522,7 +694,18 @@ if __name__ == '__main__':
         flank_max           = args.flank_max,
         rs3                 = not args.no_rs3,
         rs3_tracr           = args.rs3_tracr,
+        offtarget           = not args.no_offtarget,
+        taxid               = args.taxid,
+        email               = args.email,
+        offtarget_sidecar   = str(Path(args.output).with_suffix('')) + '.offtarget.json',
     )
+
+    # standalone CLI has no resume machinery, so a queued EBI job is just an exit
+    if isinstance(cli_result, dict) and 'ebi_status' in cli_result:
+        print('EBI job {}: {}'.format(cli_result['ebi_status'], cli_result.get('detail', '')),
+              file=sys.stderr)
+        sys.exit(1)
+    df, genotyping_df = cli_result
 
     df.to_csv(args.output, sep='\t', index=False)
     print('Wrote {} rows to {}'.format(len(df), args.output), file=sys.stderr)
