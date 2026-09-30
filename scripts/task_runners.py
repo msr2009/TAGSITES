@@ -258,6 +258,7 @@ def run_reagents(args, report=None, job_id_cb=None, resume_job_ids=None):
         rs3                 = _bool(args.get("rs3"), True),
         rs3_tracr           = _str(args.get("rs3_tracr"), "Hsu2013"),
         offtarget           = _bool(args.get("offtarget"), True),
+        offtarget_spacer    = _bool(args.get("offtarget_spacer"), True),
         # taxid comes from the run JSON's global block (see setup_logic.build_global_block);
         # email is likewise global and required by EBI
         taxid               = _str(args.get("taxid")),

@@ -137,7 +137,8 @@
 				"flank_max":           { "default": 150, "tooltip": "maximum distance (bp) of a genotyping primer from the insert site" },
 				"rs3":                 { "default": true, "tooltip": "compute Rule Set 3 on-target cutting scores for each guide — display only, never changes which guides are chosen or their order" },
 				"rs3_tracr":           { "default": "Hsu2013", "hidden": true, "tooltip": "tracrRNA scaffold assumed by the RS3 model (Hsu2013 = standard SpCas9 scaffold; Chen2013 = extended scaffold)" },
-				"offtarget":           { "default": true, "tooltip": "screen guides and genotyping primers for off-targets with two taxid-scoped EBI blastn jobs (region homology + concatenated spacers) — display only, never changes which guides are chosen; needs a species to be selected" }
+				"offtarget":           { "default": false, "tooltip": "screen guides and genotyping primers for off-targets with taxid-scoped EBI blastn — display only, never changes which guides are chosen; needs a species to be selected. OFF by default because the region query takes ~3-13 min depending on repeat content, long enough to risk a shinyapps.io session timeout" },
+				"offtarget_spacer":    { "default": true, "hidden": true, "tooltip": "when off-target screening is on, also run the slower per-spacer guide screen. Turning this off keeps the region screen (which is what flags primer co-amplification in gene families) and skips the guide near-match search that CRISPOR covers better" }
 			}
 		}
 	}

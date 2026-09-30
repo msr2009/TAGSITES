@@ -440,18 +440,26 @@ def setup_ui():
                 # region query alone. Long enough to risk a shinyapps.io session
                 # timeout, so it needs to be skippable without editing config.
                 ui.div(
-                    ui.input_checkbox(
-                        "skip_offtarget",
-                        "Skip off-target screening (faster; guides show "
-                        "\"not checked\")",
-                        value=False,
+                    ui.tags.label("Off-target screening", class_="form-label"),
+                    ui.input_select(
+                        "offtarget_mode", label="",
+                        choices={
+                            "skip":    "Skip — fastest (guides show \"not checked\")",
+                            "primers": "Primers only — region screen, ~3-13 min",
+                            "full":    "Full — also screen each guide, roughly doubles it",
+                        },
+                        selected="skip",
                     ),
                     ui.tags.small(
-                        "Off-target screening adds two EBI BLAST jobs to the reagents "
-                        "step — usually a few minutes, but up to ~10 minutes for "
-                        "repeat-rich genes such as collagens. Skipping does not change "
-                        "which guides are chosen; it only leaves the off-target and "
-                        "primer co-amplification columns blank.",
+                        "Screening never changes which guides are chosen — it only fills "
+                        "the off-target and primer co-amplification columns. "
+                        "\"Primers only\" runs the region search that flags primers "
+                        "amplifying a duplicated locus, the case that matters for gene "
+                        "families such as the collagens. \"Full\" adds a per-guide "
+                        "near-match search; CRISPOR does that more thoroughly, so it is "
+                        "worth the extra time only if you would rather not leave the app. "
+                        "Both submit EBI BLAST jobs and run for minutes, which is why "
+                        "skipping is the default.",
                         class_="text-muted",
                     ),
                     style=("border-top:1px solid #dee2e6; margin-top:0.5rem; "

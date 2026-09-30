@@ -239,6 +239,7 @@ def design_reagents(
     rs3=True,
     rs3_tracr='Hsu2013',
     offtarget=True,
+    offtarget_spacer=True,
     taxid='',
     email='',
     offtarget_sidecar='',
@@ -519,7 +520,7 @@ def design_reagents(
     # be a ~4x longer query (measured: 570 candidates vs 131 kept for snt-1) for hits
     # on guides the user never sees.
     ot_spacer = {}
-    if ot_status == 'screened' and not df.empty:
+    if ot_status == 'screened' and offtarget_spacer and not df.empty:
         wanted = {}
         for gkey, spacer_pam in zip(df['_gkey'], df['_spacer_pam']):
             wanted.setdefault(gkey, spacer_pam)
@@ -601,7 +602,7 @@ def main(genewise, genomic_fasta, output, protein_length=None, n_guides=5,
          arm_length=1000, pam='NGG', guide_length=20, cut_offset=3,
          insert_sequence='', internal_threshold=500, primer_opt_tm=60.0,
          product_opt_size=200, flank_min=50, flank_max=150, rs3=True,
-         rs3_tracr='Hsu2013', offtarget=True, taxid='', email='',
+         rs3_tracr='Hsu2013', offtarget=True, offtarget_spacer=True, taxid='', email='',
          report=None, job_id_cb=None, resume_job_ids=None):
     """Entry point for in-process calls from task_runners."""
     result = design_reagents(
@@ -622,6 +623,7 @@ def main(genewise, genomic_fasta, output, protein_length=None, n_guides=5,
         rs3                = rs3,
         rs3_tracr          = rs3_tracr,
         offtarget          = offtarget,
+        offtarget_spacer   = offtarget_spacer,
         taxid              = taxid,
         email              = email,
         # sidecar sits beside the reagents TSV so the UI can screen its own
@@ -701,6 +703,10 @@ if __name__ == '__main__':
                         help='Skip the off-target / primer-specificity BLAST screens. Results '
                              'are display-only and never change which guides are chosen, so '
                              'skipping only blanks the offtarget_* columns')
+    parser.add_argument('--no_spacer_screen', action='store_true',
+                        help='Run only the region off-target screen (duplicated segments, '
+                             'which is what flags primer co-amplification) and skip the '
+                             'slower per-spacer guide screen')
     parser.add_argument('--taxid', type=str, default='',
                         help='Species taxid scoping the off-target blastn search. Without it '
                              'the screens are skipped (a genome-wide search needs a species)')
@@ -741,6 +747,7 @@ if __name__ == '__main__':
         rs3                 = not args.no_rs3,
         rs3_tracr           = args.rs3_tracr,
         offtarget           = not args.no_offtarget,
+        offtarget_spacer    = not args.no_spacer_screen,
         taxid               = args.taxid,
         email               = args.email,
         offtarget_sidecar   = str(Path(args.output).with_suffix('')) + '.offtarget.json',

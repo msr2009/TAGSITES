@@ -58,12 +58,14 @@ def build_defaults_entry(task_id, task_name, collected_args, out_suffix, working
 
 
 def build_reagents_entry(defaults, genomic_path, out_suffix, working_dir, run_name,
-                         offtarget=None):
+                         offtarget=None, offtarget_spacer=None):
     """Build the auto-injected REAGENTS_reagents entry for CRISPR precompute.
 
     Global fields are omitted — they're merged at run time from the global block.
-    offtarget=False skips the two EBI BLAST off-target jobs, the slowest part of a
-    run; None leaves task_definitions.json's default in place.
+    offtarget=False skips the EBI BLAST off-target jobs, the slowest part of a run;
+    offtarget_spacer=False keeps the region screen (primer co-amplification) but
+    skips the slower per-guide search. None leaves task_definitions.json's defaults
+    in place.
     """
     args = dict(defaults)
     args["genomic_fasta"] = genomic_path
@@ -71,6 +73,8 @@ def build_reagents_entry(defaults, genomic_path, out_suffix, working_dir, run_na
     args["output"] = f"{working_dir}{run_name}.reagents{out_suffix}"
     if offtarget is not None:
         args["offtarget"] = bool(offtarget)
+    if offtarget_spacer is not None:
+        args["offtarget_spacer"] = bool(offtarget_spacer)
     return {"type": "reagents", "args": args}
 
 

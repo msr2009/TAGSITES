@@ -190,17 +190,22 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
     _selected_hit = reactive.Value(None) # chosen hit dict, or None
     _selected_pdb = reactive.Value("")   # AFDB PDB text for the chosen hit ("" = none/unavailable)
 
-    def _skip_offtarget():
-        """True when the user asked to skip off-target screening.
+    def _offtarget_flags():
+        """Map the Analyses panel's off-target choice to (offtarget, spacer_screen).
 
         Guarded because a run JSON can also be built from paths that never render
-        the Analyses panel; an absent input means "don't skip", preserving the
-        default in task_definitions.json.
+        the Analyses panel; an absent input returns (None, None), leaving the
+        defaults in task_definitions.json in place.
         """
         try:
-            return bool(input.skip_offtarget())
+            mode = str(input.offtarget_mode())
         except Exception:
-            return False
+            return None, None
+        if mode == "full":
+            return True, True
+        if mode == "primers":
+            return True, False      # region screen only — the primer-specificity half
+        return False, False
 
     # ── organism selection ────────────────────────────────────────────────────
 
@@ -1344,7 +1349,8 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
                 out_suffix   = task_output_suffix("reagents"),
                 working_dir  = wd,
                 run_name     = rn,
-                offtarget    = not _skip_offtarget(),
+                offtarget        = _offtarget_flags()[0],
+                offtarget_spacer = _offtarget_flags()[1],
             )
         else:
             ui.notification_show(

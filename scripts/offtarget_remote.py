@@ -220,7 +220,8 @@ def run_spacer_screen(spacers, email, taxid, pam="NGG", cfg=None, report=None,
             stage="offtarget_spacer")
     state, payload = _submit(
         query, email, database, taxid, blast["evalue_spacer"],
-        blast["wordsize_spacer"], blast["alignments"], reporter,
+        blast["wordsize_spacer"], blast.get("alignments_spacer", blast["alignments"]),
+        reporter,
         "offtarget_spacer", job_id_cb, JOB_INDEX_SPACER,
         _resume_at(resume_job_ids, JOB_INDEX_SPACER),
         wordsize_fallback=blast["wordsize_fallback"],
