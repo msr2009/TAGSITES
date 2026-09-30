@@ -121,7 +121,7 @@ def app_server(input, output, session):
                    shared_results_trigger=shared_results_trigger)
     reagents_server("reagents", shared_json=shared_values, shared_sites=shared_sites)
 
-    @render.download(filename="tagsites-app.zip", media_type="application/zip")
+    @render.download_button(filename="tagsites-app.zip", media_type="application/zip")
     async def download_app():
         """Bundle app source files into a zip for local deployment."""
         buf = io.BytesIO()

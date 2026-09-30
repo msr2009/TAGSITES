@@ -860,12 +860,12 @@ def reagents_server(input, output, session, shared_json, shared_sites):
 
     # ── download handlers ─────────────────────────────────────────────────────
 
-    @render.download(filename=lambda: "{}_reagents.zip".format(run_name.get() or "reagents"))
+    @render.download_button(filename=lambda: "{}_reagents.zip".format(run_name.get() or "reagents"))
     def download_sequences_top():
         """Download ZIP of all reagent files (top button)."""
         yield _build_zip()
 
-    @render.download(filename=lambda: "{}_reagents.zip".format(run_name.get() or "reagents"))
+    @render.download_button(filename=lambda: "{}_reagents.zip".format(run_name.get() or "reagents"))
     def download_sequences_bot():
         """Download ZIP of all reagent files (bottom button)."""
         yield _build_zip()

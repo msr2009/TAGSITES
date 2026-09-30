@@ -704,7 +704,7 @@ def progress_server(input, output, session, shared_json, shared_results_trigger,
 
     # ── download completed results ─────────────────────────────────────────────
 
-    @render.download(filename=lambda: f"{run_name.get() or 'results'}.zip")
+    @render.download_button(filename=lambda: f"{run_name.get() or 'results'}.zip")
     def download_results():
         """Produce a complete portable bundle (run JSON + all outputs + companions)."""
         json_path = shared_json.get()
