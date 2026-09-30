@@ -435,6 +435,29 @@ def setup_ui():
                 # dynamically rendered task accordion
                 ui.output_ui("task_cards"),
 
+                # Off-target screening is the slowest step in a run: two EBI blastn
+                # jobs, and a repeat-rich locus (collagens) can take ~10 min for the
+                # region query alone. Long enough to risk a shinyapps.io session
+                # timeout, so it needs to be skippable without editing config.
+                ui.div(
+                    ui.input_checkbox(
+                        "skip_offtarget",
+                        "Skip off-target screening (faster; guides show "
+                        "\"not checked\")",
+                        value=False,
+                    ),
+                    ui.tags.small(
+                        "Off-target screening adds two EBI BLAST jobs to the reagents "
+                        "step — usually a few minutes, but up to ~10 minutes for "
+                        "repeat-rich genes such as collagens. Skipping does not change "
+                        "which guides are chosen; it only leaves the off-target and "
+                        "primer co-amplification columns blank.",
+                        class_="text-muted",
+                    ),
+                    style=("border-top:1px solid #dee2e6; margin-top:0.5rem; "
+                           "padding-top:0.5rem;"),
+                ),
+
                 value="analyses",
             ),
 
