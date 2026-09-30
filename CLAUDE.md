@@ -137,6 +137,22 @@ so with `rs3` absent the pipeline logs "RS3 unavailable", writes blank
 "RS3 —". Reverting costs only the score. See commit 929fe8e for the full rationale and the
 evidence behind this tradeoff.
 
+## Deploying to shinyapps.io
+
+```bash
+./deploy.sh              # deploy (updates the existing app in place)
+./deploy.sh --manifest   # dry run: list what would be bundled, upload nothing
+```
+
+**Always deploy via `deploy.sh`, never a bare `rsconnect deploy`.** `.rscignore` is an
+R-only feature that rsconnect-python does not read, so every exclusion lives as a
+`-x` flag in that script. A bare deploy bundles ~10 GB (`data/` is 9.7 GB and
+`webservice-clients/` another 188 MB); `deploy.sh` brings it to 181 files / 3.8 MB.
+`requirements.txt` is the dependency manifest — `environment.yml` is excluded.
+
+Note rsconnect only ignores `__pycache__/` at the top level, so nested ones need
+`-x '**/*.pyc'`; the `**/__pycache__/` form silently fails to match.
+
 ## External services
 
 - **NCBI BLAST** (via EBI REST API) — `scripts/site_selection_util.py:ncbiblast_call()`
