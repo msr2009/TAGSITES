@@ -232,7 +232,70 @@ def run_spacer_screen(spacers, email, taxid, pam="NGG", cfg=None, report=None,
                       "({} on-target matches excluded)".format(
                           len(hits), len(spacer_list), n_self),
             stage="offtarget_spacer")
+
+    # blastn rarely extends a 23 nt query over the PAM columns, so settle the
+    # undecided sites by fetching their flanks instead of assuming either way
+    if cfg.get("pam_check", {}).get("resolve_by_fetch", True):
+        hits, pam_stats = resolve_pams(
+            hits, pam, reporter, "offtarget_spacer",
+            max_fetches=int(cfg.get("pam_check", {}).get("max_fetches", 200)))
+        _report(reporter, "Spacer screen after PAM check: {} of {} spacers have a "
+                          "PAM-bearing or unresolved off-target".format(
+                              len(hits), len(spacer_list)), stage="offtarget_spacer")
     return {"spacer_hits": hits, "spacers": spacer_list, "block_len": block_len}
+
+
+def resolve_pams(sites_by_key, pam="NGG", reporter=None, stage="offtarget_spacer",
+                 max_fetches=200):
+    """Fetch each unverified site's flank from ENA and settle whether it has a PAM.
+
+    A near-match with no PAM cannot be cut, so once a PAM is known to be absent the
+    site is dropped. Sites whose fetch fails stay unverified rather than being
+    assumed either way. Returns (sites_by_key, stats).
+
+    Cheap in practice: sites are already collapsed to distinct loci, so this is a
+    handful of small ranged requests (12 for the snt-1 test region), cached by
+    accession and coordinates.
+    """
+    cache = {}
+    stats = {"fetched": 0, "confirmed": 0, "rejected": 0, "failed": 0}
+    out = {}
+    for key, sites in (sites_by_key or {}).items():
+        kept = []
+        for s in sites:
+            if not s.get("pam_unverified"):
+                kept.append(s)
+                continue
+            span = ots.pam_fetch_span(s, len(pam))
+            if span is None or stats["fetched"] >= max_fetches:
+                kept.append(s)
+                continue
+            start, end, needs_rc = span
+            ck = (s["acc"], start, end)
+            if ck not in cache:
+                cache[ck] = ebi_rest.ena_subsequence(s["acc"], start, end)
+                stats["fetched"] += 1
+            bases = cache[ck]
+            if needs_rc and bases:
+                bases = ots.reverse_complement(bases)
+            if not ots.apply_fetched_pam(s, bases, pam):
+                stats["failed"] += 1
+                kept.append(s)          # still unknown, so still reported
+                continue
+            if s["pam_ok"]:
+                stats["confirmed"] += 1
+                kept.append(s)
+            else:
+                stats["rejected"] += 1   # no PAM -> cannot cut -> not an off-target
+        if kept:
+            out[key] = kept
+    if reporter and stats["fetched"]:
+        _report(reporter, "PAM check: fetched {} flank(s) — {} confirmed, {} dropped for "
+                          "no PAM, {} still unknown".format(
+                              stats["fetched"], stats["confirmed"], stats["rejected"],
+                              stats["failed"]),
+                stage=stage)
+    return out, stats
 
 
 def write_sidecar(path, region, spacer, taxid, region_len, pam, cfg):

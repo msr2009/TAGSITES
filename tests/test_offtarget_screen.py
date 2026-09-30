@@ -395,3 +395,42 @@ def test_identical_segments_needs_full_identity_and_length():
 ])
 def test_summarise(args, expected):
     assert ots.summarise(*args) == expected
+
+
+# ── PAM resolution by fetching the subject flank ──────────────────────────────
+
+def test_pam_fetch_span_plus_strand_sits_above_the_match():
+    site = {"subject_span": (1000, 1019), "h_strand": "+"}
+    assert ots.pam_fetch_span(site, 3) == (1020, 1022, False)
+
+
+def test_pam_fetch_span_minus_strand_sits_below_and_needs_revcomp():
+    """The query runs 5'->3', so on a minus hit the PAM is at lower coordinates."""
+    site = {"subject_span": (1000, 1019), "h_strand": "-"}
+    assert ots.pam_fetch_span(site, 3) == (997, 999, True)
+
+
+def test_pam_fetch_span_guards_record_start_and_missing_span():
+    assert ots.pam_fetch_span({"subject_span": (2, 21), "h_strand": "-"}, 3) is None
+    assert ots.pam_fetch_span({"subject_span": None, "h_strand": "+"}, 3) is None
+
+
+def test_apply_fetched_pam_settles_a_site():
+    site = {"pam": None, "pam_ok": False, "pam_unverified": True}
+    assert ots.apply_fetched_pam(site, "cgg") is True
+    assert site["pam"] == "CGG" and site["pam_ok"] and not site["pam_unverified"]
+    assert site["pam_source"] == "fetched"
+
+
+def test_apply_fetched_pam_records_absence_of_a_pam():
+    site = {"pam": None, "pam_ok": False, "pam_unverified": True}
+    assert ots.apply_fetched_pam(site, "GTA") is True
+    assert site["pam_ok"] is False and site["pam_unverified"] is False
+
+
+def test_apply_fetched_pam_leaves_site_unverified_on_a_failed_fetch():
+    """A failed fetch must stay unknown, never be read as "no PAM"."""
+    for bases in ("", None, "NN", "XYZ"):
+        site = {"pam": None, "pam_ok": False, "pam_unverified": True}
+        assert ots.apply_fetched_pam(site, bases) is False
+        assert site["pam_unverified"] is True

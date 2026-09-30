@@ -21,6 +21,7 @@ CLUSTALO  = "https://www.ebi.ac.uk/Tools/services/rest/clustalo"
 GENEWISE  = "https://www.ebi.ac.uk/Tools/services/rest/genewise"
 
 DBFETCH_BASE = "https://www.ebi.ac.uk/Tools/dbfetch/dbfetch"
+ENA_FASTA_BASE = "https://www.ebi.ac.uk/ena/browser/api/fasta"
 
 
 RETRYABLE_EXCEPTIONS = (requests.exceptions.Timeout, requests.exceptions.ConnectionError)
@@ -95,6 +96,27 @@ def dbfetch(db, accession, fmt="fasta", style="raw"):
     url = f"{DBFETCH_BASE}/{db}/{accession}/{fmt}/{style}"
     resp = _request_with_retries("get", url, timeout=60)
     return resp.content
+
+
+def ena_subsequence(accession, start, end):
+    """Fetch bases [start, end] (1-based inclusive) of an ENA record as a plain string.
+
+    Uses the ENA Browser API's ?range= form. dbfetch itself has no subsequence
+    support (an "ACC:start-end" id returns "No entries found"), and the Browser
+    API's ?start=&end= parameters are silently ignored — they return the WHOLE
+    record, which for a chromosome is tens of megabytes. Only ?range= actually
+    slices, so do not "simplify" this to the other spelling.
+
+    Returns "" when the range cannot be fetched, so callers can treat a failure as
+    "unknown" rather than as an answer.
+    """
+    url = f"{ENA_FASTA_BASE}/{accession}?range={int(start)}-{int(end)}"
+    try:
+        resp = _request_with_retries("get", url, timeout=60)
+    except Exception:
+        return ""
+    lines = resp.text.splitlines()
+    return "".join(ln.strip() for ln in lines if ln and not ln.startswith(">")).upper()
 
 
 def fmt_exp(value):

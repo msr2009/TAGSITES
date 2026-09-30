@@ -260,6 +260,38 @@ def in_self_span(acc, span, spans):
     return any(span[0] >= lo and span[1] <= hi for lo, hi in spans.get(acc, []))
 
 
+def pam_fetch_span(site, pam_len=3):
+    """Subject range holding an off-target's PAM: (start, end, needs_revcomp) or None.
+
+    BLAST frequently does not extend a short spacer query over the PAM columns, so
+    the PAM has to be fetched from the subject record instead. Its location depends
+    on the HSP's subject strand: the query runs 5'->3', so on a plus-strand hit the
+    PAM sits just above the matched span, and on a minus-strand hit just below it,
+    read on the other strand.
+    """
+    span = site.get("subject_span")
+    if not span:
+        return None
+    lo, hi = span
+    if site.get("h_strand", "+") == "+":
+        return (hi + 1, hi + pam_len, False)
+    start = lo - pam_len
+    if start < 1:
+        return None
+    return (start, lo - 1, True)
+
+
+def apply_fetched_pam(site, bases, pam="NGG"):
+    """Settle a site's PAM from fetched subject bases; returns True if now known."""
+    if not bases or len(bases) < 3 or set(bases.upper()) - set("ACGTN"):
+        return False
+    site["pam"] = bases.upper()
+    site["pam_ok"] = pam_matches(site["pam"], pam)
+    site["pam_unverified"] = False
+    site["pam_source"] = "fetched"
+    return True
+
+
 def collapse_loci(sites):
     """Collapse sites that are the same locus reported by different submissions.
 

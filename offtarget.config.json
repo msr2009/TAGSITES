@@ -54,6 +54,12 @@
 		"max_product":     5000
 	},
 
+	"pam_check": {
+		"_comment": "blastn frequently does not extend a 23 nt spacer query over the PAM columns, so most Screen B hits arrive with an undecided PAM. When resolve_by_fetch is on, each undecided site's flank is fetched from ENA (via the Browser API's ?range= form) and the PAM settled: sites with no PAM are dropped, since a near-match that cannot be cut is not an off-target, and sites whose fetch fails stay reported as unresolved. Sites are already collapsed to distinct loci first, so this is typically a handful of small requests (12 for the snt-1 test region).",
+		"resolve_by_fetch": true,
+		"max_fetches":      200
+	},
+
 	"identical": {
 		"_comment": "A perfectly identical second locus is the dangerous case — a guide cuts both copies and a primer pair amplifies both equally, so no efficiency score or Tm helps. Rare enough to warrant its own warning rather than being folded into a count; if it fires constantly for a species, the taxid scoping or database choice is probably wrong.",
 		"identical_min_len": 100
