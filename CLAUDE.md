@@ -47,7 +47,12 @@ scripts/                # core analysis executables
   site_selection_util.py      # shared library: FASTA/PDB I/O, BLAST API, sequence utils
   existing_AF_model.py        # search AFDB for existing predictions
   uniprot_api.py               # shared UniProt REST helpers (checksum lookup, entry fetch)
-  design_guides_across_region.py  # CRISPR guide design
+  guide_efficiency.py         # RS3 on-target guide scoring (optional; fails soft)
+  design_guides_across_region.py  # standalone CLI guide finder — NOT used by the app
+                                  # (the app uses crispr_util.find_guides via
+                                  #  design_tag_reagents.py); holds the only
+                                  #  off-target BLAST code, which needs a local
+                                  #  blastdb + bedtools and is currently unwired
 
 utils/
   results.py    # load JSON output → DataFrames; Plotly + matplotlib visualization
@@ -71,11 +76,48 @@ params/
 **Configuration-driven pipeline**: `task_definitions.json` defines which scripts map to which analyses and their default parameters. Its `default_tasks` block lists the analyses auto-added to a new session (e.g. a BROAD blast searching all species) — entries can set `requires_organism: true` to be added only once a species is selected, and `taxid_from_rank` (e.g. `"order"`) to auto-fill their `taxid` from that rank in the selected organism's lineage. `config.py` defines available species (with NCBI taxonomy IDs) and which result types are continuous vs. range-based.
 **Shiny reactive state**: analysis parameters are stored in a shared reactive dict (`shared_dict`) passed between modules. `utils/helpers.py:update_shared_dict()` handles updates.
 **Async job submission**: `run_tag_sites_from_json.py` spawns analysis scripts as subprocesses and polls for completion, enabling parallel execution of independent analyses.
+**Scoring never withholds reagents**: guide and site scores (RS3, isoform/topology
+restrictions, conservation) are display-and-ranking signals only. They must never filter a
+guide or site out of the reagent design UI — annotate instead, so the user always sees every
+option and decides. Guides are ordered by distance from cut to insertion site; RS3 rides
+along as a badge and never participates in selection or sorting. A regression check for this
+is that the pre-existing columns of `{run}_reagents.tsv` are byte-identical with and without
+`rs3` installed.
+
 **Alignment rendering**: sequence alignments are pre-rendered as matplotlib SVGs (stored in a dict keyed by alignment name) and displayed statically — this replaced an earlier real-time Plotly approach that was too slow.
 
 ## Environment
 
-Key dependencies: `shiny`, `biopython`, `plotly`, `pandas`, `scipy`, `scikit-learn`, `matplotlib`, `requests`. No local bioinformatics binaries required — Clustal Omega, BLAST, Genewise, and InterPro all run via the EBI REST API.
+Key dependencies: `shiny`, `biopython`, `plotly`, `pandas`, `numpy`, `scipy`, `matplotlib`,
+`requests`, `primer3-py`, `pyhmmer` (local Pfam scanning), `reportlab` (alignment PDFs), and
+`rs3` + `lightgbm` (RS3 guide scoring). `diamond` and `mafft` are used only by the batch-mode
+local backends. No local bioinformatics binaries are required for the interactive app —
+Clustal Omega, BLAST, Genewise, and InterPro all run via the EBI REST API.
+
+### ⚠️ Version pinning — read before adding any dependency
+
+**The environment is deliberately held at Python 3.10 with numpy 1.x.** `environment.yml` pins:
+
+| Pin | Why |
+|---|---|
+| `python=3.10` | required by the caps below |
+| `numpy=1.26.*` | `rs3` requires `numpy<=1.26.4` |
+| `scikit-learn=1.0.2` | `rs3` requires `scikit-learn<=1.0.2` |
+| `lightgbm=3.3.5` | `rs3` requires `lightgbm<=3.3.5` |
+
+The **only** reason for all four is the `rs3` package (Rule Set 3 guide scoring,
+`scripts/guide_efficiency.py`). rs3 0.0.18 is the latest release and has not been updated
+since Feb 2024. Nothing else in TAGSITES needs these versions — note in particular that
+**`scikit-learn` is imported nowhere in this codebase**; it is present only to satisfy
+rs3/lightgbm. scikit-learn and lightgbm come from conda-forge rather than pip because the
+pinned old versions have no osx-arm64 wheels.
+
+**If a new dependency needs `numpy>=2` or a newer Python, drop RS3 rather than fighting the
+pins.** RS3 is designed to fail soft: `guide_efficiency.load_rs3()` catches broad `Exception`,
+so with `rs3` absent the pipeline logs "RS3 unavailable", writes blank
+`rs3_score`/`rs3_percentile` columns, and leaves every other column untouched. The UI renders
+"RS3 —". Reverting costs only the score. See commit 929fe8e for the full rationale and the
+evidence behind this tradeoff.
 
 ## External services
 
