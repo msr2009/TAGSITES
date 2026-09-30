@@ -47,6 +47,15 @@ _STYLE = """
     .iso-badge { font-size: 0.7rem; background: #d1e7dd; border-radius: 3px;
                  padding: 1px 6px; color: #0f5132; margin-left: 0.5rem; }
 
+    /* RS3 on-target score. 'low' uses the amber warning palette rather than the red
+       error palette — a low-scoring guide is less active, not invalid. */
+    .rs3-badge { font-size: 0.7rem; border-radius: 3px; padding: 1px 6px;
+                 margin-left: 0.25rem; }
+    .rs3-high   { background: #d1e7dd; color: #0f5132; }
+    .rs3-medium { background: #e9ecef; color: #495057; }
+    .rs3-low    { background: #fff3cd; color: #856404; }
+    .rs3-na     { background: #e9ecef; color: #6c757d; }
+
     /* ASCII diagram */
     .guide-diagram pre {
         font-size: 0.72rem; background: #f8f9fa; border: 1px solid #adb5bd;

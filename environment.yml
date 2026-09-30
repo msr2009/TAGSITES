@@ -1,15 +1,28 @@
+# NOTE: this environment is deliberately held back to Python 3.10 with numpy 1.x.
+# The `rs3` package (Rule Set 3 guide scoring, scripts/guide_efficiency.py) pins
+# scikit-learn<=1.0.2, numpy<=1.26.4 and lightgbm<=3.3.5, and is the ONLY reason
+# for these caps. Nothing else here requires them. See the RS3 commit message for
+# the full rationale and how to revert if these pins ever become too expensive.
+#
+# scikit-learn is not imported anywhere in TAGSITES — it is present only to satisfy
+# rs3/lightgbm, so its old version costs nothing. numpy usage across the codebase is
+# limited to long-stable API (array/zeros/mean/sort/linspace/linalg/diff/convolve/
+# argmax), so numpy 1.26 is not a functional limitation either.
+#
+# scikit-learn and lightgbm come from conda-forge rather than pip because the pinned
+# old versions have no osx-arm64 wheels on PyPI and would be built from source.
 name: tagsites
 channels:
   - conda-forge
   - bioconda
   - defaults
 dependencies:
-  - python=3.12
+  - python=3.10     # capped by rs3 (see header)
   - biopython
   - pandas
-  - numpy
+  - numpy=1.26.*    # capped by rs3 (numpy<=1.26.4)
   - scipy
-  - scikit-learn
+  - scikit-learn=1.0.2   # capped by rs3; unused by TAGSITES itself
   - matplotlib
   - plotly
   - requests
@@ -17,9 +30,13 @@ dependencies:
   - shinywidgets
   - xmltramp2       # required by EBI REST clients
   - primer3-py
+  - pyhmmer         # scripts/pfam_scan.py — local Pfam domain scanning
+  - reportlab       # scripts/build_heatmap_reportlab.py — alignment heatmap PDFs
   - pytest
   - diamond         # scripts/conservation_local.py — batch-mode ortholog search
   - mafft           # scripts/conservation_local.py — batch-mode alignment
+  - lightgbm=3.3.5  # RS3 backend; conda-forge build needed for libomp on Apple Silicon
   - pip:
     - ridgeplot
     - kaleido==0.2.1
+    - rs3           # Rule Set 3 guide scoring (scripts/guide_efficiency.py)

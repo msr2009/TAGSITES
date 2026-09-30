@@ -295,6 +295,24 @@ def reagents_server(input, output, session, shared_json, shared_sites):
             return recon[0], recon[1], True
         return str(row["left_arm"]), str(row["right_arm"]), False
 
+    def _rs3_display(row):
+        """Return (badge_text, css_class, grid_value) for a guide's RS3 score, or None."""
+        # Absent column = a TSV written before RS3 existed; render exactly as before
+        if "rs3_score" not in row:
+            return None
+        raw = row["rs3_score"]
+        if raw is None or str(raw).strip() == "" or pd.isna(raw):
+            return ("RS3 —", "rs3-badge rs3-na", "— (not scored)")
+        score = float(raw)
+        # Fixed cutoffs (not percentile) so a band means the same thing across genes;
+        # +/-0.5 is roughly half a standard deviation of RS3's z-scored training data
+        band = "low" if score < -0.5 else ("medium" if score <= 0.5 else "high")
+        pct = row.get("rs3_percentile", "")
+        grid = "{:+.2f}".format(score)
+        if pct is not None and str(pct).strip() != "" and not pd.isna(pct):
+            grid += " ({:.0f}th pct of this region's candidates)".format(float(pct))
+        return ("RS3 {:+.2f}".format(score), "rs3-badge rs3-{}".format(band), grid)
+
     # ── pre-compute guide content (diagrams + truncated arms) ─────────────────
 
     @reactive.calc
@@ -924,6 +942,7 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                     )
 
             specificity = describe_position_isoforms(rid, iso_labels_by_pos.get(), iso_all_labels.get())
+            rs3 = _rs3_display(row)
 
             meta_cells = []
             for label, val in [
@@ -933,7 +952,8 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                 ("Distance (bp)", str(dist)),
                 ("Recut block", str(row["recut_block_method"])),
                 ("Mutation", str(row["mutation_desc"]) or "—"),
-            ] + ([("Isoforms", specificity)] if specificity else []):
+            ] + ([("RS3 score", rs3[2])] if rs3 else []) \
+              + ([("Isoforms", specificity)] if specificity else []):
                 meta_cells.append(ui.div(label, class_="param-label"))
                 meta_cells.append(ui.div(val, class_="param-value"))
 
@@ -942,6 +962,7 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                     ui.input_checkbox(cid, "Use this guide", value=best),
                     ui.span("Guide {}".format(i + 1), class_="fw-semibold"),
                     ui.span("{} bp from cut to insert".format(dist), class_="dist-badge"),
+                    ui.span(rs3[0], class_=rs3[1]) if rs3 else None,
                     plasmid_warning_div,
                     class_="guide-header",
                 ),
@@ -959,6 +980,17 @@ def reagents_server(input, output, session, shared_json, shared_sites):
         best_panel  = _one_panel(best_row, 0)
 
         divs = [best_panel]
+
+        # One caveat per site (not per guide): say plainly what RS3 does and doesn't
+        # predict, so a green badge is never read as a knock-in success estimate.
+        if _rs3_display(best_row):
+            divs.append(ui.div(
+                "RS3 predicts Cas9 cutting efficiency, not knock-in/HDR rate. It was trained "
+                "on pooled human and mouse screens, so treat it as a relative ranking between "
+                "these guides rather than an absolute number. Guides remain ordered by "
+                "distance to the insertion site, never by RS3.",
+                style="color:#888;font-size:0.78em;margin:0.15rem 0 0.4rem;",
+            ))
 
         # Extra guides in a Bootstrap collapse
         if n_extra > 0:

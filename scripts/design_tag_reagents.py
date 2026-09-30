@@ -41,6 +41,10 @@ Output TSV (one row per residue × guide):
   right_arm         right homology arm: exonic bases uppercase, intronic lowercase
   left_arm_wt       left arm before PAM disruption (WT); same case encoding
   right_arm_wt      right arm before PAM disruption (WT); same case encoding
+  rs3_score         Rule Set 3 on-target cutting score (blank if unavailable).
+                    Display-only: never affects guide choice or ordering.
+  rs3_percentile    rank percentile of this guide's RS3 score among all
+                    candidate guides in this region (blank if unavailable)
 
 A companion <output>.genotyping.tsv is always written (genomic sequence is
 always available): one row per residue x amplicon_type. 'external' alone
@@ -61,6 +65,7 @@ sys.path.insert(0, __file__.rsplit('/', 1)[0])
 from crispr_util import find_guides, build_frame_lookup, disrupt_pam
 from parse_genewise import parse_genewise, enumerate_insertion_sites, \
     parse_genewise_score, parse_genewise_gff_score, cds_coverage
+from guide_efficiency import guide_key, rs3_percentiles, score_guides
 from progress import report as _report, resolve_reporter
 from reagent_sequences import design_genotyping_primers
 
@@ -128,6 +133,8 @@ def design_reagents(
     product_opt_size=200,
     flank_min=50,
     flank_max=150,
+    rs3=True,
+    rs3_tracr='Hsu2013',
     report=None,
 ):
     """
@@ -150,6 +157,11 @@ def design_reagents(
                      reagent_sequences.design_genotyping_primers.
     internal_threshold, primer_opt_tm, product_opt_size, flank_min, flank_max :
                      passed through to design_genotyping_primers.
+    rs3            : bool  compute Rule Set 3 on-target scores (default True).
+                     Display-only: scores never affect which guides are kept or
+                     their order. Silently blank if the optional rs3 package is
+                     unavailable, or if pam/guide_length aren't SpCas9 NGG/20.
+    rs3_tracr      : str  tracrRNA scaffold assumed by RS3 ('Hsu2013'/'Chen2013').
 
     Returns
     -------
@@ -215,6 +227,22 @@ def design_reagents(
     guides = find_guides(dna, pam=pam, guide_length=guide_length,
                          cut_offset=cut_offset)
     _report(reporter, '{} guide sites found (PAM={})'.format(len(guides), pam), stage='guides')
+
+    # 5b. RS3 on-target scores, computed once for the whole region before the per-site
+    # loop: find_guides() has already enumerated every candidate, and many insertion
+    # sites reuse the same guide, so cost is independent of the number of sites.
+    # Display-only — nothing below selects or orders guides by these values.
+    rs3_scores = {}
+    rs3_pct = {}
+    if rs3:
+        rs3_scores, rs3_note = score_guides(dna, guides, pam=pam,
+                                            guide_length=guide_length, tracr=rs3_tracr)
+        rs3_pct = rs3_percentiles(rs3_scores)
+        if rs3_scores:
+            _report(reporter, 'RS3 scored {} guides (tracr={})'.format(
+                len(rs3_scores), rs3_tracr), stage='guides')
+        if rs3_note:
+            _report(reporter, rs3_note, stage='guides')
 
     pam_len = len(pam)
     rows = []
@@ -312,6 +340,7 @@ def design_reagents(
             left_arm_wt  = _case_arm(left_arm_raw, left_start, frame_lookup)
             right_arm_wt = _case_arm(right_arm_raw, insert_pos, frame_lookup)
 
+            gkey = guide_key(g)
             rows.append({
                 'residue_index':       int(site['residue_index']),
                 'amino_acid':          site['amino_acid'],
@@ -333,6 +362,8 @@ def design_reagents(
                 'right_arm':           right_arm,
                 'left_arm_wt':         left_arm_wt,
                 'right_arm_wt':        right_arm_wt,
+                'rs3_score':           rs3_scores.get(gkey, ''),
+                'rs3_percentile':      rs3_pct.get(gkey, ''),
             })
             n_kept += 1
 
@@ -375,7 +406,8 @@ def design_reagents(
 def main(genewise, genomic_fasta, output, protein_length=None, n_guides=5,
          arm_length=1000, pam='NGG', guide_length=20, cut_offset=3,
          insert_sequence='', internal_threshold=500, primer_opt_tm=60.0,
-         product_opt_size=200, flank_min=50, flank_max=150, report=None):
+         product_opt_size=200, flank_min=50, flank_max=150, rs3=True,
+         rs3_tracr='Hsu2013', report=None):
     """Entry point for in-process calls from task_runners."""
     df, genotyping_df = design_reagents(
         genewise_out       = genewise,
@@ -392,6 +424,8 @@ def main(genewise, genomic_fasta, output, protein_length=None, n_guides=5,
         product_opt_size   = product_opt_size,
         flank_min          = flank_min,
         flank_max          = flank_max,
+        rs3                = rs3,
+        rs3_tracr          = rs3_tracr,
         report             = report,
     )
     df.to_csv(output, sep='\t', index=False)
@@ -448,6 +482,13 @@ if __name__ == '__main__':
     parser.add_argument('--flank_max', type=int, default=150,
                         help='Maximum distance (bp) of a genotyping primer from the insert site '
                              '(default: 150)')
+    parser.add_argument('--no_rs3', action='store_true',
+                        help='Skip Rule Set 3 on-target scoring. Scores are display-only and '
+                             'never change which guides are chosen, so skipping only blanks '
+                             'the rs3_score/rs3_percentile columns')
+    parser.add_argument('--rs3_tracr', type=str, default='Hsu2013',
+                        choices=['Hsu2013', 'Chen2013'],
+                        help='tracrRNA scaffold assumed by the RS3 model (default: Hsu2013)')
     args, unknowns = parser.parse_known_args()
 
     protein_length = None
@@ -479,6 +520,8 @@ if __name__ == '__main__':
         product_opt_size    = args.product_opt_size,
         flank_min           = args.flank_min,
         flank_max           = args.flank_max,
+        rs3                 = not args.no_rs3,
+        rs3_tracr           = args.rs3_tracr,
     )
 
     df.to_csv(args.output, sep='\t', index=False)

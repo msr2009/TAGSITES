@@ -126,7 +126,9 @@
 				"primer_opt_tm":       { "default": 60,  "tooltip": "primer3 PRIMER_OPT_TM for genotyping primers" },
 				"product_opt_size":    { "default": 200, "tooltip": "primer3 PRIMER_PRODUCT_OPT_SIZE (optimal amplicon length)" },
 				"flank_min":           { "default": 50,  "tooltip": "minimum distance (bp) of a genotyping primer from the insert site" },
-				"flank_max":           { "default": 150, "tooltip": "maximum distance (bp) of a genotyping primer from the insert site" }
+				"flank_max":           { "default": 150, "tooltip": "maximum distance (bp) of a genotyping primer from the insert site" },
+				"rs3":                 { "default": true, "tooltip": "compute Rule Set 3 on-target cutting scores for each guide — display only, never changes which guides are chosen or their order" },
+				"rs3_tracr":           { "default": "Hsu2013", "hidden": true, "tooltip": "tracrRNA scaffold assumed by the RS3 model (Hsu2013 = standard SpCas9 scaffold; Chen2013 = extended scaffold)" }
 			}
 		}
 	}

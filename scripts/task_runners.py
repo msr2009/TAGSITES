@@ -255,6 +255,8 @@ def run_reagents(args, report=None, job_id_cb=None, resume_job_ids=None):
         product_opt_size    = _int(args.get("product_opt_size"), 200),
         flank_min           = _int(args.get("flank_min"), 50),
         flank_max           = _int(args.get("flank_max"), 150),
+        rs3                 = _bool(args.get("rs3"), True),
+        rs3_tracr           = _str(args.get("rs3_tracr"), "Hsu2013"),
         report              = report,
     )
 
