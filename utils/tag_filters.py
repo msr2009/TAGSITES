@@ -1,7 +1,7 @@
 """utils/tag_filters.py — user-driven isoform / topology restriction of taggable positions
 
 Turns the Results-tab "Advanced / Rescoring" choices (which isoforms are visible, which
-ones the tag should land in, constitutive-only mode, allowed Phobius topology labels) into
+ones the tag should land in, constitutive-only mode, allowed topology labels) into
 the set of positions that remain available for tagging. The complement of that set is fed
 to utils.scoring.position_mask_criterion() so the restriction behaves exactly like any
 other config mask criterion.
@@ -11,10 +11,15 @@ and range annotations, with no notion of scoring criteria, so it can also drive 
 Reagents-tab isoform-specificity annotation and the CLI without pulling in the scoring
 engine. Isoform record shape is the one produced by scripts/derive_isoforms.py and surfaced
 by utils.results._build_isoform_pane: "present"/"skipped" spans in query coordinates, plus
-"accession"/"name". Phobius descriptions are assumed already normalized to short labels by
+"accession"/"name". Topology sources are config.TOPOLOGY_SOURCES ("Phobius", "DeepTMHMM").
+Phobius descriptions are assumed already normalized to short labels by
 utils.results._translate_phobius_desc ("Cytoplasmic", "Extracellular", "Transmembrane",
 "Signal peptide") — callers outside the Results-tab load path must translate first.
+DeepTMHMM's own region words (TMhelix/signal/inside/outside/...) are never translated and
+pass through as-is.
 """
+
+from config import TOPOLOGY_SOURCES
 
 
 def isoform_key(iso, index):
@@ -58,29 +63,31 @@ def isoform_allowed_positions(isoforms, visible_keys, tagged_keys, constitutive,
 
 
 def topology_allowed_positions(range_df, allowed_labels, seq_len):
-    """Positions inside Phobius rows whose (already-translated) label is in allowed_labels.
+    """Positions inside topology rows (Phobius and/or DeepTMHMM) whose label is in
+    allowed_labels. Phobius labels are assumed already translated; DeepTMHMM labels
+    are its own native region words.
 
     Returns None ("no restriction") when allowed_labels is empty/falsy or range_df has no
-    Phobius rows at all.
+    topology rows at all.
     """
     if not allowed_labels or range_df is None or range_df.empty:
         return None
-    phobius = range_df[range_df["source"] == "Phobius"]
-    if phobius.empty:
+    topology = range_df[range_df["source"].isin(TOPOLOGY_SOURCES)]
+    if topology.empty:
         return None
     allowed = set(allowed_labels)
     positions = set()
-    for _, row in phobius[phobius["description"].isin(allowed)].iterrows():
+    for _, row in topology[topology["description"].isin(allowed)].iterrows():
         start, stop = int(row["start"]), int(row["stop"])
         positions.update(range(max(1, start), min(stop, seq_len) + 1))
     return positions
 
 
 def topology_tag_allowed_positions(range_df, all_labels, checked_labels, seq_len):
-    """Positions taggable under a Tag-checkbox matrix over Phobius topology labels.
+    """Positions taggable under a Tag-checkbox matrix over topology labels.
 
     Mirrors isoform_allowed_positions' matrix semantics: all labels checked (or no
-    Phobius data at all) -> None (unrestricted); none checked -> empty set (nothing
+    topology data at all) -> None (unrestricted); none checked -> empty set (nothing
     taggable); otherwise restricted to the checked labels' spans.
     """
     if not all_labels:

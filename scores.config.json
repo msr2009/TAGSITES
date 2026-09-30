@@ -47,10 +47,10 @@
       "type": "range_absent",
       "weight": 1,
       "label": "not in domain",
-      "note": "1 pt if residue is outside all Pfam/Phobius domains",
+      "note": "1 pt if residue is outside all Pfam/Phobius/DeepTMHMM domains",
       "params": {
-        "sources": ["Pfam", "Phobius"],
-        "exclude_descriptions": ["Cytoplasmic", "Extracellular"]
+        "sources": ["Pfam", "Phobius", "DeepTMHMM"],
+        "exclude_descriptions": ["Cytoplasmic", "Extracellular", "inside", "outside"]
       }
     },
     {
@@ -147,8 +147,9 @@
       "label": "transmembrane / signal / propeptide",
       "note": "masks the residue outright: never a good tag site (issue #38)",
       "params": {
-        "sources": ["UniProt", "Phobius"],
-        "include_descriptions": ["Transmembrane", "Signal peptide", "Propeptide", "Transit peptide"]
+        "sources": ["UniProt", "Phobius", "DeepTMHMM"],
+        "include_descriptions": ["Transmembrane", "Signal peptide", "Propeptide", "Transit peptide",
+                                 "TMhelix", "signal"]
       }
     },
     {

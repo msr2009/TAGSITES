@@ -1,7 +1,7 @@
 """
 test_results_loader.py — offline unit tests for utils/results.py
 
-Covers: _translate_phobius_desc, _merge_phobius_intervals,
+Covers: _translate_phobius_desc, _merge_topology_intervals,
         load_data_from_json (smoke test with temp output files),
         load_run_metadata, _guess_analysis_type, _hex_to_rgb,
         _isoform_class_key.
@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
 from utils.results import (
     _translate_phobius_desc,
-    _merge_phobius_intervals,
+    _merge_topology_intervals,
     load_data_from_json,
     load_run_metadata,
     _guess_analysis_type,
@@ -56,16 +56,16 @@ class TestTranslatePhobiusDesc:
         assert _translate_phobius_desc("some unknown description") == "some unknown description"
 
 
-# ── _merge_phobius_intervals ──────────────────────────────────────────────────
+# ── _merge_topology_intervals ─────────────────────────────────────────────────
 
-class TestMergePhobiusIntervals:
+class TestMergeTopologyIntervals:
 
     def _df(self, rows):
         return pd.DataFrame(rows, columns=["source", "start", "stop", "description"])
 
     def test_single_interval_passes_through(self):
         df = self._df([("Phobius", 1, 10, "Cytoplasmic")])
-        merged = _merge_phobius_intervals(df)
+        merged = _merge_topology_intervals(df)
         assert len(merged) == 1
         assert merged.iloc[0]["start"] == 1
         assert merged.iloc[0]["stop"] == 10
@@ -75,7 +75,7 @@ class TestMergePhobiusIntervals:
             ("Phobius", 1, 10, "Cytoplasmic"),
             ("Phobius", 8, 15, "Cytoplasmic"),
         ])
-        merged = _merge_phobius_intervals(df)
+        merged = _merge_topology_intervals(df)
         assert len(merged) == 1
         assert merged.iloc[0]["stop"] == 15
 
@@ -84,7 +84,7 @@ class TestMergePhobiusIntervals:
             ("Phobius", 1, 5, "Cytoplasmic"),
             ("Phobius", 6, 10, "Cytoplasmic"),
         ])
-        merged = _merge_phobius_intervals(df)
+        merged = _merge_topology_intervals(df)
         assert len(merged) == 1
 
     def test_non_overlapping_different_desc_kept_separate(self):
@@ -92,17 +92,37 @@ class TestMergePhobiusIntervals:
             ("Phobius", 1, 5, "Cytoplasmic"),
             ("Phobius", 20, 30, "Transmembrane"),
         ])
-        merged = _merge_phobius_intervals(df)
+        merged = _merge_topology_intervals(df)
         assert len(merged) == 2
 
-    def test_source_column_set_to_phobius(self):
+    def test_source_column_preserved(self):
         df = self._df([("Phobius", 1, 5, "Cytoplasmic")])
-        merged = _merge_phobius_intervals(df)
+        merged = _merge_topology_intervals(df)
         assert (merged["source"] == "Phobius").all()
+
+    def test_deeptmhmm_source_preserved_and_disjoint_regions_untouched(self):
+        # DeepTMHMM's regions are already disjoint, so this should be a no-op merge
+        # that keeps "DeepTMHMM" as the source rather than assuming Phobius.
+        df = self._df([
+            ("DeepTMHMM", 1, 22, "signal"),
+            ("DeepTMHMM", 23, 140, "outside"),
+        ])
+        merged = _merge_topology_intervals(df)
+        assert len(merged) == 2
+        assert (merged["source"] == "DeepTMHMM").all()
+
+    def test_mixed_sources_not_merged_together(self):
+        # same label text, different source: must not merge across sources
+        df = self._df([
+            ("Phobius", 1, 10, "Transmembrane"),
+            ("DeepTMHMM", 5, 15, "Transmembrane"),
+        ])
+        merged = _merge_topology_intervals(df)
+        assert len(merged) == 2
 
     def test_columns_correct(self):
         df = self._df([("Phobius", 1, 5, "Cytoplasmic")])
-        merged = _merge_phobius_intervals(df)
+        merged = _merge_topology_intervals(df)
         assert set(merged.columns) == {"source", "start", "stop", "description"}
 
 

@@ -10,7 +10,7 @@ from utils.results import (
     assign_task_colors,
     residue_colors_for_track,
     residue_colors_for_annotations,
-    residue_colors_for_phobius,
+    residue_colors_for_topology,
     residue_colors_for_isoforms,
     residue_colors_for_patches,
     residue_colors_jet,
@@ -24,7 +24,7 @@ from utils.scoring import (
     load_scoring_config, pick_suggested_sites, position_mask_criterion, with_extra_criteria,
 )
 from utils.tag_filters import isoform_key, isoform_allowed_positions, topology_tag_allowed_positions
-from config import RESULTS_TYPE_DICT, DOMAIN_SOURCE_COLORS
+from config import RESULTS_TYPE_DICT, DOMAIN_SOURCE_COLORS, TOPOLOGY_SOURCES
 
 # color for residues masked outright (issue #38) — distinct from the white->green
 # score gradient; must match the client-side MASKED_HEX in www/tagsites.js
@@ -57,17 +57,17 @@ def _build_colors_and_legend(track, task_name, scheme, aa_df, range_df, seq_len,
     Returns (colors, legend) where legend is a dict ready for JSON serialization,
     or (None, None) when the track cannot be resolved.
     """
-    # ── Annotation coloring (domains / modifications / Phobius) ─────────────────
+    # ── Annotation coloring (domains / modifications / topology) ─────────────────
     if track == "__domains__":
         if range_df is None or not seq_len:
             return None, None
         colors, items = residue_colors_for_annotations(range_df, seq_len)
         return colors, {"type": "categorical", "items": items}
 
-    if track == "__phobius__":
+    if track == "__topology__":
         if range_df is None or not seq_len:
             return None, None
-        colors, items = residue_colors_for_phobius(range_df, seq_len)
+        colors, items = residue_colors_for_topology(range_df, seq_len)
         return colors, {"type": "categorical", "items": items}
 
     if track == "__isoforms__":
@@ -143,13 +143,25 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
             return default
         return default if v is None else bool(v)
 
-    def _phobius_labels():
-        """Distinct Phobius topology labels present in the current run, in first-seen order."""
+    def _topology_rows():
+        """The current run's topology rows (Phobius and/or DeepTMHMM), or None if
+        range_data isn't loaded/has none."""
         range_df = range_data.get()
         if range_df is None or range_df.empty:
-            return []
-        phobius = range_df[range_df["source"] == "Phobius"]
-        return list(dict.fromkeys(phobius["description"]))
+            return None
+        topology = range_df[range_df["source"].isin(TOPOLOGY_SOURCES)]
+        return topology if not topology.empty else None
+
+    def _topology_labels():
+        """Distinct topology labels (Phobius and/or DeepTMHMM) present in the current
+        run, in first-seen order."""
+        topology = _topology_rows()
+        return list(dict.fromkeys(topology["description"])) if topology is not None else []
+
+    def _topology_sources_present():
+        """Distinct topology sources present in the current run, sorted."""
+        topology = _topology_rows()
+        return sorted(set(topology["source"])) if topology is not None else []
 
     @reactive.calc
     def user_filter_spec():
@@ -163,7 +175,7 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
             if _checked(f"iso_tag_{_safe_id(k)}", True):
                 tagged_keys.add(k)
         constitutive = _checked("iso_constitutive_only", False)
-        checked_topology = {lbl for lbl in _phobius_labels()
+        checked_topology = {lbl for lbl in _topology_labels()
                             if _checked(f"topology_tag_{_safe_id(lbl)}", True)}
         return visible_keys, tagged_keys, constitutive, checked_topology
 
@@ -192,7 +204,7 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
 
         isoforms = (iso_data.get() or {}).get("isoforms", [])
         visible_keys, tagged_keys, constitutive, checked_topology = user_filter_spec()
-        all_topology = set(_phobius_labels())
+        all_topology = set(_topology_labels())
         all_positions = set(range(1, seq_len + 1))
 
         # isoform and topology restrictions are computed independently and each becomes
@@ -264,8 +276,9 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
         if range_df is not None and not range_df.empty:
             if not range_df[range_df["source"].isin({"Pfam", "modification", "UniProt", "UniProt_site"})].empty:
                 choices["__domains__"] = "Domains"
-            if not range_df[range_df["source"] == "Phobius"].empty:
-                choices["__phobius__"] = "Phobius"
+            topology_sources = sorted(set(range_df["source"]) & set(TOPOLOGY_SOURCES))
+            if topology_sources:
+                choices["__topology__"] = f"Topology ({', '.join(topology_sources)})"
             if not range_df[range_df["source"] == "hydrophobic_patch"].empty:
                 choices["__hydrophobic_patch__"] = "Hydrophobic patches"
         if iso_result and len(iso_result.get("isoforms", [])) > 1:
@@ -674,7 +687,8 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
         iso_result = iso_data.get() or {}
         isoforms = sorted(iso_result.get("isoforms", []), key=lambda x: x.get("length", 0),
                           reverse=True)
-        topology_labels = _phobius_labels()
+        topology_labels = _topology_labels()
+        topology_sources_present = _topology_sources_present()
         if len(isoforms) <= 1 and not topology_labels:
             return ui.div()
 
@@ -751,7 +765,7 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
 
         if topology_labels:
             topo_header = ui.div(
-                ui.span("Topology (Phobius)", class_="ts-matrix-name-label"),
+                ui.span(f"Topology ({', '.join(topology_sources_present)})", class_="ts-matrix-name-label"),
                 ui.span("Tag", class_="ts-matrix-col-label"),
                 class_="ts-topo-matrix-row ts-matrix-header",
             )

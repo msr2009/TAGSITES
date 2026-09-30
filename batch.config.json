@@ -6,7 +6,8 @@
     "domains": "remote",
     "structure": "remote",
     "genewise": "remote",
-    "conservation": "remote"
+    "conservation": "remote",
+    "topology": "deeptmhmm"
   },
 
   "reference_data": {
@@ -36,6 +37,13 @@
     "clan_filter": true,
     "cache_profiles": true,
     "cpus": 0
+  },
+
+  "deeptmhmm": {
+    "_comment": "scripts/deeptmhmm_runner.py's subprocess bridge to DeepTMHMM 1.0 (academic license, vendored outside the repo, not committed here). install_dir/python are machine-specific and left blank in this checked-in default — set them in a TAGSITES_BATCH_CONFIG override (e.g. batch.config.local.json) to the local DeepTMHMM checkout and its dedicated conda env's python (needs pytorch<2.6, fair-esm==0.4.0 — see plan for why). batch_size is scripts/build_topology_cache.py's sequences-per-subprocess-invocation knob, trading ESM1b model-load amortization against peak embedding scratch (deleted after each batch).",
+    "install_dir": "",
+    "python": "",
+    "batch_size": 200
   },
 
   "batch_run": {

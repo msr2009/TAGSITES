@@ -9,11 +9,13 @@ from Bio import SeqIO
 import numpy as np
 from numpy import linspace
 
-from config import ANALYSIS_COLORS, DOMAIN_SOURCE_COLORS, ISOFORM_CLASS_COLORS, GLOBAL_KEYS
+from config import ANALYSIS_COLORS, DOMAIN_SOURCE_COLORS, ISOFORM_CLASS_COLORS, GLOBAL_KEYS, TOPOLOGY_SOURCES
 from scripts.task_registry import companion_path
 
 
-# keyword → short label mapping for Phobius region descriptions from EBI InterProScan5
+# keyword → short label mapping for Phobius region descriptions from EBI InterProScan5.
+# DeepTMHMM's own region words (TMhelix/signal/inside/outside/...) are kept verbatim
+# and never pass through this table — see ~/.claude/plans/i-m-considering-a-large-humble-sun.md.
 _PHOBIUS_KEYWORDS = [
     ("cytoplasm",              "Cytoplasmic"),
     ("extracellular region",   "Extracellular"),
@@ -32,15 +34,18 @@ def _translate_phobius_desc(desc):
     return desc
 
 
-def _merge_phobius_intervals(phobius_df):
-    """Merge overlapping/contiguous Phobius rows that share the same translated label.
+def _merge_topology_intervals(topology_df):
+    """Merge overlapping/contiguous topology rows that share the same source+label.
 
-    Handles cases like signal peptides, which InterProScan5 emits as several
+    Handles cases like Phobius signal peptides, which InterProScan5 emits as several
     overlapping sub-region rows (N-terminal, hydrophobic, C-terminal, whole span).
-    Returns a new DataFrame with the merged rows.
+    DeepTMHMM's regions are already disjoint, so this is a no-op for them, but runs
+    unconditionally so there's one code path for every topology source. Preserves
+    each row's own source rather than assuming Phobius. Returns a new DataFrame with
+    the merged rows.
     """
     merged_rows = []
-    for desc, group in phobius_df.groupby("description", sort=False):
+    for (source, desc), group in topology_df.groupby(["source", "description"], sort=False):
         intervals = sorted(zip(group["start"].astype(int), group["stop"].astype(int)))
         cur_start, cur_stop = intervals[0]
         for start, stop in intervals[1:]:
@@ -48,10 +53,10 @@ def _merge_phobius_intervals(phobius_df):
             if start <= cur_stop + 1:
                 cur_stop = max(cur_stop, stop)
             else:
-                merged_rows.append({"source": "Phobius", "start": cur_start,
+                merged_rows.append({"source": source, "start": cur_start,
                                     "stop": cur_stop, "description": desc})
                 cur_start, cur_stop = start, stop
-        merged_rows.append({"source": "Phobius", "start": cur_start,
+        merged_rows.append({"source": source, "start": cur_start,
                             "stop": cur_stop, "description": desc})
     return pd.DataFrame(merged_rows, columns=["source", "start", "stop", "description"])
 
@@ -226,12 +231,14 @@ def load_data_from_json(json_in, type_dict):
     # isoforms get their own pane, not a row in the annotations feature panel
     iso_result = _select_isoform_candidate(iso_candidates) if iso_candidates else None
 
-    # translate verbose Phobius descriptions and merge overlapping intervals per label
+    # translate verbose Phobius descriptions (DeepTMHMM's own region words pass through
+    # untouched) and merge overlapping intervals per (source, label)
     if not dat.empty:
-        mask = dat["source"] == "Phobius"
-        dat.loc[mask, "description"] = dat.loc[mask, "description"].map(_translate_phobius_desc)
-        phobius_merged = _merge_phobius_intervals(dat[mask])
-        dat = pd.concat([dat[~mask], phobius_merged], ignore_index=True)
+        mask = dat["source"].isin(TOPOLOGY_SOURCES)
+        phobius_mask = dat["source"] == "Phobius"
+        dat.loc[phobius_mask, "description"] = dat.loc[phobius_mask, "description"].map(_translate_phobius_desc)
+        topology_merged = _merge_topology_intervals(dat[mask])
+        dat = pd.concat([dat[~mask], topology_merged], ignore_index=True)
 
     return df, dat, alns, iso_result
 
@@ -429,8 +436,8 @@ def plot_results(aa_df, range_df, title="Results Plot"):
     # "Transmembrane" (both Phobius) are visually distinguishable, not just
     # all-Phobius-is-purple.
     height = 2
-    y_positions = {"Phobius": 2, "Pfam": 4, "modification": 6, "hydrophobic_patch": 8,
-                   "UniProt": 10, "UniProt_site": 12}
+    y_positions = {"Phobius": 2, "DeepTMHMM": 4, "Pfam": 6, "modification": 8,
+                   "hydrophobic_patch": 10, "UniProt": 12, "UniProt_site": 14}
     color_map = _annotation_color_map(range_df)
 
     # opacity for hydrophobic patches scales with total patch hydrophobicity
@@ -639,7 +646,7 @@ def residue_colors_for_domains(range_df, seq_len):
     """
     colors = ["#e8e8e8"] * seq_len
     # apply by source priority: modifications on top
-    priority = ["Pfam", "Phobius", "modification"]
+    priority = ["Pfam", "Phobius", "DeepTMHMM", "modification"]
     for source in priority:
         subset = range_df[range_df["source"] == source]
         color = DOMAIN_SOURCE_COLORS.get(source, "#888888")
@@ -659,13 +666,15 @@ _ANNOTATION_PALETTE = [
 ]
 
 # Sources shown in the 2D feature panel
-_FEATURE_SOURCES = {"Pfam", "Phobius", "modification", "hydrophobic_patch", "UniProt", "UniProt_site"}
+_FEATURE_SOURCES = {"Pfam", "Phobius", "DeepTMHMM", "modification", "hydrophobic_patch",
+                     "UniProt", "UniProt_site"}
 
-# Sources painted in the __domains__ structure colorscheme (Phobius has its own scheme)
+# Sources painted in the __domains__ structure colorscheme (topology sources have
+# their own __topology__ scheme instead — see TOPOLOGY_SOURCES)
 _DOMAIN_STRUCT_SOURCES = {"Pfam", "modification", "UniProt", "UniProt_site"}
 
 # paint priority: last painted wins; modifications and UniProt features end up on top
-_FEATURE_PAINT_ORDER = ["Pfam", "Phobius", "modification", "UniProt_site", "UniProt"]
+_FEATURE_PAINT_ORDER = ["Pfam", "Phobius", "DeepTMHMM", "modification", "UniProt_site", "UniProt"]
 
 
 def _annotation_color_map(range_df):
@@ -690,8 +699,8 @@ def _annotation_color_map(range_df):
 def residue_colors_for_annotations(range_df, seq_len):
     """Unique color per Pfam/modification annotation for the __domains__ structure scheme.
 
-    Phobius is intentionally excluded here — it has its own __phobius__ colorscheme.
-    Returns (per_residue_colors, legend_items).
+    Topology sources (Phobius/DeepTMHMM) are intentionally excluded here — they have
+    their own __topology__ colorscheme. Returns (per_residue_colors, legend_items).
     """
     color_map = _annotation_color_map(range_df)
     colors = ["#e8e8e8"] * seq_len
@@ -717,15 +726,20 @@ def residue_colors_for_annotations(range_df, seq_len):
     return colors, legend_items
 
 
-def residue_colors_for_phobius(range_df, seq_len):
-    """Color structure by Phobius topology region using the shared annotation palette.
+def residue_colors_for_topology(range_df, seq_len):
+    """Color structure by topology region (Phobius and/or DeepTMHMM) using the
+    shared annotation palette. A run may carry either source, or both — both
+    are painted, and legend labels keep each row's source distinguishable
+    (e.g. Phobius's "Transmembrane" vs. DeepTMHMM's "TMhelix" are different
+    words describing the same concept, by design; see
+    ~/.claude/plans/i-m-considering-a-large-humble-sun.md).
 
     Returns (per_residue_colors, legend_items).
     """
     color_map = _annotation_color_map(range_df)
     colors = ["#e8e8e8"] * seq_len
-    for _, row in range_df[range_df["source"] == "Phobius"].iterrows():
-        key = ("Phobius", str(row["description"]))
+    for _, row in range_df[range_df["source"].isin(TOPOLOGY_SOURCES)].iterrows():
+        key = (str(row["source"]), str(row["description"]))
         color = color_map.get(key)
         if color is None:
             continue
@@ -733,9 +747,9 @@ def residue_colors_for_phobius(range_df, seq_len):
         stop = min(stop, seq_len)
         colors[start - 1:stop] = [color] * (stop - (start - 1))
     legend_items = [
-        {"color": color, "label": desc}
+        {"color": color, "label": f"{desc} ({src})"}
         for (src, desc), color in color_map.items()
-        if src == "Phobius"
+        if src in TOPOLOGY_SOURCES
     ]
     return colors, legend_items
 
@@ -863,8 +877,8 @@ def build_plot_payload(aa_df, range_df, iso_result=None, title="Results"):
     Returns a dict with lineTracks, rangeFeatures, isoformPane, and title, ready for
     JSON serialization. NaN values in aa_df are converted to None (→ null in JSON).
     """
-    y_positions = {"Phobius": 1, "Pfam": 3, "modification": 5, "hydrophobic_patch": 7,
-                   "UniProt": 9, "UniProt_site": 11}
+    y_positions = {"Phobius": 1, "DeepTMHMM": 3, "Pfam": 5, "modification": 7,
+                   "hydrophobic_patch": 9, "UniProt": 11, "UniProt_site": 13}
 
     line_tracks = []
     data_max = -float("inf")

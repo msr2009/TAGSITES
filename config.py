@@ -43,11 +43,16 @@ ANALYSIS_COLORS["hydrophobic"] = ["#b2182b", "#2166ac", "#762a83"]
 # stable colors for domain/annotation sources (not task-type-keyed, stays in config)
 DOMAIN_SOURCE_COLORS = {
     "Phobius":      "#9467bd",   # purple
+    "DeepTMHMM":    "#e377c2",   # pink — local topology backend, sits alongside Phobius
     "Pfam":         "#17becf",   # teal
     "modification": "#d62728",   # red
     "UniProt":      "#795548",   # brown — blocking features (lipidation, propeptide, ...)
     "UniProt_site": "#8d6e63",   # lighter brown — informational features (binding site, motif, ...)
 }
+
+# sources that describe protein topology (transmembrane/signal/orientation) — a run
+# may carry either or both; see utils/results.py and utils/tag_filters.py
+TOPOLOGY_SOURCES = ("Phobius", "DeepTMHMM")
 
 # isoform classification colors (constitutive → green, intermediate → amber, unique → red)
 ISOFORM_CLASS_COLORS = {

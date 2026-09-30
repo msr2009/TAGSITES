@@ -64,8 +64,9 @@ if __name__ == "__main__":
                         help="comma-separated isoform accessions/names, used with "
                              "--isoform-mode tagged")
     parser.add_argument("--topology", default=None, dest="TOPOLOGY",
-                        help="comma-separated Phobius topology labels to restrict to, "
-                             "e.g. Cytoplasmic (default: no topology restriction)")
+                        help="comma-separated topology labels to restrict to (Phobius, e.g. "
+                             "Cytoplasmic, and/or DeepTMHMM, e.g. inside/outside/TMhelix/signal; "
+                             "default: no topology restriction)")
     args = parser.parse_args()
 
     isoforms = [s.strip() for s in args.ISOFORMS.split(",")] if args.ISOFORMS else None

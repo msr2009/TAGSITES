@@ -81,6 +81,14 @@
 			"params": {}
 		},
 
+		"topology": {
+			"script":        "topology.py",
+			"result_type":   "range",
+			"output_suffix": ".txt",
+			"selectable":    true,
+			"params": {}
+		},
+
 		"uniprot": {
 			"script":        "uniprot_features.py",
 			"result_type":   "range",
