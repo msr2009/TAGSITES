@@ -16,13 +16,14 @@
 	},
 
 	"blast": {
-		"_comment": "evalue_region is deliberately permissive: a short but perfectly identical duplicated segment can score worse than 1e-5, so real hits are kept and removed later by the post_filter block instead of by BLAST statistics. evalue_spacer must be very loose because a 20 nt match has a poor E-value even when perfect. wordsize_spacer is attempted first and falls back to wordsize_fallback if EBI rejects it.",
+		"_comment": "evalue_region is deliberately permissive: a short but perfectly identical duplicated segment can score worse than 1e-5, so real hits are kept and removed later by the post_filter block instead of by BLAST statistics. evalue_spacer must be very loose because a 20 nt match has a poor E-value even when perfect. wordsize_spacer is attempted first and falls back to wordsize_fallback if EBI rejects it. poll_max_interval caps ebi_rest.run_job's exponential backoff: its 60 s default means a job finishing at 356 s is not noticed until 401 s, and these jobs routinely run for minutes (snt-1 region 173 s, col-103 764 s), so 20 s trades a few extra status checks for most of that lag.",
 		"evalue_region":    "1e-2",
 		"evalue_spacer":    "1000",
 		"wordsize_region":  11,
 		"wordsize_spacer":  7,
 		"wordsize_fallback": 11,
-		"alignments":       500
+		"alignments":       500,
+		"poll_max_interval": 20
 	},
 
 	"post_filter": {

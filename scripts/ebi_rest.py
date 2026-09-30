@@ -136,7 +136,7 @@ def fmt_exp(value):
     return f"{mantissa}e{exp_sign}{exp_digits}"
 
 
-def run_job(base_url, params, poll_cb=None, poll_interval=5, backoff=1.5, max_interval=60,
+def run_job(base_url, params, poll_cb=None, poll_interval=5, backoff=1.5, max_interval=20,
             max_wait=7200):
     """Submit a job, poll until FINISHED, return the jobId.
 
@@ -146,6 +146,14 @@ def run_job(base_url, params, poll_cb=None, poll_interval=5, backoff=1.5, max_in
     QUEUED/RUNNING after max_wait seconds of polling (default 2h) — a wall-clock
     safety valve so a job stuck at the EBI end doesn't poll forever; pass
     max_wait=None to disable it and poll indefinitely as before.
+
+    max_interval caps the exponential backoff. It was 60 s, which meant a job
+    finishing at 356 s was not noticed until 401 s — pure dead time after EBI had
+    already finished. Measured region blastn runs are 173 s (snt-1), 260 s
+    (snap-29) and 764 s (col-103), and Genewise/InterProScan/Clustal Omega are
+    comparable, so every task was paying up to a minute per job and the reagents
+    task pays it four times over (two Genewise + two blastn). At 20 s the lag
+    drops to ~17 s for the cost of a few extra cheap status checks.
     """
     job_id = submit(base_url, params)
     if poll_cb:

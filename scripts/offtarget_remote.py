@@ -96,7 +96,8 @@ def _blast_params(email, sequence, database, taxid, evalue, wordsize, alignments
 
 
 def _submit(sequence, email, database, taxid, evalue, wordsize, alignments,
-            reporter, stage, job_id_cb, job_index, resume_id, wordsize_fallback=None):
+            reporter, stage, job_id_cb, job_index, resume_id, wordsize_fallback=None,
+            poll_max_interval=20):
     """Run one blastn job (or resume it); returns (state, payload)."""
     if resume_id:
         _report(reporter, "Checking previously-submitted blastn job…", stage=stage)
@@ -107,8 +108,12 @@ def _submit(sequence, email, database, taxid, evalue, wordsize, alignments,
         ebi_rest.indexed_job_id_cb(job_id_cb, job_index),
         timed_poll_adapter(reporter, stage=stage),
     )
+    # run_job backs off to a 60 s poll by default, which adds up to a minute of dead
+    # waiting after EBI has already finished. These jobs run for minutes, so a tighter
+    # cap costs a handful of extra status checks and removes most of that lag.
     try:
-        job_id = ebi_rest.run_job(ebi_rest.NCBIBLAST, params, poll_cb=poll_cb)
+        job_id = ebi_rest.run_job(ebi_rest.NCBIBLAST, params, poll_cb=poll_cb,
+                                  max_interval=poll_max_interval)
     except Exception as e:
         # A word size below EBI's nucleotide default may be rejected outright; retry
         # once at the documented value rather than losing the whole screen
@@ -117,7 +122,8 @@ def _submit(sequence, email, database, taxid, evalue, wordsize, alignments,
         _report(reporter, "wordsize {} rejected ({}); retrying at {}".format(
             wordsize, e, wordsize_fallback), stage=stage, level="warning")
         params["wordsize"] = wordsize_fallback
-        job_id = ebi_rest.run_job(ebi_rest.NCBIBLAST, params, poll_cb=poll_cb)
+        job_id = ebi_rest.run_job(ebi_rest.NCBIBLAST, params, poll_cb=poll_cb,
+                                  max_interval=poll_max_interval)
     return "finished", ebi_rest.fetch_result(ebi_rest.NCBIBLAST, job_id, _RESULT_TYPE)
 
 
@@ -149,7 +155,8 @@ def run_region_screen(region_seq, email, taxid, exons=None, cfg=None, report=Non
         region_seq, email, database, taxid, blast["evalue_region"],
         blast["wordsize_region"], blast["alignments"], reporter,
         "offtarget_region", job_id_cb, JOB_INDEX_REGION,
-        _resume_at(resume_job_ids, JOB_INDEX_REGION))
+        _resume_at(resume_job_ids, JOB_INDEX_REGION),
+        poll_max_interval=int(blast.get("poll_max_interval", 20)))
     if state in ("pending", "expired"):
         return {"ebi_status": state, "detail": payload}
 
@@ -216,7 +223,8 @@ def run_spacer_screen(spacers, email, taxid, pam="NGG", cfg=None, report=None,
         blast["wordsize_spacer"], blast["alignments"], reporter,
         "offtarget_spacer", job_id_cb, JOB_INDEX_SPACER,
         _resume_at(resume_job_ids, JOB_INDEX_SPACER),
-        wordsize_fallback=blast["wordsize_fallback"])
+        wordsize_fallback=blast["wordsize_fallback"],
+        poll_max_interval=int(blast.get("poll_max_interval", 20)))
     if state in ("pending", "expired"):
         return {"ebi_status": state, "detail": payload}
 
