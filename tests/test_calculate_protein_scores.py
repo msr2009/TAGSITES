@@ -34,13 +34,13 @@ class TestLoadScores:
 
     def test_full_table_all_standard_aas(self):
         """The real hydrophobicity table must contain all 20 standard AAs."""
-        scores = load_scores(REPO_ROOT / "tables" / "hydrophobicity_kyle-doolittle.tsv")
+        scores = load_scores(REPO_ROOT / "tables" / "hydrophobicity_kyte-doolittle.tsv")
         standard = set("ACDEFGHIKLMNPQRSTVWY")
         missing = standard - set(scores.keys())
         assert not missing, f"Missing AAs in score table: {missing}"
 
     def test_full_table_values_are_floats(self):
-        scores = load_scores(REPO_ROOT / "tables" / "hydrophobicity_kyle-doolittle.tsv")
+        scores = load_scores(REPO_ROOT / "tables" / "hydrophobicity_kyte-doolittle.tsv")
         for aa, val in scores.items():
             assert isinstance(val, float), f"value for {aa} is not float: {val}"
 
@@ -85,7 +85,7 @@ class TestCalculatePropertySlidingWindow:
 
     def test_real_sequence_with_full_table(self):
         """Smoke-test: full hydrophobicity table on SNB-1 sequence."""
-        scores = load_scores(REPO_ROOT / "tables" / "hydrophobicity_kyle-doolittle.tsv")
+        scores = load_scores(REPO_ROOT / "tables" / "hydrophobicity_kyte-doolittle.tsv")
         seq = "MDAQGDAGAQGGSQGGPRPSNKRLQQTQAQVDEVVGIMKVNVEKVLERDQKLSQ"
         result = calculate_property_sliding_window(seq, 5, scores)
         assert len(result) == len(seq) - 5 + 1

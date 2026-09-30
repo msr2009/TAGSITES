@@ -55,7 +55,7 @@ utils/
 
 tables/
   modification_sites.txt           # regex patterns for PTM sites
-  hydrophobicity_kyle-doolittle.tsv # amino acid property scores
+  hydrophobicity_kyte-doolittle.tsv # amino acid property scores
 
 params/
   worm_default.json   # example saved analyses preset (C. elegans) — not auto-loaded

@@ -304,7 +304,7 @@ def test_full_pipeline_all_tasks(DATA, email, tmp_path):
     mods_args = task_defaults("modifications")
     domains_args = task_defaults("domains")
     scores_args = {**task_defaults("scores"),
-                   "scores_file": str(REPO_ROOT / "tables" / "hydrophobicity_kyle-doolittle.tsv")}
+                   "scores_file": str(REPO_ROOT / "tables" / "hydrophobicity_kyte-doolittle.tsv")}
 
     task_entries = [
         build_task_entry("BLAST_blast", "blast", blast_args,

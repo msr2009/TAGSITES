@@ -96,7 +96,8 @@ def test_no_none_recut_method(snb1_df):
 
 
 def test_valid_recut_methods(snb1_df):
-    valid = {"syn_1", "mut_1", "insertion"}
+    # 'syn_seed' is rung (d) of the recut-blocking ladder, added in 30dc5b7
+    valid = {"syn_1", "mut_1", "insertion", "syn_seed"}
     bad = set(snb1_df["recut_block_method"].unique()) - valid
     assert not bad, f"unexpected recut methods: {bad}"
 
