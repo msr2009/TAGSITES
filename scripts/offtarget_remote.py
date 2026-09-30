@@ -44,6 +44,25 @@ JOB_INDEX_SPACER = 3
 
 _RESULT_TYPE = "json"       # must match between resume_job() and fetch_result()
 
+# EBI validates `exp` against this exact list of strings — it is NOT free-form. Note
+# ebi_rest.fmt_exp() must NOT be used here: it rewrites "1000" as "1e3", which EBI
+# rejects ('Value for "exp" is not valid'). Verified against the live service.
+EXP_ALLOWED = {
+    "1e-200", "1e-100", "1e-50", "1e-10", "1e-5", "1e-4", "1e-3",
+    "1e-2", "1e-1", "1.0", "10", "100", "1000",
+}
+
+
+def _exp_value(value):
+    """Coerce a configured E-value to one of EBI's accepted literals."""
+    s = str(value).strip()
+    if s in EXP_ALLOWED:
+        return s
+    # fall back to the loosest threshold rather than failing the whole screen
+    raise ValueError(
+        "offtarget.config.json E-value {!r} is not one of EBI's accepted values: "
+        "{}".format(s, ", ".join(sorted(EXP_ALLOWED))))
+
 
 def database_for_taxid(taxid, cfg):
     """Pick the ENA division for a taxid; returns (database, is_fallback)."""
@@ -66,7 +85,7 @@ def _blast_params(email, sequence, database, taxid, evalue, wordsize, alignments
         # alignments and scores must agree or EBI returns an empty hit list
         "alignments": alignments,
         "scores":     alignments,
-        "exp":        ebi_rest.fmt_exp(evalue),
+        "exp":        _exp_value(evalue),
         "wordsize":   wordsize,
         "task":       "blastn",     # traditional blastn; megablast is too strict for paralogs
     }
@@ -102,46 +121,45 @@ def _submit(sequence, email, database, taxid, evalue, wordsize, alignments,
     return "finished", ebi_rest.fetch_result(ebi_rest.NCBIBLAST, job_id, _RESULT_TYPE)
 
 
-def run_screens(region_seq, spacers, email, taxid, sidecar_path, exons=None,
-                pam="NGG", cfg=None, report=None, job_id_cb=None, resume_job_ids=None,
-                run_spacer_screen=True):
-    """Run both screens and write the sidecar; returns the sidecar dict.
+def _resume_at(resume_job_ids, i):
+    """The persisted EBI job id for submission index i, or None."""
+    resume = list(resume_job_ids or [])
+    return resume[i] if len(resume) > i and resume[i] else None
 
-    Returns {"ebi_status": ...} instead when a job is still queued or has expired,
-    matching the sentinel that progress_server.py uses to resume a task.
+
+def run_region_screen(region_seq, email, taxid, exons=None, cfg=None, report=None,
+                      job_id_cb=None, resume_job_ids=None):
+    """Screen A: the whole region as one query, finding duplicated segments.
+
+    Returns a dict of results, or {"ebi_status": ...} when the job is still queued
+    or has expired — the sentinel progress_server.py uses to resume a task.
     """
     cfg = cfg or ots.load_config()
     reporter = resolve_reporter(report)
-    resume = list(resume_job_ids or [])
-
-    def _resume_at(i):
-        return resume[i] if len(resume) > i and resume[i] else None
-
     database, is_fallback = database_for_taxid(taxid, cfg)
     if is_fallback:
         _report(reporter, "No ENA division mapped for taxid {}; using {} — transcript "
                           "divisions are in scope and hits will be noisier".format(taxid, database),
-                stage="offtarget", level="warning")
+                stage="offtarget_region", level="warning")
 
-    blast, pf, sq = cfg["blast"], cfg["post_filter"], cfg["spacer_query"]
-
-    # ── Screen A: region homology ────────────────────────────────────────────
+    blast = cfg["blast"]
     _report(reporter, "Submitting region off-target blastn ({} bp vs {}, taxid {})".format(
         len(region_seq), database, taxid or "unscoped"), stage="offtarget_region")
     state, payload = _submit(
         region_seq, email, database, taxid, blast["evalue_region"],
         blast["wordsize_region"], blast["alignments"], reporter,
-        "offtarget_region", job_id_cb, JOB_INDEX_REGION, _resume_at(JOB_INDEX_REGION))
+        "offtarget_region", job_id_cb, JOB_INDEX_REGION,
+        _resume_at(resume_job_ids, JOB_INDEX_REGION))
     if state in ("pending", "expired"):
         return {"ebi_status": state, "detail": payload}
 
-    region_hsps = ots.parse_blast_json(payload)
-    ots.classify_hsps(region_hsps, len(region_seq), exons or [], cfg)
-    region_hsps, n_dropped = ots.apply_post_filter(region_hsps, cfg)
-    dups = ots.duplicates(region_hsps)
-    identical = ots.identical_segments(region_hsps, cfg)
-    n_self = sum(1 for h in region_hsps if h["klass"] == "self")
-    n_tx = sum(1 for h in region_hsps if h["klass"] == "transcript")
+    hsps = ots.parse_blast_json(payload)
+    ots.classify_hsps(hsps, len(region_seq), exons or [], cfg)
+    hsps, n_dropped = ots.apply_post_filter(hsps, cfg)
+    dups = ots.duplicates(hsps)
+    identical = ots.identical_segments(hsps, cfg)
+    n_self = sum(1 for h in hsps if h["klass"] == "self")
+    n_tx = sum(1 for h in hsps if h["klass"] == "transcript")
     _report(reporter, "Region screen: {} duplicated segment(s) ({} identical), "
                       "{} self, {} transcript, {} below thresholds".format(
                           len(dups), len(identical), n_self, n_tx, n_dropped),
@@ -152,49 +170,94 @@ def run_screens(region_seq, spacers, email, taxid, sidecar_path, exons=None,
                               len(identical), cfg["identical"]["identical_min_len"]),
                 stage="offtarget_region", level="warning")
 
-    # ── Screen B: concatenated spacers ──────────────────────────────────────
-    spacer_hits = {}
-    spacer_list = list(spacers or [])[: int(sq["max_spacers"])]
-    block_len = 0
-    if run_spacer_screen and spacer_list:
-        query, block_len = ots.build_spacer_query(spacer_list, sq["separator_len"])
-        _report(reporter, "Submitting spacer off-target blastn ({} spacers, {} bp)".format(
-            len(spacer_list), len(query)), stage="offtarget_spacer")
-        state, payload = _submit(
-            query, email, database, taxid, blast["evalue_spacer"],
-            blast["wordsize_spacer"], blast["alignments"], reporter,
-            "offtarget_spacer", job_id_cb, JOB_INDEX_SPACER, _resume_at(JOB_INDEX_SPACER),
-            wordsize_fallback=blast["wordsize_fallback"])
-        if state in ("pending", "expired"):
-            return {"ebi_status": state, "detail": payload}
-        raw = ots.parse_blast_json(payload)
-        spacer_hits = ots.screen_spacer_hits(
-            raw, spacer_list, block_len, sq["separator_len"], pam, cfg)
-        _report(reporter, "Spacer screen: {} of {} spacers have a near-match".format(
-            len(spacer_hits), len(spacer_list)), stage="offtarget_spacer")
-
-    sidecar = {
-        "_meta": {
-            "taxid":         str(taxid),
-            "database":      database,
-            "database_is_fallback": is_fallback,
-            "region_len":    len(region_seq),
-            "pam":           pam,
-            "blast":         blast,
-            "post_filter":   pf,
-            "n_below_threshold": n_dropped,
-            "spacer_block_len":  block_len,
-            "spacer_separator_len": sq["separator_len"],
-        },
-        "duplicates": dups,
-        "identical":  identical,
+    return {
+        "database":     database,
+        "is_fallback":  is_fallback,
+        "duplicates":   dups,
+        "identical":    identical,
         # kept for visibility but never counted; a paralog whose only ENA record is
         # an mRNA would land here, which is the known blind spot of this screen
-        "excluded":   [h for h in region_hsps if h["klass"] in ("self", "transcript")],
-        "spacers":    spacer_list,
-        "spacer_hits": {str(k): v for k, v in spacer_hits.items()},
+        "excluded":     [h for h in hsps if h["klass"] in ("self", "transcript")],
+        # Screen B needs these to drop each guide's own on-target site
+        "self_spans":   ots.self_spans(hsps),
+        # records that ARE our locus (own-gene mRNAs, every assembly copy)
+        "own_accessions": sorted(ots.own_locus_accessions(hsps)),
+        "n_below_threshold": n_dropped,
     }
-    Path(sidecar_path).write_text(json.dumps(sidecar, indent=1))
+
+
+def run_spacer_screen(spacers, email, taxid, pam="NGG", cfg=None, report=None,
+                      job_id_cb=None, resume_job_ids=None, self_spans=None,
+                      own_accessions=None):
+    """Screen B: all spacers in one query, finding scattered near-matches.
+
+    Call this with only the guides that actually reach the output — a region holds
+    hundreds of candidates but the user sees a handful per site, and query length
+    drives both EBI queue time and hit volume.
+    """
+    cfg = cfg or ots.load_config()
+    reporter = resolve_reporter(report)
+    sq, blast = cfg["spacer_query"], cfg["blast"]
+    spacer_list = list(spacers or [])[: int(sq["max_spacers"])]
+    if not spacer_list:
+        return {"spacer_hits": {}, "spacers": [], "block_len": 0}
+    if len(spacers or []) > len(spacer_list):
+        _report(reporter, "Screening the first {} of {} spacers (max_spacers)".format(
+            len(spacer_list), len(spacers)), stage="offtarget_spacer", level="warning")
+
+    database, _ = database_for_taxid(taxid, cfg)
+    query, block_len = ots.build_spacer_query(spacer_list, sq["separator_len"])
+    _report(reporter, "Submitting spacer off-target blastn ({} spacers, {} bp, "
+                      "wordsize {})".format(len(spacer_list), len(query),
+                                            blast["wordsize_spacer"]),
+            stage="offtarget_spacer")
+    state, payload = _submit(
+        query, email, database, taxid, blast["evalue_spacer"],
+        blast["wordsize_spacer"], blast["alignments"], reporter,
+        "offtarget_spacer", job_id_cb, JOB_INDEX_SPACER,
+        _resume_at(resume_job_ids, JOB_INDEX_SPACER),
+        wordsize_fallback=blast["wordsize_fallback"])
+    if state in ("pending", "expired"):
+        return {"ebi_status": state, "detail": payload}
+
+    raw = ots.parse_blast_json(payload)
+    hits, n_self = ots.screen_spacer_hits(
+        raw, spacer_list, block_len, sq["separator_len"], pam, cfg,
+        exclude_spans=self_spans, exclude_accessions=set(own_accessions or []))
+    if not self_spans:
+        _report(reporter, "No self-locus coordinates available, so each guide's own "
+                          "on-target site is counted as a hit — counts are inflated",
+                stage="offtarget_spacer", level="warning")
+    _report(reporter, "Spacer screen: {} of {} spacers have an off-target near-match "
+                      "({} on-target matches excluded)".format(
+                          len(hits), len(spacer_list), n_self),
+            stage="offtarget_spacer")
+    return {"spacer_hits": hits, "spacers": spacer_list, "block_len": block_len}
+
+
+def write_sidecar(path, region, spacer, taxid, region_len, pam, cfg):
+    """Write the parsed hits beside the reagents TSV for the UI to reuse."""
+    sq = cfg["spacer_query"]
+    sidecar = {
+        "_meta": {
+            "taxid":                 str(taxid),
+            "database":              region.get("database", ""),
+            "database_is_fallback":  region.get("is_fallback", False),
+            "region_len":            region_len,
+            "pam":                   pam,
+            "blast":                 cfg["blast"],
+            "post_filter":           cfg["post_filter"],
+            "n_below_threshold":     region.get("n_below_threshold", 0),
+            "spacer_block_len":      spacer.get("block_len", 0),
+            "spacer_separator_len":  sq["separator_len"],
+        },
+        "duplicates":  region.get("duplicates", []),
+        "identical":   region.get("identical", []),
+        "excluded":    region.get("excluded", []),
+        "spacers":     spacer.get("spacers", []),
+        "spacer_hits": {str(k): v for k, v in (spacer.get("spacer_hits") or {}).items()},
+    }
+    Path(path).write_text(json.dumps(sidecar, indent=1))
     return sidecar
 
 

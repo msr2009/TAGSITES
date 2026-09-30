@@ -151,57 +151,61 @@ def _exon_intervals(cds_df):
     return [(int(r['start']), int(r['stop']) + 1) for _, r in cds_df.iterrows()]
 
 
-def _run_offtarget(dna, guides, guide_length, pam, taxid, email, sidecar_path,
-                   cds_df, cfg, reporter, job_id_cb, resume_job_ids):
-    """Run the off-target screens; returns (status, hsps, spacer_hits, spacer_index, pending).
-
-    pending is the {"ebi_status": ...} sentinel when a job is still queued, which the
-    caller must return unchanged so progress_server.py can resume the task.
-    """
+def _offtarget_preconditions(taxid, email, reporter):
+    """True when an off-target screen can run at all (needs a species and an email)."""
     if not taxid or str(taxid).strip() in ('1', '1.0', 'None'):
         _report(reporter, 'Off-target screen skipped: no species taxid for this run',
                 stage='offtarget', level='warning')
-        return 'not_checked', [], {}, {}, None
+        return False
     if not email:
         _report(reporter, 'Off-target screen skipped: EBI submissions require an email',
                 stage='offtarget', level='warning')
-        return 'not_checked', [], {}, {}, None
+        return False
+    return True
 
-    # imported here rather than at module top so the CLI still runs with no network
-    # stack available, matching how the other remote backends are reached
+
+def _run_region_screen(dna, taxid, email, cds_df, cfg, reporter, job_id_cb, resume_job_ids):
+    """Screen A. Returns (status, region_result, pending_sentinel)."""
+    if not _offtarget_preconditions(taxid, email, reporter):
+        return 'not_checked', {}, None
+
+    # imported here rather than at module top so the CLI still runs when no network
+    # stack is available, matching how the other remote backends are reached
     import offtarget_remote
 
-    # Screen only the guides that can actually appear in output rows, deduped —
-    # a region holds hundreds of candidates but the user sees a handful per site
-    spacer_index = {}
-    spacer_list = []
-    for g in guides:
-        key = guide_key(g)
-        if key in spacer_index:
-            continue
-        spacer_index[key] = len(spacer_list)
-        spacer_list.append(g['spacer'] + g['pam_seq'])
-
-    sidecar_path = sidecar_path or 'offtarget.json'
     try:
-        result = offtarget_remote.run_screens(
-            dna, spacer_list, email, taxid, sidecar_path,
-            exons=_exon_intervals(cds_df), pam=pam, cfg=cfg, report=reporter,
+        result = offtarget_remote.run_region_screen(
+            dna, email, taxid, exons=_exon_intervals(cds_df), cfg=cfg, report=reporter,
             job_id_cb=job_id_cb, resume_job_ids=resume_job_ids)
     except Exception as e:
         # A failed screen must never fail the whole reagents run, and must never
-        # look like "no off-targets found" — the status stays not_checked
-        _report(reporter, 'Off-target screen failed ({}: {}); guides will show as '
+        # look like "no off-targets found" — the status stays unscreened
+        _report(reporter, 'Off-target region screen failed ({}: {}); guides will show as '
                           'not checked'.format(type(e).__name__, e),
                 stage='offtarget', level='warning')
-        return 'failed', [], {}, {}, None
-
+        return 'failed', {}, None
     if isinstance(result, dict) and 'ebi_status' in result:
-        return 'pending', [], {}, {}, result
+        return 'pending', {}, result
+    return 'screened', result, None
 
-    hsps = result.get('duplicates', [])
-    spacer_hits = {int(k): v for k, v in (result.get('spacer_hits') or {}).items()}
-    return 'screened', hsps, spacer_hits, spacer_index, None
+
+def _run_spacer_screen(spacers, taxid, email, pam, cfg, reporter, job_id_cb,
+                       resume_job_ids, self_spans=None, own_accessions=None):
+    """Screen B. Returns (spacer_result, pending_sentinel)."""
+    import offtarget_remote
+    try:
+        result = offtarget_remote.run_spacer_screen(
+            spacers, email, taxid, pam=pam, cfg=cfg, report=reporter,
+            job_id_cb=job_id_cb, resume_job_ids=resume_job_ids, self_spans=self_spans,
+            own_accessions=own_accessions)
+    except Exception as e:
+        _report(reporter, 'Off-target spacer screen failed ({}: {}); only the region '
+                          'screen contributes'.format(type(e).__name__, e),
+                stage='offtarget', level='warning')
+        return {}, None
+    if isinstance(result, dict) and 'ebi_status' in result:
+        return {}, result
+    return result, None
 
 
 def _amplicon_detail(amps):
@@ -355,15 +359,14 @@ def design_reagents(
     # Annotation only: nothing below selects or orders guides by these results.
     ot_cfg = load_offtarget_config()
     ot_hsps = []
-    ot_spacer_hits = {}
-    ot_spacer_index = {}
+    ot_region = {}
     ot_status = 'not_checked'
     if offtarget:
-        ot_status, ot_hsps, ot_spacer_hits, ot_spacer_index, pending = _run_offtarget(
-            dna, guides, guide_length, pam, taxid, email, offtarget_sidecar,
-            cds_df, ot_cfg, reporter, job_id_cb, resume_job_ids)
+        ot_status, ot_region, pending = _run_region_screen(
+            dna, taxid, email, cds_df, ot_cfg, reporter, job_id_cb, resume_job_ids)
         if pending:
             return pending
+        ot_hsps = ot_region.get('duplicates', [])
 
     pam_len = len(pam)
     rows = []
@@ -469,13 +472,15 @@ def design_reagents(
                 region_hit = screen_guide(ot_hsps, {'pam_fwd_start': pam_fwd_start,
                                                     'guide_strand': g['strand']},
                                           guide_length, pam, ot_cfg)
-                spacer_sites = ot_spacer_hits.get(ot_spacer_index.get(gkey, -1), [])
-                ot_n = region_hit['n_total'] + len(spacer_sites)
-                ot_ident = region_hit['n_identical'] + sum(
-                    1 for s in spacer_sites if s['perfect'] and s['pam_ok'])
-                ot_unver = region_hit['n_pam_unverified'] + sum(
-                    1 for s in spacer_sites if s['pam_unverified'])
+                ot_n = region_hit['n_total']
+                ot_ident = region_hit['n_identical']
+                ot_unver = region_hit['n_pam_unverified']
             rows.append({
+                # carried so the spacer screen, which runs once the kept guides are
+                # known, can add its counts without re-deriving the guide identity
+                '_gkey':               gkey,
+                '_spacer_pam':         g['spacer'] + g['pam_seq'],
+                '_ot_unver':           ot_unver,
                 'residue_index':       int(site['residue_index']),
                 'amino_acid':          site['amino_acid'],
                 'insert_pos':          insert_pos,
@@ -508,6 +513,47 @@ def design_reagents(
             n_kept += 1
 
     df = pd.DataFrame(rows)
+
+    # 5d. Screen B runs HERE, not before the loop: only now are the guides that
+    # actually reach the output known. Screening every candidate in the region would
+    # be a ~4x longer query (measured: 570 candidates vs 131 kept for snt-1) for hits
+    # on guides the user never sees.
+    ot_spacer = {}
+    if ot_status == 'screened' and not df.empty:
+        wanted = {}
+        for gkey, spacer_pam in zip(df['_gkey'], df['_spacer_pam']):
+            wanted.setdefault(gkey, spacer_pam)
+        spacer_result, pending = _run_spacer_screen(
+            list(wanted.values()), taxid, email, pam, ot_cfg, reporter,
+            job_id_cb, resume_job_ids, self_spans=ot_region.get('self_spans'),
+            own_accessions=ot_region.get('own_accessions'))
+        if pending:
+            return pending
+        ot_spacer = spacer_result
+        hits = spacer_result.get('spacer_hits') or {}
+        order = list(wanted)
+        by_gkey = {order[i]: v for i, v in hits.items() if i < len(order)}
+        # fold the spacer counts into the per-row totals from the region screen
+        df['offtarget_count'] = [
+            c + len(by_gkey.get(k, [])) if c != '' else c
+            for c, k in zip(df['offtarget_count'], df['_gkey'])]
+        df['offtarget_identical'] = [
+            c + sum(1 for s in by_gkey.get(k, []) if s['perfect'] and s['pam_ok'])
+            if c != '' else c
+            for c, k in zip(df['offtarget_identical'], df['_gkey'])]
+        df['offtarget_detail'] = [
+            offtarget_summarise(
+                n, i, u + sum(1 for s in by_gkey.get(k, []) if s['pam_unverified']))
+            if n != '' else ''
+            for n, i, u, k in zip(df['offtarget_count'], df['offtarget_identical'],
+                                  df['_ot_unver'], df['_gkey'])]
+
+    if ot_status == 'screened' and offtarget_sidecar:
+        import offtarget_remote
+        offtarget_remote.write_sidecar(offtarget_sidecar, ot_region, ot_spacer,
+                                       taxid, len(dna), pam, ot_cfg)
+    df = df.drop(columns=[c for c in ('_gkey', '_spacer_pam', '_ot_unver') if c in df],
+                 errors='ignore')
 
     # Short-arm check: only runs when protein_length is provided (same gate as
     # the coverage check above).  If any reagent has an arm shorter than half

@@ -296,16 +296,49 @@ def test_screen_spacer_hits_maps_back_to_the_right_spacer():
     # An HSP over the second block only
     start = block + 25
     h = mk(spacers[1], spacers[1], q_from=start + 1)
-    out = ots.screen_spacer_hits([h], spacers, block, 25, cfg=CFG)
+    out, n_self = ots.screen_spacer_hits([h], spacers, block, 25, cfg=CFG)
     assert list(out) == [1] and out[1][0]["perfect"]
-    assert out[1][0]["screen"] == "spacer"
+    assert out[1][0]["screen"] == "spacer" and n_self == 0
 
 
 def test_screen_spacer_hits_ignores_hsp_straddling_a_separator():
     spacers = ["A" * 20 + "CGG", "C" * 20 + "CGG"]
     seq, block = ots.build_spacer_query(spacers, 25)
     straddle = mk("A" * 10, "A" * 10, q_from=block - 4)   # runs into the N-run
-    assert ots.screen_spacer_hits([straddle], spacers, block, 25, cfg=CFG) == {}
+    hits, _ = ots.screen_spacer_hits([straddle], spacers, block, 25, cfg=CFG)
+    assert hits == {}
+
+
+def test_spacer_screen_excludes_the_on_target_site():
+    """Without this every guide reports a perfect hit per copy of the source genome.
+
+    ENA carries six independent C. elegans genome submissions, so the on-target
+    alone produced a median of 7 spurious hits per guide before this exclusion.
+    """
+    spacers = ["ACGTACGTACGTACGTACGT" + "CGG"]
+    _, block = ots.build_spacer_query(spacers, 25)
+    on_target = mk(spacers[0], spacers[0], q_from=1, acc="CHR2", h_from=6828987)
+    spans = {"CHR2": [(6827016, 6836486)]}
+    hits, n_self = ots.screen_spacer_hits([on_target], spacers, block, 25,
+                                          cfg=CFG, exclude_spans=spans)
+    assert hits == {} and n_self == 1
+    # the same hit elsewhere on the same chromosome is a genuine off-target
+    elsewhere = mk(spacers[0], spacers[0], q_from=1, acc="CHR2", h_from=1_000_000)
+    hits, n_self = ots.screen_spacer_hits([elsewhere], spacers, block, 25,
+                                          cfg=CFG, exclude_spans=spans)
+    assert list(hits) == [0] and n_self == 0
+
+
+def test_self_spans_collects_per_accession():
+    a = mk("ACGT" * 50, "ACGT" * 50, acc="CHR2", h_from=1000, klass="self")
+    b = mk("ACGT" * 50, "ACGT" * 50, acc="CHR2", h_from=1150, klass="self")
+    c = mk("ACGT" * 50, "ACGT" * 50, acc="OTHER", h_from=50, klass="duplicate")
+    spans = ots.self_spans([a, b, c])
+    assert set(spans) == {"CHR2"}, "only self-classified hits define the on-target locus"
+    assert spans["CHR2"] == [(1000, 1349)], "overlapping self spans merge"
+    assert ots.in_self_span("CHR2", (1100, 1120), spans)
+    assert not ots.in_self_span("CHR2", (9000, 9020), spans)
+    assert not ots.in_self_span("OTHER", (60, 80), spans)
 
 
 # ── predicted amplicons ──────────────────────────────────────────────────────

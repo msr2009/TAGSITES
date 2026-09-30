@@ -72,9 +72,12 @@ _RS3_TIP = (
 _OT_TIP = (
     "Two taxid-scoped BLAST screens against ENA: the whole genomic region (finding "
     "duplicated segments, e.g. paralogous gene families) and all spacers in one query "
-    "(finding scattered near-matches). A site is counted only when its 3' end is intact, "
-    "mismatches are within threshold, and the off-target carries its own PAM. "
-    "\"identical\" means a perfect second copy — the guide will cut both. "
+    "(finding scattered near-matches). A site is counted only when its 3' end is intact and "
+    "mismatches are within threshold; the guide's own on-target site and its gene's own "
+    "transcript records are excluded, and one locus reported by several genome submissions "
+    "is counted once. \"identical\" means a perfect second copy — the guide will cut both. "
+    "Many scattered hits cannot have their PAM confirmed, because BLAST often does not "
+    "extend a short query that far; those are reported as unverified rather than assumed. "
     "This is a BLAST screen, not exhaustive mismatch enumeration with bulges as CRISPOR "
     "or Cas-OFFinder perform, so a count of 0 means \"nothing found\", not \"none exist\"."
 )

@@ -45,6 +45,14 @@ def load_config(path=None):
 
 # ── BLAST JSON parsing ────────────────────────────────────────────────────────
 
+def _hit_strand(hsp, h_from, h_to):
+    """Subject strand of an HSP, from hsp_strand when EBI supplies it."""
+    raw = str(hsp.get("hsp_strand", "") or "")
+    if "/" in raw:
+        return "-" if raw.split("/")[-1].strip().lower().startswith("minus") else "+"
+    return "-" if h_to < h_from else "+"
+
+
 def parse_blast_json(payload):
     """Flatten EBI ncbiblast JSON into one dict per HSP (see module docstring for coords)."""
     if isinstance(payload, (bytes, bytearray)):
@@ -64,9 +72,9 @@ def parse_blast_json(payload):
                 "q_to":      max(q_from, q_to),
                 "h_from":    h_from,
                 "h_to":      h_to,
-                # EBI reports hsp_hit_strand/hsp_strand inconsistently across versions;
-                # infer from coordinate order, which is unambiguous
-                "h_strand":  "-" if h_to < h_from else "+",
+                # EBI reports this as hsp_strand ("plus/plus", "plus/minus"); fall back
+                # to coordinate order, which is unambiguous, when it is absent
+                "h_strand":  _hit_strand(h, h_from, h_to),
                 "qseq":      h.get("hsp_qseq", "") or "",
                 "hseq":      h.get("hsp_hseq", "") or "",
                 "identity":  float(h.get("hsp_identity", 0) or 0),
@@ -228,6 +236,66 @@ def duplicates(hsps):
     return [h for h in hsps if h.get("klass") == "duplicate"]
 
 
+def self_spans(hsps, pad=0):
+    """Subject coordinates of the query's own locus, per accession.
+
+    Screen A identifies these as a side effect of recognising self-hits, and Screen B
+    needs them: a spacer trivially matches its own on-target site, and ENA carries
+    several independent submissions of the same genome (six for C. elegans), so
+    without this every guide reports roughly one spurious hit per assembly.
+    """
+    spans = {}
+    for h in hsps:
+        if h.get("klass") != "self":
+            continue
+        lo, hi = min(h["h_from"], h["h_to"]), max(h["h_from"], h["h_to"])
+        spans.setdefault(h["acc"], []).append((lo - pad, hi + pad))
+    return {acc: _merge(v) for acc, v in spans.items()}
+
+
+def in_self_span(acc, span, spans):
+    """True when a subject span lies inside the query's own locus on that accession."""
+    if not span or not spans:
+        return False
+    return any(span[0] >= lo and span[1] <= hi for lo, hi in spans.get(acc, []))
+
+
+def collapse_loci(sites):
+    """Collapse sites that are the same locus reported by different submissions.
+
+    ENA holds several independent assemblies per species (six for C. elegans), so a
+    single off-target is reported once per assembly — measured on snt-1, one real
+    site appeared as 5 hits. Two sites with the same matched subject sequence and
+    PAM are treated as one locus, and the contributing accessions are kept on the
+    representative so nothing is silently discarded.
+
+    Two genuinely distinct loci with byte-identical sequence would merge; that is
+    the accepted cost, and such a case is reported anyway by the region screen's
+    identical-segment warning.
+    """
+    by_sig = {}
+    for s in sites:
+        sig = (s.get("subject_seq", ""), s.get("pam"), s.get("mismatches"), s.get("gaps"))
+        if sig in by_sig:
+            by_sig[sig]["accessions"].append(s["acc"])
+            continue
+        rep = dict(s)
+        rep["accessions"] = [s["acc"]]
+        by_sig[sig] = rep
+    return list(by_sig.values())
+
+
+def own_locus_accessions(hsps):
+    """Accessions that are records OF the query's own locus, not other loci.
+
+    Transcript records of our own gene must be excluded wholesale rather than by
+    coordinate: an mRNA is our own exonic sequence, so every spacer in an exon
+    matches it. Measured on snt-1, one mRNA record (L15302.1) accounted for 87 of
+    110 apparent spacer off-targets.
+    """
+    return {h["acc"] for h in hsps if h.get("klass") in ("self", "transcript")}
+
+
 # ── Alignment window scoring ──────────────────────────────────────────────────
 
 def _column_index(hsp):
@@ -291,6 +359,9 @@ def score_window(hsp, start, end, three_prime_side, cfg=None):
         "flagged":         three_prime_ok and total <= int(sc["max_mismatch"]),
         "subject_span":    _subject_span(hsp, start, end),
         "h_strand":        hsp["h_strand"],
+        # the matched subject bases; used to collapse the same locus reported from
+        # several independent genome submissions of the same species
+        "subject_seq":     "".join(hs[c] for c in cols).upper(),
     }
 
 
@@ -385,6 +456,7 @@ def screen_guide(hsps, row, guide_length=20, pam="NGG", cfg=None):
         # so only PAM-bearing or PAM-unknown hits are reported as sites
         if hit["pam_ok"] or hit["pam_unverified"]:
             sites.append(hit)
+    sites = collapse_loci(sites)
     return {
         "sites":            sites,
         "n_total":          len(sites),
@@ -421,16 +493,21 @@ def block_of(query_pos, block_len, separator_len, n_blocks):
     return idx, off
 
 
-def screen_spacer_hits(hsps, spacers, block_len, separator_len, pam="NGG", cfg=None):
+def screen_spacer_hits(hsps, spacers, block_len, separator_len, pam="NGG", cfg=None,
+                       exclude_spans=None, exclude_accessions=None):
     """Map Screen B HSPs back to spacers; returns {spacer_index: [sites]}.
 
     The query here is spacer+PAM, so the PAM columns are part of the alignment and
     an off-target's PAM is verified the same way as in Screen A.
+
+    exclude_spans (from self_spans()) removes each guide's own on-target site. It is
+    not optional in practice: without it every guide reports a perfect PAM-bearing
+    "off-target" for every copy of the source genome in the database.
     """
     cfg = cfg or load_config()
-    sc = cfg["scoring"]
     n = len(spacers)
     by_spacer = {}
+    n_self = 0
     for h in hsps:
         start = block_of(h["q_from"], block_len, separator_len, n)
         end = block_of(h["q_to"], block_len, separator_len, n)
@@ -452,9 +529,16 @@ def screen_spacer_hits(hsps, spacers, block_len, separator_len, pam="NGG", cfg=N
         hit["pam_ok"] = pam_matches(bases, pam)
         hit["pam_unverified"] = bases is None
         hit["screen"] = "spacer"
+        # drop the guide's own on-target site, in whichever assembly it was matched,
+        # and any record that is itself our locus (our gene's own mRNA entries)
+        if (h["acc"] in (exclude_accessions or set())
+                or in_self_span(h["acc"], hit["subject_span"], exclude_spans)):
+            n_self += 1
+            continue
         if hit["pam_ok"] or hit["pam_unverified"]:
             by_spacer.setdefault(idx, []).append(hit)
-    return by_spacer
+    # one entry per distinct locus, not per database record
+    return {k: collapse_loci(v) for k, v in by_spacer.items()}, n_self
 
 
 # ── Primers: predicted spurious amplicons ─────────────────────────────────────
