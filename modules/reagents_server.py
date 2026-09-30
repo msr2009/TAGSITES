@@ -55,6 +55,15 @@ _GENOTYPING_FLANK_MIN = 50
 _GENOTYPING_FLANK_MAX = 150
 _GENOTYPING_MARGIN    = 60   # extra room beyond flank_max for primer3 to search
 
+# Hover guidance for the RS3 badge/label. Deliberately states the bands, the typical
+# range, and the two things the score is NOT, since a bare number invites over-reading.
+_RS3_TIP = (
+    "Rule Set 3 predicted Cas9 cutting efficiency (DeWeirdt et al. 2022). "
+    "Higher is better: above +0.5 is strong, −0.5 to +0.5 is typical, below −0.5 is weak. "
+    "Most NGG sites in a real locus score below 0, so a guide's rank among the region's "
+    "candidates is usually more informative than the raw value."
+)
+
 
 def _safe_id(s):
     """Strip non-alphanumeric characters for use in a Shiny input ID."""
@@ -967,7 +976,7 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                 ("Distance (bp)", str(dist)),
                 ("Recut block", str(row["recut_block_method"])),
                 ("Mutation", str(row["mutation_desc"]) or "—"),
-            ] + ([("RS3 score", rs3[2])] if rs3 else []) \
+            ] + ([(label_with_tip("RS3 score", _RS3_TIP), rs3[2])] if rs3 else []) \
               + [("Off-targets", offt[2])] \
               + ([("Isoforms", specificity)] if specificity else []):
                 meta_cells.append(ui.div(label, class_="param-label"))
@@ -978,7 +987,8 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                     ui.input_checkbox(cid, "Use this guide", value=best),
                     ui.span("Guide {}".format(i + 1), class_="fw-semibold"),
                     ui.span("{} bp from cut to insert".format(dist), class_="dist-badge"),
-                    ui.span(rs3[0], class_=rs3[1]) if rs3 else None,
+                    ui.tooltip(ui.span(rs3[0], class_=rs3[1]), _RS3_TIP,
+                               placement="top") if rs3 else None,
                     ui.span(offt[0], class_=offt[1]),
                     plasmid_warning_div,
                     class_="guide-header",
