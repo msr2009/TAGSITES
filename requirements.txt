@@ -1,8 +1,21 @@
+# shinyapps.io deployment manifest (see rsconnect-python/TAGSITES.json).
+# Keep in sync with environment.yml, which is the local/batch environment.
+#
+# The numpy / scikit-learn / lightgbm caps below exist ONLY because rs3
+# (Rule Set 3 guide scoring) pins them. Deploy from a Python 3.10 environment
+# so shinyapps.io provisions a matching interpreter. See CLAUDE.md
+# "Version pinning" before changing any of these.
+#
+# Batch-only dependencies (pyhmmer, diamond, mafft) are deliberately absent:
+# backends.domains/conservation default to "remote", so the deployed app never
+# imports the local backends.
 biopython
 pandas
-numpy
+numpy<=1.26.4          # capped by rs3
 scipy
-scikit-learn
+scikit-learn<=1.0.2    # capped by rs3; not imported by TAGSITES itself
+lightgbm<=3.3.5        # capped by rs3; RS3 backend
+rs3                    # Rule Set 3 guide scoring (scripts/guide_efficiency.py)
 matplotlib
 plotly
 requests

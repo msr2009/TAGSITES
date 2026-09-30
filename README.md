@@ -51,14 +51,16 @@ conda env create -f environment.yml
 conda activate tagsites
 ```
 
-> **Exact-pin reference:** `tagsites.yml` is a full osx-64 build-pinned export of the original
-> development environment. Use it on macOS to reproduce the exact environment:
-> `conda env create -f tagsites.yml`
+> **Python 3.10 is required, not incidental.** `environment.yml` pins Python 3.10 with
+> numpy 1.x, scikit-learn 1.0.2 and lightgbm 3.3.5. These caps exist solely because the
+> `rs3` package (Rule Set 3 guide scoring) requires them. See the "Version pinning" section
+> of `CLAUDE.md` before changing them — and note that RS3 fails soft, so dropping it is the
+> correct way out if the pins ever block a needed dependency.
 
-**Alternative: pip + venv** *(if you already have Python 3.12 and prefer not to use conda)*
+**Alternative: pip + venv** *(if you already have Python 3.10 and prefer not to use conda)*
 
 ```bash
-python3.12 -m venv .venv
+python3.10 -m venv .venv
 source .venv/bin/activate    # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```

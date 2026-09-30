@@ -39,4 +39,5 @@ dependencies:
   - pip:
     - ridgeplot
     - kaleido==0.2.1
-    - rs3           # Rule Set 3 guide scoring (scripts/guide_efficiency.py)
+    - rs3                 # Rule Set 3 guide scoring (scripts/guide_efficiency.py)
+    - rsconnect-python    # deploys the app to shinyapps.io (rsconnect-python/TAGSITES.json)
