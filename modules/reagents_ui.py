@@ -41,7 +41,8 @@ _STYLE = """
                    padding: 0.5rem 0.75rem; margin-bottom: 0.5rem; background: #fff; }
     .guide-panel.guide-best { border-color: #4a90d9; background: #f5f9ff; }
     .guide-header { font-size: 0.8rem; font-weight: 600; margin-bottom: 0.4rem;
-                    display: flex; align-items: center; gap: 0.5rem; }
+                    display: flex; align-items: center; gap: 0.5rem;
+                    flex-wrap: wrap; }   /* several badges now share this row */
     .dist-badge { font-size: 0.7rem; background: #e9ecef; border-radius: 3px;
                   padding: 1px 6px; color: #495057; }
     .iso-badge { font-size: 0.7rem; background: #d1e7dd; border-radius: 3px;
@@ -55,6 +56,15 @@ _STYLE = """
     .rs3-medium { background: #e9ecef; color: #495057; }
     .rs3-low    { background: #fff3cd; color: #856404; }
     .rs3-na     { background: #e9ecef; color: #6c757d; }
+
+    /* Off-target screen. 'ot-na' (nothing checked yet) is muted rather than green so an
+       unscreened guide never looks vetted; 'ot-hits' is amber, not red — a guide with
+       off-targets may still be the right choice with the right validation. */
+    .ot-badge { font-size: 0.7rem; border-radius: 3px; padding: 1px 6px;
+                margin-left: 0.25rem; }
+    .ot-clean { background: #d1e7dd; color: #0f5132; }
+    .ot-hits  { background: #fff3cd; color: #856404; }
+    .ot-na    { background: #f1f3f5; color: #868e96; font-style: italic; }
 
     /* ASCII diagram */
     .guide-diagram pre {

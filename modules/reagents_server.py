@@ -313,6 +313,20 @@ def reagents_server(input, output, session, shared_json, shared_sites):
             grid += " ({:.0f}th pct of this region's candidates)".format(float(pct))
         return ("RS3 {:+.2f}".format(score), "rs3-badge rs3-{}".format(band), grid)
 
+    def _offtarget_display(row):
+        """Return (badge_text, css_class, grid_value) for a guide's off-target screen."""
+        # No off-target search is wired up yet. This deliberately reports "not checked"
+        # rather than a blank, 0 or "n/a": an empty field reads as "none found" and would
+        # invite skipping an external check, which is the opposite of the truth.
+        raw = row.get("offtarget_count", "")
+        if raw is None or str(raw).strip() == "" or pd.isna(raw):
+            return ("Off-target: not checked", "ot-badge ot-na",
+                    "not checked — screen externally (e.g. CRISPOR)")
+        n = int(float(raw))
+        band = "clean" if n == 0 else "hits"
+        return ("Off-target: {}".format(n), "ot-badge ot-{}".format(band),
+                "{} PAM-adjacent site{} found".format(n, "" if n == 1 else "s"))
+
     # ── pre-compute guide content (diagrams + truncated arms) ─────────────────
 
     @reactive.calc
@@ -943,6 +957,7 @@ def reagents_server(input, output, session, shared_json, shared_sites):
 
             specificity = describe_position_isoforms(rid, iso_labels_by_pos.get(), iso_all_labels.get())
             rs3 = _rs3_display(row)
+            offt = _offtarget_display(row)
 
             meta_cells = []
             for label, val in [
@@ -953,6 +968,7 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                 ("Recut block", str(row["recut_block_method"])),
                 ("Mutation", str(row["mutation_desc"]) or "—"),
             ] + ([("RS3 score", rs3[2])] if rs3 else []) \
+              + [("Off-targets", offt[2])] \
               + ([("Isoforms", specificity)] if specificity else []):
                 meta_cells.append(ui.div(label, class_="param-label"))
                 meta_cells.append(ui.div(val, class_="param-value"))
@@ -963,6 +979,7 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                     ui.span("Guide {}".format(i + 1), class_="fw-semibold"),
                     ui.span("{} bp from cut to insert".format(dist), class_="dist-badge"),
                     ui.span(rs3[0], class_=rs3[1]) if rs3 else None,
+                    ui.span(offt[0], class_=offt[1]),
                     plasmid_warning_div,
                     class_="guide-header",
                 ),
@@ -988,7 +1005,10 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                 "RS3 predicts Cas9 cutting efficiency, not knock-in/HDR rate. It was trained "
                 "on pooled human and mouse screens, so treat it as a relative ranking between "
                 "these guides rather than an absolute number. Guides remain ordered by "
-                "distance to the insertion site, never by RS3.",
+                "distance to the insertion site, never by RS3. "
+                "No off-target search is performed — \"not checked\" means exactly that, not "
+                "that a guide is clean; screen candidates externally (e.g. CRISPOR) before "
+                "ordering.",
                 style="color:#888;font-size:0.78em;margin:0.15rem 0 0.4rem;",
             ))
 
