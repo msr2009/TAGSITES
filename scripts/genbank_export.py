@@ -43,7 +43,7 @@ COLORS = {
     "exon":      "#2e7d32",
     "spacer":    "#d32f2f",
     "pam":       "#f9a825",
-    "cut":       "#212121",
+    "cds":       "#1b5e20",
     "junction":  "#00838f",
     "insert":    "#e65100",
     "left_arm":  "#90caf9",
@@ -79,6 +79,11 @@ def _clip(feats, length):
 
     kept = []
     for f in feats:
+        # a joined location (the spliced CDS) is built in range already, and
+        # rebuilding it from .start/.end would collapse the join across introns
+        if len(f.location.parts) > 1:
+            kept.append(f)
+            continue
         s, e = int(f.location.start), int(f.location.end)
         # a feature wholly off either end carries no information in this window
         if e <= 0 or s >= length:
@@ -120,7 +125,6 @@ def guide_features(row, region_start, guide_length=None, cut_offset=3):
     strand  = str(row["guide_strand"])
     glen    = int(guide_length) if guide_length else len(spacer)
     pam_s   = int(row["pam_fwd_start"]) - region_start
-    cut     = int(row["cut_pos"]) - region_start
     sign    = 1 if strand == "+" else -1
 
     if strand == "+":
@@ -130,12 +134,11 @@ def guide_features(row, region_start, guide_length=None, cut_offset=3):
 
     return [
         _feat(sp_s, sp_e, "crRNA {} ({})".format(spacer, strand),
-              ftype="protein_bind", strand=sign, color=COLORS["spacer"],
-              note="guide spacer, {} strand".format(strand)),
+              ftype="primer_bind", strand=sign, color=COLORS["spacer"],
+              note="guide spacer, {} strand; cut {} bp from PAM".format(
+                  strand, cut_offset)),
         _feat(pam_s, pam_s + len(pam), "PAM {}".format(pam),
               strand=sign, color=COLORS["pam"]),
-        _feat(cut, cut + 1, "Cas9 cut site", strand=sign, color=COLORS["cut"],
-              note="DSB {} bp from PAM".format(cut_offset)),
     ]
 
 
@@ -252,29 +255,93 @@ def _record(seq, rec_id, description, features):
 
 
 def cds_exon_features(exons, shift_at=None, shift_by=0, label="exon"):
-    """Features for Genewise CDS intervals, optionally shifted past an insert.
+    """One feature per Genewise CDS exon, shifted past an insert if given.
 
-    exons    iterable of (start, stop) 0-based INCLUSIVE, as parse_genewise gives
-    shift_at region coordinate at or after which coordinates move (the insertion
-             point), or None for no shift
-    shift_by how far they move (len(insert)); an exon straddling shift_at is
-             split so the tag is not drawn inside it
+    An exon straddling shift_at is split, so the tag is drawn between the two
+    halves rather than inside one of them.
     """
     feats = []
-    for i, (s, e) in enumerate(exons or []):
-        s, e = int(s), int(e) + 1          # -> half-open
-        name = "{} {}".format(label, i + 1)
-        if shift_at is None or e <= shift_at:
+    for i, exon in enumerate(exons or []):
+        # shift one exon at a time so a split keeps the original exon's number
+        parts = shift_exons([exon], shift_at, shift_by, absorb=False)
+        for k, (s, e) in enumerate(parts):
+            name = "{} {}".format(label, i + 1)
+            if len(parts) > 1:
+                name += " ({}' part)".format("5" if k == 0 else "3")
             feats.append(_feat(s, e, name, ftype="exon", color=COLORS["exon"]))
-        elif s >= shift_at:
-            feats.append(_feat(s + shift_by, e + shift_by, name,
-                               ftype="exon", color=COLORS["exon"]))
-        else:
-            feats.append(_feat(s, shift_at, name + " (5' part)",
-                               ftype="exon", color=COLORS["exon"]))
-            feats.append(_feat(shift_at + shift_by, e + shift_by, name + " (3' part)",
-                               ftype="exon", color=COLORS["exon"]))
     return feats
+
+
+def shift_exons(exons, shift_at=None, shift_by=0, absorb=False):
+    """Genewise CDS intervals as half-open spans, shifted past an insert.
+
+    exons    iterable of (start, stop) 0-based INCLUSIVE, as parse_genewise gives
+    shift_at region coordinate at or after which coordinates move, or None
+    shift_by how far they move (len(insert))
+    absorb   True to swallow the inserted bases into the exon that straddles
+             shift_at, making the tag part of the coding sequence; False to
+             split that exon around them
+    """
+    out = []
+    for s, e in (exons or []):
+        s, e = int(s), int(e) + 1
+        if shift_at is None:
+            out.append((s, e))
+        elif absorb:
+            # the tag belongs to whichever exon it lands in OR abuts, so that an
+            # insert at an exon boundary (the common N-/C-terminal tag) is still
+            # part of the coding sequence rather than falling into an intron
+            if e < shift_at:
+                out.append((s, e))
+            elif s > shift_at:
+                out.append((s + shift_by, e + shift_by))
+            else:
+                out.append((s, e + shift_by))
+        elif e <= shift_at:
+            out.append((s, e))
+        elif s >= shift_at:
+            out.append((s + shift_by, e + shift_by))
+        else:
+            out.append((s, shift_at))
+            out.append((shift_at + shift_by, e + shift_by))
+    return out
+
+
+def cds_feature(seq, spans, strand=1, label="CDS", note=None):
+    """One joined CDS feature over spans, carrying the conceptual translation.
+
+    Spans are half-open and in ascending coordinate order. ApE and SnapGene both
+    render /translation, which is what makes the reading frame across the tag
+    junction checkable by eye. Returns None when there is nothing to translate.
+    """
+    from Bio.Seq import Seq
+    from Bio.SeqFeature import CompoundLocation, FeatureLocation, SeqFeature
+
+    spans = [(int(s), int(e)) for s, e in spans if int(e) > int(s)]
+    if not spans:
+        return None
+    parts = [FeatureLocation(s, e, strand=strand) for s, e in spans]
+    if strand == -1:
+        parts = parts[::-1]
+    location = parts[0] if len(parts) == 1 else CompoundLocation(parts)
+
+    coding = "".join(str(seq)[s:e] for s, e in spans).upper()
+    if strand == -1:
+        coding = reverse_complement(coding)
+    # a Genewise CDS need not be a whole number of codons, so trim rather than
+    # let Bio.Seq.translate warn and pad
+    aa = str(Seq(coding[:len(coding) - len(coding) % 3]).translate())
+
+    quals = {
+        "label":            [label],
+        "translation":      [aa],
+        "codon_start":      ["1"],
+        "ApEinfo_fwdcolor": [COLORS["cds"]],
+        "ApEinfo_revcolor": [COLORS["cds"]],
+    }
+    if note:
+        quals["note"] = [note]
+    return SeqFeature(location, type="CDS", qualifiers=quals)
 
 
 def _arm_features(left_start, left_len, right_start, right_len):
@@ -289,7 +356,7 @@ def _arm_features(left_start, left_len, right_start, right_len):
 
 def build_gdna_record(row, region_seq, left_wt=None, right_wt=None, exons=None,
                       primers=None, types=PRIMER_TYPES, run_name="",
-                      guide_length=None, cut_offset=3):
+                      guide_length=None, cut_offset=3, cds_strand=1):
     """The whole WT genomic region, annotated for genotyping and cutting.
 
     region_seq is the genomic FASTA the pipeline searched — row coordinates are
@@ -303,6 +370,10 @@ def build_gdna_record(row, region_seq, left_wt=None, right_wt=None, exons=None,
 
     if exons:
         feats = cds_exon_features(exons)
+        cds = cds_feature(seq, shift_exons(exons), cds_strand,
+                          label="CDS (WT)")
+        if cds:
+            feats.append(cds)
     else:
         # no Genewise output on hand: recover what the arms' case encoding shows,
         # which covers only the arm window rather than the whole region
@@ -340,7 +411,7 @@ def splice_knockin(region_seq, insert_pos, left, right, insert):
 def build_knockin_record(row, region_seq, left, right, insert, left_wt=None,
                          right_wt=None, exons=None, primers=None,
                          types=PRIMER_TYPES, insert_name="tag", run_name="",
-                         guide_length=None, cut_offset=3):
+                         guide_length=None, cut_offset=3, cds_strand=1):
     """The whole genomic region carrying the repair product, annotated.
 
     left/right are the mutated (PAM-disrupted) arms as they will be ordered.
@@ -355,6 +426,13 @@ def build_knockin_record(row, region_seq, left, right, insert, left_wt=None,
 
     if exons:
         feats = cds_exon_features(exons, shift_at=ip, shift_by=L)
+        # absorb=True puts the tag inside the CDS, so the translation shows it
+        # in frame with the protein — the whole point of a translated knock-in
+        cds = cds_feature(seq, shift_exons(exons, ip, L, absorb=True), cds_strand,
+                          label="CDS ({} knock-in)".format(insert_name),
+                          note="includes the inserted {} bp {}".format(L, insert_name))
+        if cds:
+            feats.append(cds)
     else:
         feats = exon_features(left, ip - len(left)) + exon_features(right, ins1)
     feats += _arm_features(ip - len(left), len(left), ins1, len(right))
@@ -401,7 +479,12 @@ def write_record(record, path):
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 def load_exons(genewise_out):
-    """CDS exon intervals (0-based inclusive) from a Genewise .out.txt, or None."""
+    """CDS exon intervals (0-based inclusive) from a Genewise .out.txt, or None.
+
+    run_genewise writes the genomic FASTA already flipped to the winning
+    orientation, so these are effectively always on '+'; load_cds_strand reads
+    the strand rather than assuming it.
+    """
     if not genewise_out or not Path(genewise_out).exists():
         return None
     from parse_genewise import parse_genewise
@@ -411,6 +494,19 @@ def load_exons(genewise_out):
     except Exception:
         return None
     return [(int(r["start"]), int(r["stop"])) for _, r in cds.iterrows()]
+
+
+def load_cds_strand(genewise_out):
+    """+1 / -1 for the CDS in a Genewise .out.txt; +1 when unknown or mixed."""
+    if not genewise_out or not Path(genewise_out).exists():
+        return 1
+    from parse_genewise import parse_genewise
+
+    try:
+        strands = set(parse_genewise(genewise_out)["strand"])
+    except Exception:
+        return 1
+    return -1 if strands == {"-"} else 1
 
 
 def load_region(genomic_fasta):
@@ -459,6 +555,7 @@ def main(reagents_tsv, outdir, residue=None, guide_id=None, insert_sequence="",
 
     region = load_region(genomic_fasta)
     exons  = load_exons(genewise_out)
+    strand = load_cds_strand(genewise_out)
     if region is None:
         raise SystemExit(
             "--genomic_fasta is required: the records span the whole genomic region.")
@@ -474,12 +571,14 @@ def main(reagents_tsv, outdir, residue=None, guide_id=None, insert_sequence="",
 
         gdna = build_gdna_record(row, region, left_wt, right_wt, exons, primers,
                                  types, run_name=run_name,
-                                 guide_length=guide_length, cut_offset=cut_offset)
+                                 guide_length=guide_length, cut_offset=cut_offset,
+                                 cds_strand=strand)
         ki = build_knockin_record(row, region, str(row["left_arm"]),
                                   str(row["right_arm"]), insert_sequence,
                                   left_wt, right_wt, exons, primers, types,
                                   insert_name, run_name=run_name,
-                                  guide_length=guide_length, cut_offset=cut_offset)
+                                  guide_length=guide_length, cut_offset=cut_offset,
+                                  cds_strand=strand)
         for rec in (gdna, ki):
             path = outdir / "{}.gb".format(rec.id)
             write_record(rec, path)

@@ -34,6 +34,7 @@ from genbank_export import (
     PRIMER_TYPES as GENBANK_PRIMER_TYPES,
     build_gdna_record,
     build_knockin_record,
+    load_cds_strand,
     load_exons,
     load_region,
 )
@@ -1378,6 +1379,7 @@ def reagents_server(input, output, session, shared_json, shared_sites):
         if region is None:
             return []
         exons   = load_exons(genewise_path.get())
+        strand  = load_cds_strand(genewise_path.get())
         rn      = run_name.get() or 'run'
         insert  = _insert_seq()
         tag     = _insert_tag_name()
@@ -1390,14 +1392,14 @@ def reagents_server(input, output, session, shared_json, shared_sites):
             try:
                 gdna = build_gdna_record(
                     row, region, wt_left, wt_right, exons, primers,
-                    GENBANK_PRIMER_TYPES, run_name=rn,
+                    GENBANK_PRIMER_TYPES, run_name=rn, cds_strand=strand,
                 )
                 knockin = build_knockin_record(
                     row, region, left, right, insert,
                     left_wt=wt_left if wt_is_true else None,
                     right_wt=wt_right if wt_is_true else None,
                     exons=exons, primers=primers, types=GENBANK_PRIMER_TYPES,
-                    insert_name=tag, run_name=rn,
+                    insert_name=tag, run_name=rn, cds_strand=strand,
                 )
             except Exception:
                 continue
