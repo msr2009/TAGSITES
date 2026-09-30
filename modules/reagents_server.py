@@ -30,6 +30,13 @@ from reagent_sequences import (
     truncate_arms,
     truncate_arms_with_tolerance,
 )
+from genbank_export import (
+    PRIMER_TYPES as GENBANK_PRIMER_TYPES,
+    build_gdna_record,
+    build_knockin_record,
+    load_exons,
+    load_region,
+)
 from offtarget_remote import load_sidecar as load_offtarget_sidecar
 from offtarget_screen import predict_amplicons
 from plasmid_assembly import (
@@ -105,6 +112,8 @@ def reagents_server(input, output, session, shared_json, shared_sites):
 
     # reactive path cell: drives _poll_for_tsv even when reagents_df stays None
     _tsv_path_cache = reactive.Value("")
+    genomic_path    = reactive.Value("")   # region FASTA, for the GenBank records
+    genewise_path   = reactive.Value("")   # Genewise output, for exon annotation
 
     # ── populate tag dropdown once at session start ───────────────────────────
 
@@ -144,6 +153,19 @@ def reagents_server(input, output, session, shared_json, shared_sites):
 
         tsv_path = reagent_args.get("output", "")
         _tsv_path_cache.set(tsv_path)   # reactive set so _poll_for_tsv re-fires
+
+        # the GenBank records span the whole genomic region, so keep the paths to
+        # the region FASTA and the Genewise output the reagents were designed
+        # against. The runner rewrites both to its own *_genewise.* files when it
+        # runs Genewise itself, so prefer those and fall back to the run JSON's.
+        gw_prefix = os.path.join(wd, rn + "_genewise") if wd and rn else ""
+        cand_fa = [reagent_args.get("genomic_fasta", "")]
+        cand_gw = [reagent_args.get("genewise", "")]
+        if gw_prefix:
+            cand_fa.insert(0, gw_prefix + ".genewise_genomic.fa")
+            cand_gw.insert(0, gw_prefix + ".genewise.out.txt")
+        genomic_path.set(next((p for p in cand_fa if p and os.path.exists(p)), ""))
+        genewise_path.set(next((p for p in cand_gw if p and os.path.exists(p)), ""))
         if tsv_path and os.path.exists(tsv_path):
             df = pd.read_csv(tsv_path, sep='\t')
             df["guide_id"] = (
@@ -1343,6 +1365,46 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                 ))
         return '\n'.join(lines) + '\n' if len(lines) > 1 else None
 
+    def _assemble_genbank():
+        """GenBank records for every selected guide: (filename, SeqRecord) pairs.
+
+        Two records per selected guide — the WT genomic region and the same
+        region carrying the knock-in. Both are named by site+strand+distance, so
+        a guide's pair sits together in the ZIP. The knock-in record is per-guide
+        rather than per-site because the recut-blocking edits it annotates are
+        guide-specific. Returns [] when the region FASTA is unavailable.
+        """
+        region = load_region(genomic_path.get())
+        if region is None:
+            return []
+        exons   = load_exons(genewise_path.get())
+        rn      = run_name.get() or 'run'
+        insert  = _insert_seq()
+        tag     = _insert_tag_name()
+        results = genotyping_results.get() or {}
+        pairs = []
+        for row, left, right in _selected_rows():
+            label   = _guide_label(row)
+            primers = results.get(int(row['residue_index'])) or {}
+            wt_left, wt_right, wt_is_true = _wt_arms_for_row(row)
+            try:
+                gdna = build_gdna_record(
+                    row, region, wt_left, wt_right, exons, primers,
+                    GENBANK_PRIMER_TYPES, run_name=rn,
+                )
+                knockin = build_knockin_record(
+                    row, region, left, right, insert,
+                    left_wt=wt_left if wt_is_true else None,
+                    right_wt=wt_right if wt_is_true else None,
+                    exons=exons, primers=primers, types=GENBANK_PRIMER_TYPES,
+                    insert_name=tag, run_name=rn,
+                )
+            except Exception:
+                continue
+            pairs.append(('{}_{}_gDNA.gb'.format(rn, label), gdna))
+            pairs.append(('{}_{}_knockin.gb'.format(rn, label), knockin))
+        return pairs
+
     def _build_zip():
         """Produce ZIP bytes: always HA + guides TSVs; oligos when applicable."""
         import zipfile as _zf
@@ -1368,5 +1430,10 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                 oligos = _assemble_oligos_tsv()
                 if oligos:
                     zf.writestr('{}_oligos.tsv'.format(rn), oligos)
+            # annotated GenBank records always ride along with the TSVs
+            for fname, rec in _assemble_genbank():
+                gb_buf = io.StringIO()
+                SeqIO.write(rec, gb_buf, "genbank")
+                zf.writestr(fname, gb_buf.getvalue())
         buf.seek(0)
         return buf.read()

@@ -48,6 +48,11 @@ scripts/                # core analysis executables
   existing_AF_model.py        # search AFDB for existing predictions
   uniprot_api.py               # shared UniProt REST helpers (checksum lookup, entry fetch)
   guide_efficiency.py         # RS3 on-target guide scoring (optional; fails soft)
+  genbank_export.py           # annotated GenBank (.gb) records for ApE/SnapGene —
+                              # two per selected guide, each spanning the WHOLE
+                              # genomic region: the WT locus and the same region
+                              # carrying the knock-in. Always included in the
+                              # reagents download ZIP
   design_guides_across_region.py  # standalone CLI guide finder — NOT used by the app
                                   # (the app uses crispr_util.find_guides via
                                   #  design_tag_reagents.py); holds the only
