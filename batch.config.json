@@ -7,7 +7,8 @@
     "structure": "remote",
     "genewise": "remote",
     "conservation": "remote",
-    "topology": "deeptmhmm"
+    "topology": "deeptmhmm",
+    "offtarget_region": "blat"
   },
 
   "reference_data": {
@@ -24,11 +25,14 @@
   },
 
   "conservation_local": {
-    "_comment": "scripts/conservation_local.py's DIAMOND search targets, each an independent database with its own search params (see scripts/reference_data.py's fetch_swissprot()/fetch_rhabditida_trembl()). Inert unless backends.conservation is set to \"local\". Every search runs with --ultra-sensitive (DIAMOND's closest approximation to real BLASTP sensitivity) unless a database entry overrides \"sensitivity\".",
+    "_comment": "scripts/conservation_local.py's DIAMOND search targets, each an independent database with its own search params (see scripts/reference_data.py's fetch_swissprot()/fetch_rhabditida_trembl()). Inert unless backends.conservation is set to \"local\". threads = DIAMOND --threads (also bounds batch_run.max_workers' MAFFT/JSD phase to 16 busy threads); chunk_size = queries per batched DIAMOND call in scripts/conservation_presearch.py; render_alignment_pdf = write the alignment PDF (true for the app; batch runs set false and can render it later from the .aln). Every search runs with --ultra-sensitive (DIAMOND's closest approximation to real BLASTP sensitivity) unless a database entry overrides \"sensitivity\".",
     "search_databases": [
       { "name": "swissprot", "evalue": 1e-10, "max_target_seqs": 50 },
       { "name": "rhabditida_trembl", "evalue": 1e-5, "max_target_seqs": 100 }
-    ]
+    ],
+    "threads": 16,
+    "chunk_size": 2000,
+    "render_alignment_pdf": true
   },
 
   "domains_scan": {
@@ -40,15 +44,17 @@
   },
 
   "deeptmhmm": {
-    "_comment": "scripts/deeptmhmm_runner.py's subprocess bridge to DeepTMHMM 1.0 (academic license, vendored outside the repo, not committed here). install_dir/python are machine-specific and left blank in this checked-in default — set them in a TAGSITES_BATCH_CONFIG override (e.g. batch.config.local.json) to the local DeepTMHMM checkout and its dedicated conda env's python (needs pytorch<2.6, fair-esm==0.4.0 — see plan for why). batch_size is scripts/build_topology_cache.py's sequences-per-subprocess-invocation knob, trading ESM1b model-load amortization against peak embedding scratch (deleted after each batch).",
+    "_comment": "scripts/deeptmhmm_runner.py's subprocess bridge to DeepTMHMM 1.0 (academic license, vendored outside the repo, not committed here). install_dir/python are machine-specific and left blank in this checked-in default — set them in a TAGSITES_BATCH_CONFIG override (e.g. batch.config.local.json) to the local DeepTMHMM checkout and its dedicated conda env's python (needs pytorch<2.6, fair-esm==0.4.0 — see plan for why). batch_size is scripts/build_topology_cache.py's sequences-per-subprocess-invocation knob, trading ESM1b model-load amortization against peak embedding scratch (deleted after each batch). batch_residues additionally closes a batch at that many total residues (bounds scratch/VRAM for the long isoforms processed last). max_length, if set, skips and logs to topology_cache/_skipped.tsv any sequence longer than that (null = no cap).",
     "install_dir": "",
     "python": "",
-    "batch_size": 200
+    "batch_size": 200,
+    "batch_residues": 60000,
+    "max_length": null
   },
 
   "batch_run": {
     "_comment": "scripts/proteome_run.py knobs",
-    "max_workers": null,
+    "max_workers": 16,
     "max_concurrent_network_calls": 3,
     "genomic_flank_bp": 2000
   }

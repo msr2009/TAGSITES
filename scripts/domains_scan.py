@@ -8,7 +8,10 @@ UniProt membership.
 
 Fast path: scripts/build_pfam_cache.py's bulk pre-scan already wrote this
 sequence's result to {out_dir}/pfam_scan_cache/{seq_name}_domains.txt — just
-copy it through. Slow path (cache miss, e.g. a brand-new pasted sequence):
+copy it through. If the name misses but an identical sequence was scanned under
+another name (e.g. a UniProt accession whose sequence matches a WormBase isoform),
+that cache file is used instead — matched by CRC64 against reference_data.protein_fasta.
+Slow path (cache miss, e.g. a brand-new pasted sequence):
 scan it on demand via pfam_scan.scan_sequences() and write the result to
 both outputfile and the cache path, so it's warm for next time. Either way
 this produces the same (source, start, stop, description) TSV domains_remote.py
@@ -16,8 +19,11 @@ does, with source always "Pfam" (see pfam_scan.py's module docstring for why
 only Pfam is scanned).
 """
 
+import gzip
 import sys
 from pathlib import Path
+
+from Bio.SeqUtils.CheckSum import crc64
 
 from site_selection_util import read_fasta
 
@@ -32,6 +38,44 @@ def _cache_path(seq_name):
     cache_dir = Path(ref_cfg["out_dir"]) / "pfam_scan_cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir / f"{seq_name}_domains.txt"
+
+
+_sequence_index = None  # per-process {crc64: [isoform names]} from the reference protein FASTA
+
+
+def _names_by_sequence():
+    """Lazily build {crc64: [names]} from reference_data.protein_fasta (empty if absent)."""
+    global _sequence_index
+    if _sequence_index is not None:
+        return _sequence_index
+    _sequence_index = {}
+    fasta_path = _load_reference_data_config().get("protein_fasta")
+    fasta = Path(fasta_path) if fasta_path else None
+    if fasta is None or not fasta.exists():
+        return _sequence_index
+    opener = gzip.open if str(fasta).endswith(".gz") else open
+    name, chunks = None, []
+    with opener(fasta, "rt") as f:
+        for line in f:
+            if line.startswith(">"):
+                if name is not None:
+                    _sequence_index.setdefault(crc64("".join(chunks)), []).append(name)
+                name, chunks = line[1:].split()[0], []
+            else:
+                chunks.append(line.strip())
+    # flush the final record
+    if name is not None:
+        _sequence_index.setdefault(crc64("".join(chunks)), []).append(name)
+    return _sequence_index
+
+
+def _cache_path_by_sequence(seq):
+    """Cache file of another sequence name with an identical sequence, or None."""
+    for name in _names_by_sequence().get(crc64(str(seq)), []):
+        path = _cache_path(name)
+        if path.exists():
+            return path
+    return None
 
 
 def _parse_cached_file(path):
@@ -57,10 +101,14 @@ def main(fasta_in, email, workingdir, clients_folder, outputfile, report=None,
     reporter = resolve_reporter(report)
     seq_name, seq = read_fasta(fasta_in)
     cache_path = _cache_path(seq_name)
+    # a different name with the identical sequence counts as a cache hit
+    matched_path = cache_path if cache_path.exists() else _cache_path_by_sequence(seq)
 
-    if cache_path.exists():
-        domain_rows = _parse_cached_file(cache_path)
+    if matched_path is not None:
+        domain_rows = _parse_cached_file(matched_path)
         source_note = "cached bulk scan"
+        if matched_path != cache_path:
+            source_note += f", matched by sequence to {matched_path.name.removesuffix('_domains.txt')}"
     else:
         _report(reporter, f"No cached Pfam scan for {seq_name} — scanning on demand.",
                 stage="domains_scan")

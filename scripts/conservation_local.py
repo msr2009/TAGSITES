@@ -3,7 +3,7 @@ conservation_local.py
 
 Local DIAMOND + MAFFT backend for ortholog conservation scoring — searches
 one or more local DIAMOND databases built by scripts/reference_data.py
-(default: full Swiss-Prot plus all unreviewed Nematoda TrEMBL — see its
+(default: full Swiss-Prot plus all unreviewed Rhabditida TrEMBL — see its
 fetch_swissprot()/fetch_rhabditida_trembl()) instead of submitting an EBI BLAST
 job, aligns with MAFFT instead of a Clustal Omega job, then feeds the
 alignment to the same score_conservation_py3.py used by conservation_remote.py
@@ -34,14 +34,30 @@ later database's best hit actually outranks an earlier database's.
 Score/rank differences from conservation_remote.py are still expected
 (DIAMOND is not NCBI BLAST, MAFFT is not Clustal Omega) — see the plan's
 Verification step 1 for the parity bar (rank correlation, not byte equality).
+
+Proteome-scale batching: a per-protein DIAMOND call is dominated by database
+setup (~55 s each against Swiss-Prot + Rhabditida TrEMBL), so
+scripts/conservation_presearch.py searches thousands of proteins per call and
+caches each one's raw hit list at {out_dir}/conservation_hits/{crc64}.json.
+main() uses that cache when present (hits are identical to a single-query
+search) and falls back to its own DIAMOND call otherwise.
+
+Config knobs (batch.config.json "conservation_local"): threads (DIAMOND
+--threads; absent = DIAMOND's default of all cores), chunk_size (queries per
+batched call), render_alignment_pdf (default true; batch runs set false). An
+alignment PDF can be rendered later with
+build_heatmap_reportlab.plot_alignment_reportlab("<run>_conservation.aln").
 """
 
 import json
+import os
 import re
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+from Bio.SeqUtils.CheckSum import crc64
 
 from site_selection_util import read_fasta
 
@@ -66,6 +82,34 @@ def _reference_dir(cfg=None):
     if not out_dir.is_absolute():
         out_dir = Path(__file__).parent.parent / out_dir
     return out_dir
+
+
+def _local_config():
+    """Return the active config's conservation_local block ({} if absent)."""
+    return _load_batch_config().get("conservation_local", {})
+
+
+def hits_cache_dir():
+    """Directory of batch-search hit lists, one {crc64}.json per sequence."""
+    return _reference_dir() / "conservation_hits"
+
+
+def hits_cache_path(seq):
+    """Cache file for a sequence's raw DIAMOND hits, keyed by its CRC64 (the same
+    sequence key local_store.py and uniprot_api.py use).
+    """
+    return hits_cache_dir() / f"{crc64(str(seq))}.json"
+
+
+def _load_cached_hits(seq):
+    """Return the batch-searched hit list for seq, or None if it was never searched
+    (an empty list is a legal "searched, no hits" result).
+    """
+    path = hits_cache_path(seq)
+    if not path.exists():
+        return None
+    with open(path) as f:
+        return json.load(f)
 
 
 def _load_search_databases():
@@ -110,20 +154,22 @@ def _parse_species(stitle):
     return m.group(1) if m else ""
 
 
-def _run_diamond_blastp_one(query_fasta, db_entry, evalue, workdir):
-    """Run `diamond blastp` against one configured database and return a list
-    of hit dicts in the same raw shape blast_orthologs.hit_to_dict() expects
-    (i.e. one EBI-BLAST-JSON hit record each), each tagged with a "source_db"
-    key naming the database — a harmless extra field existing consumers
-    (hit_to_dict(), derive_isoforms()) simply don't read.
+def _run_diamond_blastp_one(query_fasta, db_entry, evalue, workdir, threads=None):
+    """Run `diamond blastp` against one configured database and return
+    {query_id: [hit dicts]} — every query in query_fasta appears as a key, with
+    an empty list when it had no hits. Each hit dict is in the same raw shape
+    blast_orthologs.hit_to_dict() expects (i.e. one EBI-BLAST-JSON hit record
+    each), tagged with a "source_db" key naming the database — a harmless extra
+    field existing consumers (hit_to_dict(), derive_isoforms()) simply don't read.
+    threads maps to DIAMOND --threads (None = DIAMOND's default, all cores).
     """
     out_tsv = Path(workdir) / f"diamond_{db_entry['name']}.tsv"
-    fields = ["sseqid", "stitle", "pident", "evalue", "qstart", "qend",
+    fields = ["qseqid", "sseqid", "stitle", "pident", "evalue", "qstart", "qend",
               "sstart", "send", "full_sseq"]
     max_target_seqs = db_entry.get("max_target_seqs", 50)
     db_evalue = db_entry.get("evalue", evalue)
     sensitivity = db_entry.get("sensitivity", _DEFAULT_SENSITIVITY)
-    subprocess.run([
+    cmd = [
         "diamond", "blastp",
         "--query", str(query_fasta),
         "--db", str(db_entry["path"]),
@@ -133,13 +179,22 @@ def _run_diamond_blastp_one(query_fasta, db_entry, evalue, workdir):
         "--evalue", str(db_evalue),
         f"--{sensitivity}",
         "--quiet",
-    ], check=True)
+    ]
+    if threads:
+        cmd += ["--threads", str(threads)]
+    subprocess.run(cmd, check=True)
 
-    hits = []
+    # seed every query id so "searched, no hits" is distinguishable from "not searched"
+    hits_by_query = {}
+    with open(query_fasta) as f:
+        for line in f:
+            if line.startswith(">"):
+                hits_by_query[line[1:].split()[0]] = []
     with open(out_tsv) as f:
         for line in f:
-            sseqid, stitle, pident, ev, qstart, qend, sstart, send, full_sseq = line.rstrip("\n").split("\t")
-            hits.append({
+            (qseqid, sseqid, stitle, pident, ev, qstart, qend,
+             sstart, send, full_sseq) = line.rstrip("\n").split("\t")
+            hits_by_query[qseqid].append({
                 "hit_acc": _parse_sseqid(sseqid),
                 "hit_os": _parse_species(stitle),
                 "source_db": db_entry["name"],
@@ -151,21 +206,65 @@ def _run_diamond_blastp_one(query_fasta, db_entry, evalue, workdir):
                     "hsp_hseq": full_sseq,
                 }],
             })
-    return hits
+    return hits_by_query
 
 
-def _run_diamond_blastp(query_fasta, db_entries, n, evalue, workdir):
-    """Run diamond blastp against every configured database, merge the hit
-    lists, and re-sort by ascending e-value — group_hits_by_species()/
-    derive_isoforms() both assume the incoming hit list is already best-first
-    (see this module's docstring), which only holds automatically within a
-    single database's own output, not across several concatenated together.
+def _run_diamond_blastp_by_query(query_fasta, db_entries, evalue, workdir, threads=None):
+    """Run diamond blastp against every configured database and return
+    {query_id: merged hit list}, each list re-sorted by ascending e-value —
+    group_hits_by_species()/derive_isoforms() both assume the incoming hit list
+    is already best-first (see this module's docstring), which only holds
+    automatically within a single database's own output, not across several
+    concatenated together.
     """
-    all_hits = []
+    merged = {}
     for db_entry in db_entries:
-        all_hits.extend(_run_diamond_blastp_one(query_fasta, db_entry, evalue, workdir))
-    all_hits.sort(key=lambda h: float(h["hit_hsps"][0]["hsp_expect"]))
-    return all_hits
+        per_db = _run_diamond_blastp_one(query_fasta, db_entry, evalue, workdir, threads)
+        for qid, hits in per_db.items():
+            merged.setdefault(qid, []).extend(hits)
+    for hits in merged.values():
+        hits.sort(key=lambda h: float(h["hit_hsps"][0]["hsp_expect"]))
+    return merged
+
+
+def _run_diamond_blastp(query_fasta, db_entries, n, evalue, workdir, threads=None):
+    """Single-query convenience wrapper: the merged, e-value-sorted hit list for
+    the one sequence in query_fasta.
+    """
+    by_query = _run_diamond_blastp_by_query(query_fasta, db_entries, evalue, workdir, threads)
+    return next(iter(by_query.values()), [])
+
+
+def _mask_selenocysteine(fasta_text):
+    """Replace U with C in sequence lines of a FASTA string; headers are untouched."""
+    return "\n".join(ln if ln.startswith(">") else ln.replace("U", "C")
+                     for ln in fasta_text.split("\n"))
+
+
+def _restore_selenocysteine(aln_path, fasta_str_list):
+    """Put U back into an alignment wherever the pre-MAFFT sequence had one."""
+    # ungapped residue indices that were U, per record (MAFFT keeps input order)
+    u_sites = [{i for i, c in enumerate(rec.split("\n", 1)[1].replace("\n", "")) if c == "U"}
+               for rec in fasta_str_list]
+    if not any(u_sites):
+        return
+    out, rec_idx, resi = [], -1, 0
+    for ln in open(aln_path).read().split("\n"):
+        if ln.startswith(">"):
+            rec_idx, resi = rec_idx + 1, 0
+            out.append(ln)
+            continue
+        chars = []
+        for c in ln:
+            # gaps do not advance the residue index; only real residues are checked against u_sites
+            if c != "-":
+                if rec_idx < len(u_sites) and resi in u_sites[rec_idx]:
+                    c = "U"
+                resi += 1
+            chars.append(c)
+        out.append("".join(chars))
+    with open(aln_path, "w") as f:
+        f.write("\n".join(out))
 
 
 def main(fasta_in, email, workingdir, name, output,
@@ -189,19 +288,26 @@ def main(fasta_in, email, workingdir, name, output,
     seq_name, seq = read_fasta(fasta_in)
     seq_len = float(len(seq))
     out_prefix = str(Path(output).with_suffix(""))
-    db_entries = _load_search_databases()
+    local_cfg = _local_config()
 
     ###########################
-    # DIAMOND SEARCH
+    # DIAMOND SEARCH (or batch-search cache)
     ###########################
 
-    db_names = ", ".join(e["name"] for e in db_entries)
-    _report(reporter, f"Searching local reference database(s) ({db_names}) with DIAMOND…",
-            stage="blast_submit")
-    with tempfile.TemporaryDirectory() as tmpdir:
-        query_fasta = Path(tmpdir) / "query.fa"
-        query_fasta.write_text(f">{seq_name}\n{seq}\n")
-        raw_hits = _run_diamond_blastp(query_fasta, db_entries, n, evalue, tmpdir)
+    # scripts/conservation_presearch.py's batched search, when it has covered this sequence
+    raw_hits = _load_cached_hits(seq)
+    if raw_hits is not None:
+        _report(reporter, "Using cached batch DIAMOND search results.", stage="blast_submit")
+    else:
+        db_entries = _load_search_databases()
+        db_names = ", ".join(e["name"] for e in db_entries)
+        _report(reporter, f"Searching local reference database(s) ({db_names}) with DIAMOND…",
+                stage="blast_submit")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            query_fasta = Path(tmpdir) / "query.fa"
+            query_fasta.write_text(f">{seq_name}\n{seq}\n")
+            raw_hits = _run_diamond_blastp(query_fasta, db_entries, n, evalue, tmpdir,
+                                           threads=local_cfg.get("threads"))
 
     blast_output = {"query_len": int(seq_len), "hits": raw_hits}
     blast_json_path = f"{out_prefix}.json.json"
@@ -263,30 +369,42 @@ def main(fasta_in, email, workingdir, name, output,
             f.write("".join(fasta_str_list))
     else:
         _report(reporter, "Running MAFFT…", stage="align_submit")
-        with open(aln_path, "w") as aln_out:
-            subprocess.run(["mafft", "--auto", "--quiet", fasta_out_path],
-                           check=True, stdout=aln_out)
+        # MAFFT rejects selenocysteine (U), so it aligns a U -> C copy and U is restored after
+        mafft_in_path = f"{out_prefix}.mafft_in.fasta"
+        with open(mafft_in_path, "w") as f:
+            f.write(_mask_selenocysteine("".join(fasta_str_list)))
+        try:
+            with open(aln_path, "w") as aln_out:
+                # --thread 1 keeps MAFFT single-threaded so batch workers stay within the thread cap
+                subprocess.run(["mafft", "--thread", "1", "--auto", "--quiet", mafft_in_path],
+                               check=True, stdout=aln_out)
+        finally:
+            os.remove(mafft_in_path)
+        _restore_selenocysteine(aln_path, fasta_str_list)
         _report(reporter, f"Alignment written → {aln_path}", stage="align")
 
     ###########################
     # RENDER ALIGNMENT IMAGE
     ###########################
 
-    try:
-        _aln_seqs = sum(1 for ln in open(aln_path) if ln.startswith(">"))
-        _aln_len = next((len(ln.rstrip()) for ln in open(aln_path) if not ln.startswith(">")), 0)
-        _report(reporter,
-                f"Rendering alignment image ({_aln_seqs} sequences × {_aln_len} positions)…",
-                stage="align_img")
-    except Exception:
-        _report(reporter, "Rendering alignment image…", stage="align_img")
+    # batch runs set render_alignment_pdf=false; the PDF can be rendered later from the .aln
+    if local_cfg.get("render_alignment_pdf", True):
+        try:
+            _aln_seqs = sum(1 for ln in open(aln_path) if ln.startswith(">"))
+            _aln_len = next((len(ln.rstrip()) for ln in open(aln_path) if not ln.startswith(">")), 0)
+            _report(reporter,
+                    f"Rendering alignment image ({_aln_seqs} sequences × {_aln_len} positions)…",
+                    stage="align_img")
+        except Exception:
+            _report(reporter, "Rendering alignment image…", stage="align_img")
 
-    try:
-        import build_heatmap_reportlab
-        build_heatmap_reportlab.plot_alignment_reportlab(aln_path)
-        _report(reporter, "Alignment image saved.", stage="align_img")
-    except Exception as e:
-        _report(reporter, f"alignment image generation failed: {e}", stage="align_img", level="warning")
+        try:
+            import build_heatmap_reportlab
+            build_heatmap_reportlab.plot_alignment_reportlab(aln_path)
+            _report(reporter, "Alignment image saved.", stage="align_img")
+        except Exception as e:
+            _report(reporter, f"alignment image generation failed: {e}", stage="align_img",
+                    level="warning")
 
     ###########################
     # CALCULATE JSD

@@ -17,6 +17,7 @@ Initiator methionine	blocking	Initiator methionine
 Cross-link		blocking	Cross-link
 Disulfide bond		blocking	Disulfide bond
 Transmembrane		blocking	Transmembrane
+Non-standard residue	blocking	Non-standard residue
 
 Binding site		site	Binding site
 Active site		site	Active site

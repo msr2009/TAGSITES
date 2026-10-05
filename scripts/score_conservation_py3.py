@@ -556,7 +556,7 @@ def read_fasta_alignment(filename):
 				for i, aa in enumerate(cur_seq):
 					if aa not in iupac_alphabet:
 						cur_seq = cur_seq.replace(aa, '-')
-				alignment.append(cur_seq.replace('B', 'D').replace('Z', 'Q').replace('X', '-'))
+				alignment.append(cur_seq.replace('B', 'D').replace('Z', 'Q').replace('U', 'C').replace('X', '-'))
 				cur_seq = ''
 		elif line[0] in iupac_alphabet:
 			cur_seq += line.replace('\r', '')
@@ -566,7 +566,7 @@ def read_fasta_alignment(filename):
 	for i, aa in enumerate(cur_seq):
 		if aa not in iupac_alphabet:
 			cur_seq = cur_seq.replace(aa, '-')
-	alignment.append(cur_seq.replace('B', 'D').replace('Z', 'Q').replace('X', '-'))
+	alignment.append(cur_seq.replace('B', 'D').replace('Z', 'Q').replace('U', 'C').replace('X', '-'))
 
 	return names, alignment
 

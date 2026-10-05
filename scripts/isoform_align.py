@@ -46,6 +46,8 @@ def align_isoform_to_query(query_seq, iso_seq):
     in query coordinates. "after" is the query position immediately before the
     insertion point (0 if the insert precedes the query's first residue).
     """
+    # BLOSUM62 has no selenocysteine (U); both sequences get U -> C so positions are unchanged
+    query_seq, iso_seq = query_seq.replace("U", "C"), iso_seq.replace("U", "C")
     aligner = _make_aligner()
     alignment = aligner.align(query_seq, iso_seq)[0]  # best-scoring local alignment
     aligned_query, aligned_iso = alignment[0], alignment[1]

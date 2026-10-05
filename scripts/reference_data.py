@@ -48,13 +48,10 @@ Usage
 """
 
 import gzip
-import json
 import subprocess
-import sys
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).parent.parent
-_CONFIG_PATH = _REPO_ROOT / "batch.config.json"
 
 DEFAULTS = {
     "out_dir": str(_REPO_ROOT / "data" / "reference"),
@@ -80,12 +77,12 @@ DEFAULTS = {
 
 
 def _load_config():
-    """Merge batch.config.json's "reference_data" block (if any) over DEFAULTS."""
+    """Merge the active config's "reference_data" block (if any) over DEFAULTS."""
+    # providers resolves TAGSITES_BATCH_CONFIG, so overrides apply here too
+    from providers import _load_config as _load_batch_config
+
     cfg = dict(DEFAULTS)
-    if _CONFIG_PATH.exists():
-        with open(_CONFIG_PATH) as f:
-            user_cfg = json.load(f).get("reference_data", {})
-        cfg.update(user_cfg)
+    cfg.update(_load_batch_config().get("reference_data", {}))
     return cfg
 
 
