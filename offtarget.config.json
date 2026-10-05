@@ -1,5 +1,24 @@
 {
-	"_comment": "Knobs for the off-target / primer-specificity BLAST screens (scripts/offtarget_screen.py, scripts/offtarget_remote.py). Screen A queries the whole genomic region to find duplicated segments; Screen B concatenates all spacers into one query to find scattered guide near-matches. Both are annotation only and never filter or reorder guides.",
+	"_comment": "Knobs for the off-target / primer-specificity screens (scripts/offtarget_screen.py, scripts/offtarget_blat.py, scripts/offtarget_remote.py). Screen A queries the whole genomic region to find duplicated segments; Screen B concatenates all spacers into one query to find scattered guide near-matches. Both are annotation only and never filter or reorder guides. Screen A runs on UCSC BLAT when the taxid maps to an assembly below and an API key is present, otherwise on EBI blastn; Screen B is always EBI, because a 20 nt spacer with 3 mismatches is below BLAT's tiling floor.",
+
+	"blat": {
+		"_comment": "Screen A via the UCSC REST BLAT endpoint. taxid -> assembly; a taxid absent here falls back to the EBI path, as does a missing API key. The map is static so the app never depends on /list/ucscGenomes at runtime — regenerate it with offtarget_blat.fetch_assembly_table(). max_alignment_gap: BLAT chains blocks across enormous target gaps (measured to 395 kb for 127 aligned bases), so a record is split wherever a gap exceeds this. 20 admits ordinary small indels and nothing more; it was chosen by sweeping 0/20/50/100/300/1000 against the EBI sidecars and measuring guide windows flagged (snap29 87/124/124/121/117/117, col-103 219/210/182/139/129/129). Larger budgets merge distant blocks into gappy low-identity alignments that then fail post_filter.min_identity, so recall falls rather than rises. fetch_merge_gap is the opposite trade, merging nearby blocks into one keyless getData/sequence call because a round trip costs far more than extra bases. request_pause spaces those calls, since UCSC asks for roughly one request per second. total_timeout is a real wall-clock budget via http_retry, not a per-socket read timeout.",
+		"assemblies": {
+			"6239":   "ce11",
+			"7227":   "dm6",
+			"9606":   "hg38",
+			"10090":  "mm39",
+			"10116":  "rn7",
+			"7955":   "danRer11",
+			"8364":   "xenTro10",
+			"559292": "sacCer3"
+		},
+		"max_items":          1000,
+		"max_alignment_gap":  20,
+		"request_pause":    0.4,
+		"fetch_merge_gap":  200000,
+		"total_timeout":    300
+	},
 
 	"databases": {
 		"_comment": "taxid -> ENA division. Use the STANDARD (em_std_*) divisions: ENA keeps transcript-derived records in separate divisions (em_cds, em_est_*, em_tsa_*, em_htc_*, em_ncr, em_rrna), so choosing Standard excludes them outright. Standard still carries annotated mRNA records, which exclude_transcripts filters per hit. Falling back to em_all puts transcript divisions back in scope and is logged as a warning.",

@@ -151,30 +151,57 @@ def _exon_intervals(cds_df):
     return [(int(r['start']), int(r['stop']) + 1) for _, r in cds_df.iterrows()]
 
 
-def _offtarget_preconditions(taxid, email, reporter):
-    """True when an off-target screen can run at all (needs a species and an email)."""
+def _offtarget_preconditions(taxid, email, reporter, needs_email=True):
+    """True when an off-target screen can run at all (needs a species, and EBI an email)."""
     if not taxid or str(taxid).strip() in ('1', '1.0', 'None'):
         _report(reporter, 'Off-target screen skipped: no species taxid for this run',
                 stage='offtarget', level='warning')
         return False
-    if not email:
+    if needs_email and not email:
         _report(reporter, 'Off-target screen skipped: EBI submissions require an email',
                 stage='offtarget', level='warning')
         return False
     return True
 
 
-def _run_region_screen(dna, taxid, email, cds_df, cfg, reporter, job_id_cb, resume_job_ids):
-    """Screen A. Returns (status, region_result, pending_sentinel)."""
-    if not _offtarget_preconditions(taxid, email, reporter):
-        return 'not_checked', {}, None
+def _region_backend(taxid, cfg, with_spacer_screen, reporter):
+    """Pick the Screen A backend module: UCSC BLAT when it can serve this run, else EBI.
 
+    BLAT answers in seconds where EBI takes minutes, but it reports UCSC assembly
+    coordinates while Screen B reports ENA accessions. Screen B's on-target
+    exclusion is keyed on Screen A's accessions and spans and is documented as not
+    optional, so when Screen B is also going to run, Screen A stays on EBI to keep
+    the two in the same coordinate space.
+    """
+    import providers
+    mode = providers.backend_mode('offtarget_region', default='blat')
+    if mode == 'blat' and not with_spacer_screen:
+        import offtarget_blat
+        if offtarget_blat.available(taxid, cfg):
+            return offtarget_blat
+        _report(reporter, 'UCSC BLAT unavailable for taxid {} (no assembly mapped or no '
+                          'API key); using the EBI region screen'.format(taxid),
+                stage='offtarget', level='warning')
+    elif mode == 'blat' and with_spacer_screen:
+        _report(reporter, 'Spacer screen requested, so the region screen stays on EBI: '
+                          'the spacer screen needs its accessions to exclude each '
+                          "guide's own on-target site", stage='offtarget')
+    import offtarget_remote
+    return offtarget_remote
+
+
+def _run_region_screen(dna, taxid, email, cds_df, cfg, reporter, job_id_cb, resume_job_ids,
+                       with_spacer_screen=False):
+    """Screen A. Returns (status, region_result, pending_sentinel)."""
     # imported here rather than at module top so the CLI still runs when no network
     # stack is available, matching how the other remote backends are reached
-    import offtarget_remote
+    backend = _region_backend(taxid, cfg, with_spacer_screen, reporter)
+    is_blat = getattr(backend, '__name__', '') == 'offtarget_blat'
+    if not _offtarget_preconditions(taxid, email, reporter, needs_email=not is_blat):
+        return 'not_checked', {}, None
 
     try:
-        result = offtarget_remote.run_region_screen(
+        result = backend.run_region_screen(
             dna, email, taxid, exons=_exon_intervals(cds_df), cfg=cfg, report=reporter,
             job_id_cb=job_id_cb, resume_job_ids=resume_job_ids)
     except Exception as e:
@@ -354,17 +381,20 @@ def design_reagents(
         if rs3_note:
             _report(reporter, rs3_note, stage='guides')
 
-    # 5c. Off-target / primer-specificity screen. Two EBI blastn jobs: the whole
-    # region (duplicated segments -> primer co-amplification and guides in repeats)
-    # and all spacers concatenated into one query (scattered guide near-matches).
-    # Annotation only: nothing below selects or orders guides by these results.
+    # 5c. Off-target / primer-specificity screen. Two searches: the whole region
+    # (duplicated segments -> primer co-amplification and guides in repeats) and all
+    # spacers concatenated into one query (scattered guide near-matches). The region
+    # screen runs on UCSC BLAT where it can (seconds rather than minutes); the spacer
+    # screen is always EBI, since a 20 nt query with mismatches is below BLAT's
+    # tiling floor. Annotation only: nothing below selects or orders guides by these.
     ot_cfg = load_offtarget_config()
     ot_hsps = []
     ot_region = {}
     ot_status = 'not_checked'
     if offtarget:
         ot_status, ot_region, pending = _run_region_screen(
-            dna, taxid, email, cds_df, ot_cfg, reporter, job_id_cb, resume_job_ids)
+            dna, taxid, email, cds_df, ot_cfg, reporter, job_id_cb, resume_job_ids,
+            with_spacer_screen=bool(offtarget_spacer))
         if pending:
             return pending
         ot_hsps = ot_region.get('duplicates', [])

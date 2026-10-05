@@ -13,7 +13,11 @@ from task_registry import (
     default_task_label,
 )
 
-# species → NCBI taxid; "Other (search...)" is a sentinel for dynamic search
+# species → NCBI taxid; "Other (search...)" is a sentinel for dynamic search.
+# Every species listed here has a UCSC assembly in offtarget.config.json's blat
+# block, so the fast region off-target screen covers all of them. E. coli was
+# dropped from the defaults for want of one; it still works via "Other (search...)",
+# which is why its ENA division and Ensembl slug fast-path are both still present.
 DEFAULT_SPECIES = {
     "Homo sapiens":             9606,
     "Mus musculus":             10090,
@@ -23,7 +27,6 @@ DEFAULT_SPECIES = {
     "Caenorhabditis elegans":   6239,
     "Xenopus tropicalis":       8364,
     "Saccharomyces cerevisiae": 559292,
-    "Escherichia coli":         562,
     "Other (search...)":        None,
 }
 
