@@ -35,6 +35,11 @@ EXCLUDES=(
   -x 'scripts/uniprot_species/'    # 7.5 MB species flat file + notebook
   -x 'uniprot_species.flat.txt'
 
+  # NOTE: ucsc.local.json is gitignored but MUST ship — shinyapps.io has no
+  # secrets mechanism, so the UCSC BLAT API key travels inside this private
+  # bundle (scripts/offtarget_blat.py). rsconnect does not read .gitignore, so
+  # it is included automatically; do not add an -x for it.
+
   # ── Dev-only ────────────────────────────────────────────────────────────
   -x 'tests/'
   -x 'CLAUDE.md'
@@ -42,6 +47,7 @@ EXCLUDES=(
   -x '.claude/'
   -x 'docs/'
   -x 'deploy.sh'
+  -x 'PLAN.md'
 
   # ── Caches and editor leftovers ─────────────────────────────────────────
   -x '.pytest_cache/'

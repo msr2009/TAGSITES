@@ -59,9 +59,20 @@ scripts/                # core analysis executables
                               # reagents download ZIP
   design_guides_across_region.py  # standalone CLI guide finder — NOT used by the app
                                   # (the app uses crispr_util.find_guides via
-                                  #  design_tag_reagents.py); holds the only
-                                  #  off-target BLAST code, which needs a local
-                                  #  blastdb + bedtools and is currently unwired
+                                  #  design_tag_reagents.py); its off-target code
+                                  #  needs a local blastdb + bedtools and is legacy
+                                  #  and unwired — the live screen is the three
+                                  #  offtarget_*.py modules below
+  offtarget_screen.py         # network-free core of the off-target / primer screen:
+                              # classification, post-filter, window scoring,
+                              # amplicon prediction. No backend touches it
+  offtarget_blat.py           # Screen A via the UCSC REST BLAT endpoint (seconds).
+                              # Needs an API key — see offtarget.config.json's blat
+                              # block and ucsc.local.json
+  offtarget_remote.py         # Screen A via EBI blastn (minutes) plus Screen B, the
+                              # concatenated spacer query. Screen B cannot move to
+                              # BLAT: a 20 nt query with mismatches is below its
+                              # tiling floor
 
 utils/
   results.py    # load JSON output → DataFrames; Plotly + matplotlib visualization

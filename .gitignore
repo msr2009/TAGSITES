@@ -35,6 +35,12 @@ params/*.json
 data/*
 !data/.gitkeep
 
+# UCSC BLAT API key (see scripts/offtarget_blat.py). shinyapps.io has no secrets
+# mechanism, so this file ships inside the private deploy bundle — rsconnect does
+# not read .gitignore, so it is bundled automatically and must not be excluded in
+# deploy.sh. TAGSITES_UCSC_API_KEY overrides it for CLI and local runs.
+ucsc.local.json
+
 # Local override for batch.config.json (see scripts/providers.py's
 # TAGSITES_BATCH_CONFIG) — machine-specific batch-mode settings that must
 # never silently become the committed backend defaults the Shiny app reads.
@@ -62,3 +68,4 @@ scripts/uniprot_species/speclist_testing.ipynb
 
 # Local model usage tracking
 MODELS.md
+batch.config.3090.json
