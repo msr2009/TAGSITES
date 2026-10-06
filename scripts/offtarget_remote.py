@@ -315,6 +315,7 @@ def write_sidecar(path, region, spacer, taxid, region_len, pam, cfg):
             "taxid":                 str(taxid),
             "database":              region.get("database", ""),
             "database_is_fallback":  region.get("is_fallback", False),
+            "backend":               region.get("backend", ""),
             "region_len":            region_len,
             "pam":                   pam,
             "blast":                 cfg["blast"],
@@ -326,6 +327,8 @@ def write_sidecar(path, region, spacer, taxid, region_len, pam, cfg):
         "duplicates":  region.get("duplicates", []),
         "identical":   region.get("identical", []),
         "excluded":    region.get("excluded", []),
+        # keyed by chromosome for a local screen; lets the UI mark the intended amplicon
+        "self_spans":  region.get("self_spans", {}) if region.get("backend") == "local" else {},
         "spacers":     spacer.get("spacers", []),
         "spacer_hits": {str(k): v for k, v in (spacer.get("spacer_hits") or {}).items()},
     }

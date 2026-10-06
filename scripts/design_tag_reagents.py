@@ -97,16 +97,19 @@ def _case_arm(arm_seq, arm_start, frame_lookup):
 
 def _design_genotyping_rows(sites, dna, L, insert_sequence, internal_threshold,
                             primer_opt_tm, product_opt_size, flank_min, flank_max,
-                            offtarget_hsps=None, offtarget_cfg=None):
+                            offtarget_hsps=None, offtarget_cfg=None, primer_screen=None):
     """One row per (residue x amplicon_type) genotyping primer pair.
 
     Pulls flanking sequence directly from the full genomic record around each
     site's insert_pos — independent of arm_length, since genotyping primers may
-    need to sit outside the (possibly much shorter) homology arms.
+    need to sit outside the (possibly much shorter) homology arms. primer_screen, when
+    given, checks every pair against the whole genome in one call and replaces the
+    duplicate-based amplicon prediction.
     """
     margin = 60   # extra room beyond flank_max so primer3 has a real window to search
     w = flank_max + margin
     rows = []
+    pairs = []   # one entry per row, for the batched genome-wide primer screen
     for _, site in sites.iterrows():
         insert_pos = int(site['insert_pos'])
         left_flank  = dna[max(0, insert_pos - w):insert_pos]
@@ -141,6 +144,17 @@ def _design_genotyping_rows(sites, dna, L, insert_sequence, internal_threshold,
                 'offtarget_amplicons': len(amps),
                 'offtarget_detail':    _amplicon_detail(amps),
             })
+            pairs.append({'id': str(len(rows) - 1), 'fwd_seq': p['fwd_seq'],
+                          'rev_seq': p['rev_seq']})
+
+    screened = primer_screen(pairs) if primer_screen and pairs else None
+    if screened:
+        # genome-wide result supersedes the amplicons inferred from Screen A duplicates
+        for pair in pairs:
+            amps = (screened.get(pair['id']) or {}).get('amplicons', [])
+            row = rows[int(pair['id'])]
+            row['offtarget_amplicons'] = len(amps)
+            row['offtarget_detail'] = _amplicon_detail(amps)
     return pd.DataFrame(rows)
 
 
@@ -165,7 +179,11 @@ def _offtarget_preconditions(taxid, email, reporter, needs_email=True):
 
 
 def _region_backend(taxid, cfg, with_spacer_screen, reporter):
-    """Pick the Screen A backend module: UCSC BLAT when it can serve this run, else EBI.
+    """Pick the Screen A backend module: local BLAST+, else UCSC BLAT, else EBI.
+
+    Local BLAST+ (offtarget_local) is chosen when backends.offtarget_region is "local" and
+    blastn plus its database are present; otherwise it falls through to the BLAT/EBI logic
+    below, so a machine without BLAST+ (the deployed app) behaves exactly as before.
 
     BLAT answers in seconds where EBI takes minutes, but it reports UCSC assembly
     coordinates while Screen B reports ENA accessions. Screen B's on-target
@@ -175,6 +193,14 @@ def _region_backend(taxid, cfg, with_spacer_screen, reporter):
     """
     import providers
     mode = providers.backend_mode('offtarget_region', default='blat')
+    if mode == 'local':
+        import offtarget_local
+        if offtarget_local.available(taxid, cfg):
+            return offtarget_local
+        _report(reporter, 'Local BLAST+ unavailable for taxid {} (blastn or its database '
+                          'missing); falling back to BLAT/EBI'.format(taxid),
+                stage='offtarget', level='warning')
+        mode = 'blat'
     if mode == 'blat' and not with_spacer_screen:
         import offtarget_blat
         if offtarget_blat.available(taxid, cfg):
@@ -196,8 +222,10 @@ def _run_region_screen(dna, taxid, email, cds_df, cfg, reporter, job_id_cb, resu
     # imported here rather than at module top so the CLI still runs when no network
     # stack is available, matching how the other remote backends are reached
     backend = _region_backend(taxid, cfg, with_spacer_screen, reporter)
-    is_blat = getattr(backend, '__name__', '') == 'offtarget_blat'
-    if not _offtarget_preconditions(taxid, email, reporter, needs_email=not is_blat):
+    backend_name = getattr(backend, '__name__', '')
+    if not _offtarget_preconditions(taxid, email, reporter,
+                                    needs_email=backend_name not in ('offtarget_blat',
+                                                                     'offtarget_local')):
         return 'not_checked', {}, None
 
     try:
@@ -213,15 +241,20 @@ def _run_region_screen(dna, taxid, email, cds_df, cfg, reporter, job_id_cb, resu
         return 'failed', {}, None
     if isinstance(result, dict) and 'ebi_status' in result:
         return 'pending', {}, result
+    # Screen B and the primer screen must share this screen's coordinate space
+    result['backend'] = 'local' if backend_name == 'offtarget_local' else 'remote'
     return 'screened', result, None
 
 
 def _run_spacer_screen(spacers, taxid, email, pam, cfg, reporter, job_id_cb,
-                       resume_job_ids, self_spans=None, own_accessions=None):
-    """Screen B. Returns (spacer_result, pending_sentinel)."""
-    import offtarget_remote
+                       resume_job_ids, self_spans=None, own_accessions=None, local=False):
+    """Screen B on local BLAST+ when Screen A was local, else EBI. Returns (result, pending)."""
+    if local:
+        import offtarget_local as backend
+    else:
+        import offtarget_remote as backend
     try:
-        result = offtarget_remote.run_spacer_screen(
+        result = backend.run_spacer_screen(
             spacers, email, taxid, pam=pam, cfg=cfg, report=reporter,
             job_id_cb=job_id_cb, resume_job_ids=resume_job_ids, self_spans=self_spans,
             own_accessions=own_accessions)
@@ -233,6 +266,31 @@ def _run_spacer_screen(spacers, taxid, email, pam, cfg, reporter, job_id_cb,
     if isinstance(result, dict) and 'ebi_status' in result:
         return {}, result
     return result, None
+
+
+def _local_primer_screen(region, status, taxid, cfg, reporter):
+    """A primers -> {id: {"amplicons": [...]}} callable when the local screen can run, else None.
+
+    Runs only after a local region screen, because the intended amplicon is identified from
+    that screen's self spans (same coordinate space). A failure here never fails the run:
+    the caller keeps the duplicate-based prediction.
+    """
+    local_cfg = cfg.get('local') or {}
+    if (status != 'screened' or region.get('backend') != 'local'
+            or not local_cfg.get('primer_screen', True)):
+        return None
+    import offtarget_local
+
+    def screen(primers):
+        try:
+            return offtarget_local.run_primer_screen(
+                primers, taxid, cfg, self_spans=region.get('self_spans'), report=reporter)
+        except Exception as e:
+            _report(reporter, 'Local primer screen failed ({}: {}); using the region-screen '
+                              'prediction'.format(type(e).__name__, e),
+                    stage='genotyping_primers', level='warning')
+            return None
+    return screen
 
 
 def _amplicon_detail(amps):
@@ -557,7 +615,8 @@ def design_reagents(
         spacer_result, pending = _run_spacer_screen(
             list(wanted.values()), taxid, email, pam, ot_cfg, reporter,
             job_id_cb, resume_job_ids, self_spans=ot_region.get('self_spans'),
-            own_accessions=ot_region.get('own_accessions'))
+            own_accessions=ot_region.get('own_accessions'),
+            local=ot_region.get('backend') == 'local')
         if pending:
             return pending
         ot_spacer = spacer_result
@@ -613,6 +672,7 @@ def design_reagents(
         primer_opt_tm, product_opt_size, flank_min, flank_max,
         offtarget_hsps=ot_hsps if ot_status == 'screened' else None,
         offtarget_cfg=ot_cfg,
+        primer_screen=_local_primer_screen(ot_region, ot_status, taxid, ot_cfg, reporter),
     )
     _report(reporter, '{} genotyping primer pairs designed'.format(len(genotyping_df)),
            stage='genotyping_primers')

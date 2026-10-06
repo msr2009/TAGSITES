@@ -73,6 +73,13 @@ scripts/                # core analysis executables
                               # concatenated spacer query. Screen B cannot move to
                               # BLAT: a 20 nt query with mismatches is below its
                               # tiling floor
+  offtarget_local.py          # Screens A and B plus a genome-wide genotyping-primer
+                              # screen on a local BLAST+ database (seconds). Used when
+                              # batch.config.json's backends.offtarget_region is "local"
+                              # AND blastn + the database exist, else the choice falls
+                              # back to BLAT/EBI, so the deployed app (no BLAST+) is
+                              # unchanged. Build the database with
+                              # `python scripts/reference_data.py --only blastdb`
 
 utils/
   results.py    # load JSON output → DataFrames; Plotly + matplotlib visualization
@@ -86,6 +93,14 @@ params/
   worm_default.json   # example saved analyses preset (C. elegans) — not auto-loaded
   *.json              # user-saved parameter presets
 ```
+
+**Off-target backend order**: `design_tag_reagents._region_backend` tries local BLAST+,
+then UCSC BLAT, then EBI. Screen B and the primer screen run locally only when Screen A did,
+because the intended-locus exclusion is keyed on Screen A's self spans (chromosome names,
+not ENA accessions). Local-screen knobs live in `offtarget.config.json`'s `local` block.
+Recall of the local spacer screen was measured at 100% (123 planted sites, 1-3 mismatches
+in positions 1-15) only with `local.spacer_evalue` >= 1e5: blastn drops a 3-mismatch 20 nt
+site at the shared `blast.evalue_spacer` of 1000.
 
 ## Dual-use constraint: Shiny app + standalone CLI
 

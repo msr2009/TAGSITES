@@ -51,6 +51,7 @@ from plasmid_assembly import (
 )
 
 from modules.json_card import json_upload_card as _json_upload_card
+from modules.setup_server import _off_loop
 from modules.setup_ui import label_with_tip
 from utils.results import load_isoforms_from_json, load_run_metadata
 from utils.tag_filters import position_isoform_labels, describe_position_isoforms
@@ -545,9 +546,36 @@ def reagents_server(input, output, session, shared_json, shared_sites):
 
     # ── genotyping primer design (button-triggered) ────────────────────────────
 
+    async def _screen_primers_locally(results, sidecar):
+        """Swap duplicate-based amplicon predictions for the genome-wide local primer screen.
+
+        Only when the run's screen was local (the sidecar says so). Any failure, such as
+        BLAST+ missing on this machine, keeps the predictions already attached.
+        """
+        pairs = [{"id": "{}:{}".format(rid, kind), "fwd_seq": p["fwd_seq"], "rev_seq": p["rev_seq"]}
+                 for rid, primers in results.items() for kind, p in primers.items()
+                 if p.get("fwd_seq") and p.get("rev_seq")]
+        if not pairs:
+            return
+        try:
+            import offtarget_local
+            from offtarget_screen import load_config
+
+            # blocking subprocess work, so it runs off the event loop shared by every session
+            screened = await _off_loop(
+                offtarget_local.run_primer_screen, pairs, sidecar["_meta"]["taxid"],
+                load_config(), self_spans=sidecar.get("self_spans") or {})
+        except Exception:
+            return
+        for rid, primers in results.items():
+            for kind, p in primers.items():
+                hit = screened.get("{}:{}".format(rid, kind))
+                if hit is not None:
+                    p["offtarget_amplicons"] = hit["amplicons"]
+
     @reactive.effect
     @reactive.event(input.design_genotyping)
-    def _design_genotyping():
+    async def _design_genotyping():
         """Design genotyping primers for every currently selected site.
 
         Site-level (not per-guide): genotyping primers flank the whole
@@ -606,6 +634,10 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                             sidecar.get("duplicates", []),
                             p["fwd_region_span"], p["rev_region_span"])
             results[rid] = primers
+
+        sidecar = _offtarget_sidecar()
+        if sidecar and (sidecar.get("_meta") or {}).get("backend") == "local":
+            await _screen_primers_locally(results, sidecar)
 
         genotyping_results.set(results)
         n_ok = sum(1 for p in results.values() if p)

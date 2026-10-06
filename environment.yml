@@ -35,6 +35,7 @@ dependencies:
   - pytest
   - diamond         # scripts/conservation_local.py — batch-mode ortholog search
   - mafft           # scripts/conservation_local.py — batch-mode alignment
+  - blast           # scripts/offtarget_local.py — local off-target / primer screens (blastn, makeblastdb, blastdbcmd); optional, the app falls back to BLAT/EBI without it
   - lightgbm=3.3.5  # RS3 backend; conda-forge build needed for libomp on Apple Silicon
   - pip:
     - ridgeplot

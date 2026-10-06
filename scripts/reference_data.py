@@ -31,6 +31,8 @@ Ensembl's plain FTP mirror instead — same WBcel235 assembly and gene models):
             domain-scanning model library for scripts/pfam_scan.py, used by
             scripts/build_pfam_cache.py (bulk pre-scan) and scripts/domains_scan.py
             (per-protein backend, on-demand fallback for cache misses)
+  blastdb   BLAST+ database of the genome for scripts/offtarget_local.py's local
+            off-target / primer screens (needs the "genome" step and BLAST+ installed)
 
 All downloads are resumable (curl -C -) and skipped if the target file already
 exists with a non-zero size — re-running this script after an interrupted
@@ -435,6 +437,16 @@ def fetch_rhabditida_trembl(cfg, force=False):
     _build_diamond_db(fasta_path, db_path, force=force)
 
 
+def build_blastdb(cfg, force=False):
+    """Build the local BLAST database(s) for scripts/offtarget_local.py from the genome FASTA."""
+    import offtarget_local
+    from offtarget_screen import load_config
+
+    ot_cfg = load_config()
+    for taxid in (ot_cfg.get("local", {}).get("genomes") or {}):
+        offtarget_local.build_blastdb(taxid, ot_cfg, force=force)
+
+
 STEPS = {
     "uniprot":           fetch_uniprot,
     "afdb":              fetch_afdb,
@@ -444,6 +456,7 @@ STEPS = {
     "swissprot":         fetch_swissprot,
     "rhabditida_trembl": fetch_rhabditida_trembl,
     "pfam":              fetch_pfam,
+    "blastdb":           build_blastdb,    # depends on "genome" having run first
 }
 
 

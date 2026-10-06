@@ -8,7 +8,7 @@
     "genewise": "remote",
     "conservation": "remote",
     "topology": "deeptmhmm",
-    "offtarget_region": "blat"
+    "offtarget_region": "local"
   },
 
   "reference_data": {
