@@ -39,11 +39,18 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from crispr_util import reverse_complement
 from parse_genewise import parse_genewise_score, parse_genewise_gff_score, cds_coverage, parse_genewise
 from progress import report as _report, resolve_reporter, timed_poll_adapter
+import cds_check
 import ebi_rest
 
 # Score / coverage thresholds
 LOW_SCORE_WARN   = 50.0   # bits – below this a warning is printed
 LOW_COVER_WARN   = 0.50   # fraction of protein length covered by CDS
+
+# EBI Genewise options, chosen by a sweep of 11 genes x 17 settings (exact-translation test).
+# The server default (no splice param) is flat GT/AG-only splicing, which reads short worm
+# introns through as coding sequence (8/11 genes wrong, DBL-1 gained 42 residues);
+# the modelled splice sites with global mode fixed all but one gene. EBI exposes no gap penalties.
+GENEWISE_OPTIONS = {"splice": "model", "init": "global"}
 
 
 # ── EBI client wrapper ────────────────────────────────────────────────────────
@@ -81,6 +88,7 @@ def run_genewise_client(protein_fa, genomic_fa, email, outfile_prefix, report=No
             "asequence": asequence,
             "bsequence": bsequence,
             "gff":       "true",  # embed GFF section in output; required by parse_genewise
+            **GENEWISE_OPTIONS,
         }
 
         _report(reporter, f"Submitting Genewise job for {os.path.basename(protein_fa)}", stage='genewise_run')
@@ -208,6 +216,21 @@ def write_rc_fasta(genomic_fa, rc_fa_path):
     return rc_fa_path
 
 
+def _report_model_check(reporter, out_txt, genomic_fa, protein_seq):
+    """Log how the winning gene model's translation compares to the input protein."""
+    try:
+        cds_df = parse_genewise(out_txt)
+    except ValueError:  # no CDS rows at all; the reagents step reports that
+        return
+    dna = str(next(SeqIO.parse(genomic_fa, 'fasta')).seq)
+    check = cds_check.compare_to_query(cds_check.translate_model(cds_df, dna), protein_seq)
+    if check['status'] == 'ok':
+        _report(reporter, 'gene model translation matches the input protein',
+                stage='genewise_select')
+    else:
+        _report(reporter, check['message'], stage='genewise_select', level='warning')
+
+
 # ── Main entry point ──────────────────────────────────────────────────────────
 
 def main(protein_fasta, genomic_fasta, email, outprefix, report=None,
@@ -268,7 +291,9 @@ def main(protein_fasta, genomic_fasta, email, outprefix, report=None,
         return rc_out
 
     # Select best orientation
-    result = select_orientation(fwd_out, genomic_fasta, rc_out, rc_fa)
+    protein_seq = cds_check.read_protein(protein_fasta)
+    result = select_orientation(fwd_out, genomic_fasta, rc_out, rc_fa,
+                                protein_length=len(protein_seq) or None)
 
     _report(reporter,
             'forward score: {:.2f} bits  RC score: {:.2f} bits  selected: {} ({:.2f} bits)'.format(
@@ -291,5 +316,9 @@ def main(protein_fasta, genomic_fasta, email, outprefix, report=None,
 
     _report(reporter, 'winner → {}  genomic → {}  orientation → {}'.format(
         winner_out, winner_fa, orient_file), stage='genewise_select')
+
+    # Informational only: design_tag_reagents.check_model() is the enforcing gate
+    if protein_seq:
+        _report_model_check(reporter, winner_out, winner_fa, protein_seq)
 
     return result

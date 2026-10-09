@@ -103,6 +103,30 @@ def cds_coverage(cds_df, protein_length):
     return (total_nt / 3) / protein_length
 
 
+# ── Writing ───────────────────────────────────────────────────────────────────
+
+# Sentinel score for annotation-derived exon structures: well above the 50-bit low-score
+# warning so no consumer flags ground-truth data, and clearly not a real Genewise bitscore.
+GROUND_TRUTH_SCORE = 1000.0
+
+
+def write_genewise_gff(out_path, cds_df, chrom, source_note):
+    """Write a GFF-embedded .out.txt (match row + one cds row per exon) that parse_genewise reads."""
+    # cds_df start/stop are 0-indexed; the file is 1-indexed like Genewise's own GFF output
+    span_start = int(cds_df["start"].min()) + 1
+    span_stop = int(cds_df["stop"].max()) + 1
+    score = str(GROUND_TRUTH_SCORE)
+    lines = ["//"]
+    lines.append("\t".join([chrom, "GeneWise", "match", str(span_start), str(span_stop),
+                            score, "+", ".", source_note]))
+    for row in cds_df.itertuples():
+        lines.append("\t".join([chrom, "GeneWise", "cds", str(row.start + 1), str(row.stop + 1),
+                                score, "+", str(row.frame), source_note]))
+    lines.append("//")
+    with open(out_path, "w") as f:
+        f.write("\n".join(lines) + "\n")
+
+
 # ── Parsing ───────────────────────────────────────────────────────────────────
 
 def parse_genewise(out_txt):

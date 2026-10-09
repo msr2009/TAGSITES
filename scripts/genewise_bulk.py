@@ -25,7 +25,7 @@ Writes the same {outprefix}.genewise.out.txt / {outprefix}.genewise_genomic.fa
 / {outprefix}.genewise_orientation.txt files genewise_remote.py's winning
 orientation produces, in the same GFF-embedded-score format
 parse_genewise.py's parser expects — with the alignment score column set to
-a fixed sentinel (see _GROUND_TRUTH_SCORE) since there's no genewise bitscore
+a fixed sentinel (see parse_genewise.GROUND_TRUTH_SCORE) since there's no genewise bitscore
 for annotation-derived exons, only exact ground truth. Orientation is always
 "+" because the extracted genomic FASTA is already reverse-complemented to
 the coding strand by genome_regions.extract_sequence() when needed, unlike
@@ -41,14 +41,8 @@ from site_selection_util import get_sequence, save_fasta, uniprot_accession_rege
 sys.path.insert(0, str(Path(__file__).parent))
 from local_store import lookup_by_accession, lookup_by_crc64, open_index as open_proteins_index
 from genome_regions import resolve_transcript_for_accession, open_index as open_genome_index
+from parse_genewise import write_genewise_gff
 from progress import report as _report, resolve_reporter
-
-# Sentinel score for annotation-derived exon structures: well above
-# run_genewise.LOW_SCORE_WARN (50 bits) so the coverage/score warning in any
-# downstream consumer never fires for ground-truth GFF3 data, and clearly
-# not a real Genewise bitscore if anyone inspects the file directly.
-_GROUND_TRUTH_SCORE = 1000.0
-
 
 def _resolve_accession(protein_fasta, proteins_conn):
     """Resolve protein_fasta to a UniProt accession: the string itself if it
@@ -70,32 +64,6 @@ def _resolve_accession(protein_fasta, proteins_conn):
     checksum = crc64(str(seq)).replace("CRC-", "")
     matches = lookup_by_crc64(checksum, conn=proteins_conn)
     return matches[0]["accession"] if matches else None
-
-
-def _write_genewise_out(out_path, cds_df, chrom):
-    """Write a GFF-embedded .out.txt in the same shape
-    parse_genewise.parse_genewise()/parse_genewise_gff_score() read: a
-    '//'-delimited section containing tab-separated GFF rows with 'GeneWise'
-    as the source column, a 'match' row, and one 'cds' row per exon.
-    cds_df's start/stop are 0-indexed local-to-DNA offsets (get_transcript_region's
-    convention); this file uses 1-indexed coordinates, matching genewise's own
-    GFF output and parse_genewise()'s "-1 to convert" expectation.
-    """
-    span_start = int(cds_df["start"].min()) + 1
-    span_stop = int(cds_df["stop"].max()) + 1
-    lines = ["//"]
-    lines.append("\t".join([
-        chrom, "GeneWise", "match", str(span_start), str(span_stop),
-        str(_GROUND_TRUTH_SCORE), "+", ".", "genome_regions.py (GFF3-derived)",
-    ]))
-    for row in cds_df.itertuples():
-        lines.append("\t".join([
-            chrom, "GeneWise", "cds", str(row.start + 1), str(row.stop + 1),
-            str(_GROUND_TRUTH_SCORE), "+", str(row.frame), "genome_regions.py (GFF3-derived)",
-        ]))
-    lines.append("//")
-    with open(out_path, "w") as f:
-        f.write("\n".join(lines) + "\n")
 
 
 def main(protein_fasta, genomic_fasta, email, outprefix, report=None,
@@ -157,7 +125,8 @@ def main(protein_fasta, genomic_fasta, email, outprefix, report=None,
     save_fasta(f"{transcript_id}_genomic", region["dna"], winner_fa)
 
     winner_out = f"{outprefix}.genewise.out.txt"
-    _write_genewise_out(winner_out, region["cds_df"], region["chrom"])
+    write_genewise_gff(winner_out, region["cds_df"], region["chrom"],
+                       "genome_regions.py (GFF3-derived)")
 
     orient_file = f"{outprefix}.genewise_orientation.txt"
     with open(orient_file, "w") as fh:

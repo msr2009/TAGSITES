@@ -20,6 +20,7 @@ sys.path.insert(0, str(_ROOT))
 import run_status
 import progress
 from task_registry import task_script
+from genbank_input import GENBANK_EXTENSIONS
 
 
 def _stderr_reader(proc, task_id, working_dir, run_name):
@@ -41,6 +42,18 @@ def genewise_required(tasks):
         if v["type"] == "reagents" and v["args"].get("genewise", "") == "":
             return key
     return None
+
+
+def _genbank_model(interpreter, scripts_folder, genbank, protein_fa, outprefix):
+    """Run genbank_input.py; True if it wrote a gene model (False: sequence-only, run Genewise)."""
+    call = (f"{interpreter} {scripts_folder}genbank_input.py --genbank {genbank} "
+            f"--protein_fasta {protein_fa} --outprefix {outprefix}")
+    print("USING GENBANK GENE MODEL\n\n" + call)
+    ret = subprocess.call(call, shell=True)
+    if ret != 0:
+        # a model that does not match the protein: reagents cannot be designed from it
+        print("ERROR: genbank_input.py exited %d; reagents task will fail." % ret, file=sys.stderr)
+    return ret == 0 and os.path.exists(outprefix + ".genewise.out.txt")
 
 
 def searchAFDB_required(tasks, global_args):
@@ -115,7 +128,17 @@ def main(json_input_file, force=False):
         elif not genomic_fa:
             print("ERROR: reagents task has empty 'genewise' and 'genomic_fasta' — cannot run Genewise.",
                   file=sys.stderr)
+        elif genomic_fa.lower().endswith(GENBANK_EXTENSIONS) and _genbank_model(
+                interpreter, scripts_folder, genomic_fa, global_args.get("input_file", ""),
+                gw_out_prefix):
+            # user-supplied GenBank exons replaced Genewise (and were checked against the protein)
+            tasks[reagents_task_key]["args"]["genewise"]      = gw_out_file
+            tasks[reagents_task_key]["args"]["genomic_fasta"] = gw_out_prefix + ".genewise_genomic.fa"
+            _write_json(json_input_file, global_args, tasks)
         else:
+            if genomic_fa.lower().endswith(GENBANK_EXTENSIONS):
+                # sequence-only GenBank: genbank_input.py wrote a FASTA for Genewise
+                genomic_fa = gw_out_prefix + ".genomic.fa"
             protein_fa  = global_args.get("input_file", "")
             email       = global_args.get("email", "")
             gw_call = (

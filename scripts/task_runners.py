@@ -206,7 +206,9 @@ def run_reagents(args, report=None, job_id_cb=None, resume_job_ids=None):
 
     Runs the Genewise pre-step if needed (empty 'genewise' arg).
     """
+    import cds_check
     import design_tag_reagents
+    import genbank_input
     import run_genewise
 
     genewise_path = _str(args.get("genewise"))
@@ -215,35 +217,39 @@ def run_reagents(args, report=None, job_id_cb=None, resume_job_ids=None):
     protein_fa = _str(args.get("input_file") or args.get("fasta"))
 
     if not genewise_path and genomic_fa:
-        # run both-strand Genewise and pick the winner
         email       = _str(args.get("email"))
         working_dir = _str(args.get("working_dir"))
         run_name    = _str(args.get("run_name"))
         outprefix   = os.path.join(working_dir, run_name + "_genewise")
-        genewise_result = run_genewise.main(protein_fa, genomic_fa, email, outprefix, report=report,
-                                            job_id_cb=job_id_cb, resume_job_ids=resume_job_ids)
-        # only genewise's own {"ebi_status": "pending"|"expired"} sentinel means
-        # "not done yet" — its success return (select_orientation's score dict)
-        # is also a dict, so it must not be mistaken for that sentinel here.
-        if isinstance(genewise_result, dict) and "ebi_status" in genewise_result:
-            return genewise_result
+        if genbank_input.is_genbank(genomic_fa) and genbank_input.has_gene_model(genomic_fa):
+            # user-supplied exons replace Genewise; raises if the model does not match the protein
+            genbank_input.genbank_to_genewise(genomic_fa, protein_fa, outprefix, report=report)
+        else:
+            if genbank_input.is_genbank(genomic_fa):
+                # sequence-only GenBank: Genewise needs a FASTA
+                genomic_fa = genbank_input.genbank_to_fasta(genomic_fa, outprefix + ".genomic.fa")
+            # run both-strand Genewise and pick the winner
+            genewise_result = run_genewise.main(protein_fa, genomic_fa, email, outprefix,
+                                                report=report, job_id_cb=job_id_cb,
+                                                resume_job_ids=resume_job_ids)
+            # only genewise's own {"ebi_status": "pending"|"expired"} sentinel means
+            # "not done yet" — its success return (select_orientation's score dict)
+            # is also a dict, so it must not be mistaken for that sentinel here.
+            if isinstance(genewise_result, dict) and "ebi_status" in genewise_result:
+                return genewise_result
         genewise_path = outprefix + ".genewise.out.txt"
         args = dict(args, genewise=genewise_path,
                     genomic_fasta=outprefix + ".genewise_genomic.fa")
 
-    # Compute protein_length from the protein FASTA for coverage validation
-    protein_length = None
-    if protein_fa and os.path.exists(protein_fa):
-        from Bio import SeqIO as _SeqIO
-        recs = list(_SeqIO.parse(protein_fa, 'fasta'))
-        if recs:
-            protein_length = len(recs[0].seq)
+    # the gene model must translate to this protein (see cds_check.py)
+    protein_seq = cds_check.read_protein(protein_fa)
 
     reagents_result = design_tag_reagents.main(
         genewise            = genewise_path,
         genomic_fasta       = _str(args.get("genomic_fasta")),
         output              = _str(args.get("output")),
-        protein_length      = protein_length,
+        protein_length      = len(protein_seq) or None,
+        protein_seq         = protein_seq,
         n_guides            = _int(args.get("n_guides"), 5),
         arm_length          = _int(args.get("arm_length"), 1000),
         pam                 = _str(args.get("PAM"), "NGG"),

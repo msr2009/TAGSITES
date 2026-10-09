@@ -38,6 +38,7 @@ from genbank_export import (
     load_exons,
     load_region,
 )
+from cds_check import format_mismatches, read_sidecar as read_model_check
 from offtarget_remote import load_sidecar as load_offtarget_sidecar
 from offtarget_screen import predict_amplicons
 from plasmid_assembly import (
@@ -106,6 +107,7 @@ def reagents_server(input, output, session, shared_json, shared_sites):
     run_name         = reactive.Value(None)   # str or None
     working_dir      = reactive.Value("")
     stored_arm_len   = reactive.Value(1000)   # arm_length used when TSV was generated
+    model_check      = reactive.Value(None)   # gene-model vs input-protein check (cds_check.py)
     reagents_df      = reactive.Value(None)   # full TSV as DataFrame or None
     selected_guides  = reactive.Value({})     # {residue_index (int): set(guide_id)}
     genotyping_results = reactive.Value({})   # {residue_index (int): {amplicon_type: {...}}}
@@ -155,6 +157,11 @@ def reagents_server(input, output, session, shared_json, shared_sites):
 
         tsv_path = reagent_args.get("output", "")
         _tsv_path_cache.set(tsv_path)   # reactive set so _poll_for_tsv re-fires
+        # written beside the TSV by design_tag_reagents; None when the run predates the check
+        model_check.set(
+            read_model_check(str(Path(tsv_path).with_suffix("")) + ".model_check.json")
+            if tsv_path else None
+        )
 
         # the GenBank records span the whole genomic region, so keep the paths to
         # the region FASTA and the Genewise output the reagents were designed
@@ -666,7 +673,7 @@ def reagents_server(input, output, session, shared_json, shared_sites):
         n_sites = len(shared_sites.get())
         n_rows  = len(df) if df is not None else 0
         tsv_ok  = df is not None
-        return ui.div(
+        header = ui.div(
             ui.span("Run: "),
             ui.strong(rn),
             ui.span("  |  {}{} site(s) selected".format(
@@ -675,6 +682,17 @@ def reagents_server(input, output, session, shared_json, shared_sites):
             )),
             class_="run-header",
         )
+        check = model_check.get()
+        if check and check.get("status") == "warn":
+            # same length, so numbering is right, but the genome codons differ from the protein
+            return ui.div(header, ui.p(
+                "⚠ Gene model differs from your protein at {} residue(s) ({}). Reagents are "
+                "designed on the genomic codons; site labels show your protein's residue. "
+                "If this is unexpected, check the genomic region or upload a GenBank file "
+                "with the correct CDS.".format(
+                    len(check["mismatches"]), format_mismatches(check["mismatches"])),
+                class_="ts-warn"))
+        return header
 
     @render.ui
     def tag_custom_area():
@@ -848,11 +866,28 @@ def reagents_server(input, output, session, shared_json, shared_sites):
             if site_rows.empty:
                 continue
             aa = str(site_rows.iloc[0]["amino_acid"])
+            # prefer the input protein's residue when the genomic codon differs from it
+            check = model_check.get()
+            subst = {m[0]: m for m in check["mismatches"]} if check else {}
+            note = ""
+            site_warning = None
+            if rid in subst:
+                _, prot_aa, genome_aa = subst[rid]
+                aa = prot_aa
+                note = " ⚠ (genome: {})".format(genome_aa)
+                # the site is a protein/genome substitution: reagents follow the genome
+                site_warning = ui.p(
+                    "⚠ Your protein has {}{} but the genomic sequence encodes {} here. The "
+                    "tag is inserted after the genomic codon, and the guides, homology arms "
+                    "and recoding all use the genome sequence. Exported file names use the "
+                    "genomic residue ({}{}).".format(prot_aa, rid, genome_aa, genome_aa, rid),
+                    class_="ts-warn",
+                )
             specificity = describe_position_isoforms(rid, iso_labels_by_pos.get(), iso_all_labels.get())
             site_label = (
-                ui.span("{}{}".format(aa, rid),
+                ui.span("{}{}{}".format(aa, rid, note),
                        ui.span(specificity, class_="iso-badge")) if specificity
-                else "{}{}".format(aa, rid)
+                else "{}{}{}".format(aa, rid, note)
             )
 
             guide_divs = _build_guide_divs(site_rows, rid, content, recut)
@@ -863,6 +898,7 @@ def reagents_server(input, output, session, shared_json, shared_sites):
             panels.append(
                 ui.accordion_panel(
                     site_label,
+                    site_warning,
                     genotyping_div,
                     *guide_divs,
                     value=str(rid),

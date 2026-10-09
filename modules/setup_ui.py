@@ -336,8 +336,8 @@ def setup_ui():
 
                     # genomic file upload
                     compact_file_input("input_genomic",
-                        label_with_tip("Genomic region FASTA", _t.get("input_genomic", "")),
-                        accept=[".fasta", ".fa", ".fsa"]),
+                        label_with_tip("Genomic region (FASTA or GenBank)", _t.get("input_genomic", "")),
+                        accept=[".fasta", ".fa", ".fsa", ".gb", ".gbk", ".genbank"]),
 
                     # — or — divider between file upload and paste
                     ui.div(ui.span("— or paste —"), class_="or-divider"),

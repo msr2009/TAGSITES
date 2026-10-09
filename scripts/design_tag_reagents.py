@@ -76,6 +76,7 @@ sys.path.insert(0, __file__.rsplit('/', 1)[0])
 from crispr_util import find_guides, build_frame_lookup, disrupt_pam
 from parse_genewise import parse_genewise, enumerate_insertion_sites, \
     parse_genewise_score, parse_genewise_gff_score, cds_coverage
+from cds_check import check_model, read_protein, write_sidecar
 from guide_efficiency import guide_key, rs3_percentiles, score_guides
 from offtarget_screen import (
     load_config as load_offtarget_config,
@@ -328,6 +329,8 @@ def design_reagents(
     taxid='',
     email='',
     offtarget_sidecar='',
+    protein_seq='',
+    model_check_sidecar='',
     report=None,
     job_id_cb=None,
     resume_job_ids=None,
@@ -341,6 +344,10 @@ def design_reagents(
     genomic_fasta  : str  path to the genomic region FASTA
     protein_length : int or None  amino acid count of the query protein; used to
                      check CDS coverage.  If None, coverage check is skipped.
+    protein_seq    : str  query protein sequence; when given, the translated gene model must
+                     match it in length (else ValueError) and substitutions are reported
+                     as a warning.  Replaces the coverage/score heuristics.
+    model_check_sidecar : str  path for the JSON result of that check (read by the UI)
     n_guides       : int  max guides to report per insertion site
     arm_length     : int  homology arm length (bp) on each side
     pam            : str  IUPAC PAM (default 'NGG')
@@ -391,6 +398,18 @@ def design_reagents(
     coverage = None
     if protein_length and protein_length > 0:
         coverage = cds_coverage(cds_df, protein_length)
+
+    # Translate the model and compare it to the query: a length difference raises here, so
+    # residue numbers are never reported from a shifted model; substitutions only warn.
+    if protein_seq:
+        check = check_model(cds_df, dna, protein_seq)
+        if check['status'] == 'warn':
+            _report(reporter, check['message'], stage='model_check', level='warning')
+        else:
+            _report(reporter, 'gene model matches the input protein', stage='model_check')
+        if model_check_sidecar:
+            write_sidecar(model_check_sidecar, check)
+        score = coverage = None  # exact translation supersedes the score/coverage heuristics
 
     bad_score    = score    is not None and score    < 50.0
     # 90% threshold: catches a partial isoform (e.g. 3-exon short DNA aligned against
@@ -693,12 +712,15 @@ def main(genewise, genomic_fasta, output, protein_length=None, n_guides=5,
          insert_sequence='', internal_threshold=500, primer_opt_tm=60.0,
          product_opt_size=200, flank_min=50, flank_max=150, rs3=True,
          rs3_tracr='Hsu2013', offtarget=True, offtarget_spacer=True, taxid='', email='',
-         report=None, job_id_cb=None, resume_job_ids=None):
+         report=None, job_id_cb=None, resume_job_ids=None, protein_seq=''):
     """Entry point for in-process calls from task_runners."""
     result = design_reagents(
         genewise_out       = genewise,
         genomic_fasta      = genomic_fasta,
         protein_length     = protein_length,
+        protein_seq        = protein_seq,
+        # beside the reagents TSV, like the off-target sidecar; shown as a banner in the UI
+        model_check_sidecar = str(Path(output).with_suffix('')) + '.model_check.json',
         n_guides           = n_guides,
         arm_length         = arm_length,
         pam                = pam,
@@ -750,8 +772,10 @@ if __name__ == '__main__':
                         help='Genomic region FASTA (same sequence/orientation submitted to Genewise)')
     parser.add_argument('--output', required=True,
                         help='Output TSV file path')
-    parser.add_argument('--protein_fasta',
-                        help='Protein FASTA; used to compute protein length for CDS coverage check')
+    # --input_file is the name run_tag_sites_from_json.py passes for the run's protein
+    parser.add_argument('--protein_fasta', '--input_file', dest='protein_fasta',
+                        help='Protein FASTA (or PDB); the gene model must translate to this '
+                             'sequence (length mismatch fails, substitutions warn)')
     # Optional guide / arm parameters
     parser.add_argument('--n_guides', type=int, default=5,
                         help='Max guide RNAs to report per insertion site (default: 5)')
@@ -805,11 +829,8 @@ if __name__ == '__main__':
                              'API; needed only when the off-target screens run')
     args, unknowns = parser.parse_known_args()
 
-    protein_length = None
-    if args.protein_fasta:
-        recs = list(SeqIO.parse(args.protein_fasta, 'fasta'))
-        if recs:
-            protein_length = len(recs[0].seq)
+    protein_seq = read_protein(args.protein_fasta) if args.protein_fasta else ''
+    protein_length = len(protein_seq) or None
 
     print('Running design_tag_reagents.py', file=sys.stderr)
     print('  genewise      : {}'.format(args.genewise), file=sys.stderr)
@@ -823,6 +844,8 @@ if __name__ == '__main__':
         genewise_out        = args.genewise,
         genomic_fasta       = args.genomic_fasta,
         protein_length      = protein_length,
+        protein_seq         = protein_seq,
+        model_check_sidecar = str(Path(args.output).with_suffix('')) + '.model_check.json',
         n_guides            = args.n_guides,
         arm_length          = args.arm_length,
         pam                 = args.PAM,

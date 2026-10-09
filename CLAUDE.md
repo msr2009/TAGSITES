@@ -51,6 +51,12 @@ scripts/                # core analysis executables
                               # requests; used by ebi_rest.py and ensembl_rest.py
   ensembl_rest.py             # Ensembl REST client for the genomic-sequence auto-fetch
                               # (knobs in ensembl.config.json)
+  cds_check.py                # gene-model gate: translates the model's CDS and compares it to
+                              # the input protein (length differs = hard fail, substitutions =
+                              # warning + {run}.reagents.model_check.json for the UI banner)
+  genbank_input.py            # user GenBank (CDS or exon features) used as the gene model in place
+                              # of Genewise; writes the same *_genewise.* files, then the same
+                              # cds_check gate applies. Sequence-only GenBank falls through to Genewise
   guide_efficiency.py         # RS3 on-target guide scoring (optional; fails soft)
   genbank_export.py           # annotated GenBank (.gb) records for ApE/SnapGene —
                               # two per selected guide, each spanning the WHOLE
@@ -127,6 +133,18 @@ its ability to notice a pasted sequence or enable a button. Route remote work th
 (`modules/progress_server.py:293`). Note also that `requests`' `timeout=` is a per-socket
 read timeout, not a deadline: a response arriving a byte at a time never trips it at any
 setting. `scripts/http_retry.py` enforces a real wall-clock budget. See issue #64.
+
+**Gene model must translate to the input protein**: residue numbers in the reagent table come
+from translating the gene model's CDS, so an exon-structure error shifts every downstream site
+(DBL-1: Q239 reported as F239). `design_tag_reagents` therefore runs `cds_check.check_model`
+against the input protein (`--protein_fasta`, also accepted as `--input_file`): a length
+difference (any alignment gap) raises with an indel summary and points to the GenBank upload;
+substitutions alone warn (positions listed in the log, the sidecar and the Reagents tab) and
+reagents are still designed, unless they exceed 2% of the protein length, which also fails. The cause of the DBL-1 error: EBI Genewise defaults to flat GT/AG
+splicing and reads short worm introns through as coding sequence; `genewise_remote.py` now
+sends `splice=model, init=global` (sweep of 11 genes x 17 settings; 10/11 exact, vs 3/11 at the
+default; EBI exposes no gap penalties). A GenBank with CDS/exon features uploaded as the genomic
+region replaces Genewise entirely (`genbank_input.py`) and is held to the same check.
 
 **Alignment rendering**: sequence alignments are pre-rendered as matplotlib SVGs (stored in a dict keyed by alignment name) and displayed statically — this replaced an earlier real-time Plotly approach that was too slow.
 
