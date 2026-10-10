@@ -19,6 +19,7 @@ sys.path.insert(0, str(_SCRIPTS))
 sys.path.insert(0, str(_ROOT))
 import run_status
 import progress
+import providers
 from task_registry import task_script
 from genbank_input import GENBANK_EXTENSIONS
 
@@ -125,7 +126,7 @@ def main(json_input_file, force=False):
             print(f"Skipping Genewise pre-step: {gw_out_file} already exists")
             tasks[reagents_task_key]["args"]["genewise"]      = gw_out_file
             tasks[reagents_task_key]["args"]["genomic_fasta"] = gw_out_prefix + ".genewise_genomic.fa"
-        elif not genomic_fa:
+        elif not genomic_fa and not providers.region_from_annotation():
             print("ERROR: reagents task has empty 'genewise' and 'genomic_fasta' — cannot run Genewise.",
                   file=sys.stderr)
         elif genomic_fa.lower().endswith(GENBANK_EXTENSIONS) and _genbank_model(
@@ -143,7 +144,7 @@ def main(json_input_file, force=False):
             email       = global_args.get("email", "")
             gw_call = (
                 f"{interpreter} {scripts_folder}run_genewise.py "
-                f"--protein_fasta {protein_fa} --genomic_fasta {genomic_fa} "
+                f"--protein_fasta {protein_fa} --genomic_fasta '{genomic_fa}' "
                 f"--email {email} --outprefix {gw_out_prefix}"
             )
             print("RUNNING GENEWISE (both orientations)\n\n" + gw_call)

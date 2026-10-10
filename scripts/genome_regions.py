@@ -111,6 +111,8 @@ def build_index(cfg=None, force=False):
     if db_path.exists():
         if not force:
             print(f"[skip] {db_path} already present; pass force=True to rebuild")
+            # indexes built before the translation table existed gain it here
+            build_translation_index(cfg)
             return db_path
         db_path.unlink()
 
@@ -176,6 +178,77 @@ def build_index(cfg=None, force=False):
     print(f"[genome_regions] indexed {len(cds_rows):,} CDS rows across "
           f"{n_transcripts:,} transcripts, {len(span_rows):,} transcript spans -> {db_path}")
     conn.close()
+    build_translation_index(cfg)
+    return db_path
+
+
+def _translate_exons(exons, strand, genome):
+    """Translate one transcript's CDS exons [(chrom, start, stop)] into a protein or None."""
+    exons = sorted(exons, key=lambda e: e[1])
+    seq = "".join(genome[chrom][start - 1:stop] for chrom, start, stop in exons)
+    if strand == "-":
+        seq = str(Seq(seq).reverse_complement())
+    if len(seq) == 0 or len(seq) % 3 != 0:
+        return None
+    try:
+        protein = str(Seq(seq).translate())
+    except TranslationError:
+        return None
+    protein = protein.removesuffix("*")
+    # an in-frame TGA that codes selenocysteine translates to "*" but is "U" in UniProt
+    return protein.replace("*", "U")
+
+
+def build_translation_index(cfg=None, force=False):
+    """Add transcript_proteins(transcript_id, crc64, length), the CRC64 of every CDS translation."""
+    from Bio.SeqUtils.CheckSum import crc64
+
+    db_path = _db_path(cfg)
+    if not db_path.exists():
+        raise FileNotFoundError(
+            f"{db_path} not found — run `python scripts/genome_regions.py --build` first."
+        )
+    conn = sqlite3.connect(db_path)
+    try:
+        has_table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE name = 'transcript_proteins'"
+        ).fetchone()
+        if has_table and not force:
+            print("[skip] transcript_proteins already present; pass force=True to rebuild")
+            return db_path
+        conn.execute("DROP TABLE IF EXISTS transcript_proteins")
+        conn.execute("""
+            CREATE TABLE transcript_proteins (
+                transcript_id TEXT PRIMARY KEY,
+                crc64         TEXT,
+                length        INTEGER
+            )
+        """)
+
+        # group exons per transcript in one pass over the table
+        exons, strands = {}, {}
+        for tid, chrom, start, stop, strand in conn.execute(
+            "SELECT transcript_id, chrom, start, stop, strand FROM cds_exons"
+        ):
+            exons.setdefault(tid, []).append((chrom, start, stop))
+            strands[tid] = strand
+
+        print(f"[genome_regions] translating {len(exons):,} transcripts …")
+        genome = _load_genome(cfg)
+        rows = []
+        for tid, tid_exons in exons.items():
+            # skip transcripts on scaffolds absent from the genome FASTA
+            if any(chrom not in genome for chrom, _, _ in tid_exons):
+                continue
+            protein = _translate_exons(tid_exons, strands[tid], genome)
+            if protein:
+                rows.append((tid, crc64(protein), len(protein)))
+        conn.executemany("INSERT INTO transcript_proteins VALUES (?, ?, ?)", rows)
+        conn.execute("CREATE INDEX idx_proteins_crc ON transcript_proteins(crc64)")
+        conn.commit()
+        print(f"[genome_regions] indexed {len(rows):,} translated transcripts")
+    finally:
+        conn.close()
     return db_path
 
 
@@ -292,14 +365,21 @@ def extract_sequence(chrom, start, stop, strand="+", cfg=None):
     return seq
 
 
-def get_transcript_region(transcript_id, conn=None, cfg=None):
+def get_transcript_region(transcript_id, conn=None, cfg=None, flank=0):
     """One-call convenience for a bulk Genewise-replacement backend: return
-    {"dna", "cds_df", "chrom", "start", "stop", "strand"} for `transcript_id`,
+    {"dna", "cds_df", "chrom", "start", "stop", "strand", "flank_5p", "flank_3p"}
+    for `transcript_id`,
     where "dna" is the transcript's full genomic span extracted and oriented
     to the coding strand, and "cds_df" is get_cds_dataframe()'s exon table
     with start/stop shifted to be local offsets into "dna" — i.e. exactly the
     (cds_df, dna) pair enumerate_insertion_sites() expects, with no separate
     reverse-complement submission needed since strand is already known here.
+
+    flank adds that many bases either side of the transcript span (clipped at the
+    chromosome ends), so reagent design has homology-arm sequence beyond the gene. It is
+    applied in genomic terms and reported in the coding frame as flank_5p / flank_3p
+    (for a minus-strand gene the 5' flank is the genomically higher side). start/stop
+    stay the transcript's own span.
     """
     own_conn = conn is None
     conn = conn or open_index()
@@ -314,24 +394,32 @@ def get_transcript_region(transcript_id, conn=None, cfg=None):
         raise ValueError(f"transcript_id {transcript_id!r} has no indexed transcript span")
     chrom, start, stop, strand = span
 
-    dna = extract_sequence(chrom, start, stop, strand, cfg=cfg)
+    # the extracted window: the transcript span plus flank, clipped to the chromosome
+    ext_start, ext_stop = start, stop
+    if flank:
+        ext_start = max(1, start - int(flank))
+        ext_stop = min(len(_load_genome(cfg)[chrom]), stop + int(flank))
+    dna = extract_sequence(chrom, ext_start, ext_stop, strand, cfg=cfg)
 
     local_df = df.copy()
-    local_df["start"] -= (start - 1)
-    local_df["stop"] -= (start - 1)
+    local_df["start"] -= (ext_start - 1)
+    local_df["stop"] -= (ext_start - 1)
     if strand == "-":
         # exon coordinates were chromosome-absolute in the + orientation;
         # extract_sequence already reverse-complemented "dna", so exon offsets
         # must be flipped into that same reversed frame
-        span_len = stop - start + 1
+        span_len = ext_stop - ext_start + 1
         new_start = span_len - 1 - local_df["stop"]
         new_stop = span_len - 1 - local_df["start"]
         local_df["start"], local_df["stop"] = new_start, new_stop
         local_df = local_df.sort_values("start").reset_index(drop=True)
 
+    low, high = start - ext_start, ext_stop - stop     # genomic-low / genomic-high flank
     return {
         "dna": dna, "cds_df": local_df,
         "chrom": chrom, "start": start, "stop": stop, "strand": strand,
+        "flank_5p": low if strand == "+" else high,
+        "flank_3p": high if strand == "+" else low,
     }
 
 
@@ -348,6 +436,40 @@ def _translate_cds(cds_df, dna):
     except TranslationError:
         return None
     return protein[:-1] if protein.endswith("*") else protein
+
+
+def find_transcripts_by_sequence(seq, conn=None, cfg=None):
+    """Return GFF3 transcript_ids whose CDS translates exactly to `seq`, longest span first."""
+    from Bio.SeqUtils.CheckSum import crc64
+
+    own_conn = conn is None
+    conn = conn or open_index()
+    try:
+        has_table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE name = 'transcript_proteins'"
+        ).fetchone()
+        if not has_table:
+            return []
+        seq = str(seq).upper().rstrip("*")
+        hits = [
+            r[0] for r in conn.execute(
+                "SELECT p.transcript_id FROM transcript_proteins p "
+                "JOIN transcript_spans s ON s.transcript_id = p.transcript_id "
+                "WHERE p.crc64 = ? AND p.length = ? ORDER BY (s.stop - s.start) DESC",
+                (crc64(seq), len(seq)),
+            ).fetchall()
+        ]
+        # confirm each CRC hit by translating, so a checksum collision cannot slip through
+        confirmed = []
+        for transcript_id in hits:
+            region = get_transcript_region(transcript_id, conn=conn, cfg=cfg)
+            protein = _translate_cds(region["cds_df"], region["dna"])
+            if protein is not None and protein.replace("*", "U") == seq:
+                confirmed.append(transcript_id)
+        return confirmed
+    finally:
+        if own_conn:
+            conn.close()
 
 
 def resolve_transcript_for_accession(accession, wormbase_gene, expected_sequence, conn=None, cfg=None):
@@ -383,7 +505,8 @@ def resolve_transcript_for_accession(accession, wormbase_gene, expected_sequence
             except (ValueError, KeyError):
                 continue
             protein = _translate_cds(region["cds_df"], region["dna"])
-            if protein == expected_sequence:
+            # an in-frame TGA that codes selenocysteine translates to "*" but is "U" in UniProt
+            if protein is not None and protein.replace("*", "U") == expected_sequence:
                 return transcript_id
         return None
     finally:
@@ -408,5 +531,13 @@ if __name__ == "__main__":
         n_transcripts = conn.execute("SELECT COUNT(DISTINCT transcript_id) FROM cds_exons").fetchone()[0]
         n_spans = conn.execute("SELECT COUNT(*) FROM transcript_spans").fetchone()[0]
         print(f"CDS rows: {n_cds:,}  transcripts: {n_transcripts:,}  transcript spans: {n_spans:,}")
+        has_table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE name = 'transcript_proteins'"
+        ).fetchone()
+        if has_table:
+            n_prot = conn.execute("SELECT COUNT(*) FROM transcript_proteins").fetchone()[0]
+            print(f"translated transcripts: {n_prot:,}")
+        else:
+            print("translated transcripts: none (run --build to add the translation index)")
     if not args.build and not args.stats:
         parser.error("specify --build and/or --stats")

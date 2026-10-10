@@ -19,9 +19,10 @@ provides guide spacers and mutated homology arms ready to order.
 
 ## Install
 
-**Prerequisites:** Python 3.12 and an internet connection. All analyses (BLAST, Clustal Omega,
-InterPro, Genewise) run through the EBI and AlphaFold web services — no local bioinformatics
-binaries are required.
+**Prerequisites:** Python 3.10 and an internet connection. By default, all analyses (BLAST,
+Clustal Omega, InterPro, Genewise) run through the EBI and AlphaFold web services — no local
+bioinformatics binaries are required. To run the analyses on the local machine instead, see
+[docs/LOCAL_SETUP.md](docs/LOCAL_SETUP.md).
 
 ### 1. Get the code
 

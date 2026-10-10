@@ -209,6 +209,7 @@ def run_reagents(args, report=None, job_id_cb=None, resume_job_ids=None):
     import cds_check
     import design_tag_reagents
     import genbank_input
+    import providers
     import run_genewise
 
     genewise_path = _str(args.get("genewise"))
@@ -216,7 +217,8 @@ def run_reagents(args, report=None, job_id_cb=None, resume_job_ids=None):
 
     protein_fa = _str(args.get("input_file") or args.get("fasta"))
 
-    if not genewise_path and genomic_fa:
+    # bulk mode needs no genomic file: the region is cut from the local genome
+    if not genewise_path and (genomic_fa or providers.region_from_annotation()):
         email       = _str(args.get("email"))
         working_dir = _str(args.get("working_dir"))
         run_name    = _str(args.get("run_name"))

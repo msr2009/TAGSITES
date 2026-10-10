@@ -39,6 +39,7 @@ from scripts.uniprot_api import fetch_isoform_sequences
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 import ebi_rest
 import ensembl_rest
+import providers
 from fetch_genomic_sequence import fetch_genomic_sequence
 
 
@@ -1399,7 +1400,8 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
 
         # ── build reagents entry or warn ──────────────────────────────────────
         reagents_entry = None
-        if genomic_path:
+        # bulk mode cuts the region from the local genome, so no upload is needed
+        if genomic_path or providers.region_from_annotation():
             reagents_entry = build_reagents_entry(
                 defaults     = task_defaults("reagents"),
                 genomic_path = genomic_path,
@@ -1409,6 +1411,12 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
                 offtarget        = _offtarget_flags()[0],
                 offtarget_spacer = _offtarget_flags()[1],
             )
+            if not genomic_path:
+                ui.notification_show(
+                    "Gene model and genomic region will be taken from the local GFF3 + genome.",
+                    type="message",
+                    duration=6,
+                )
         else:
             ui.notification_show(
                 "No genomic FASTA uploaded — CRISPR reagent design will not run. "

@@ -1,38 +1,24 @@
 """
 genewise_bulk.py
 
-Local backend for CDS-exon inference: reads the exon structure straight out
-of the WormBase GFF3 annotation (via scripts/genome_regions.py) for any
-isoform present in it, instead of submitting two EBI Genewise jobs (forward +
-reverse-complement) to infer that structure genewise_remote.py's way.
+Local gene-model backend. No Genewise runs: the CDS exons are read from the GFF3 index
+(scripts/genome_regions.py), the matching region is cut from the local genome FASTA, and the
+transcript is chosen by translating every annotated CDS and matching the input protein exactly
+(genome_regions.find_transcripts_by_sequence). No genomic region needs to be supplied.
 
-Matching a protein to a specific GFF3 transcript is not a plain string match:
-local_store.py's wormbase_gene (e.g. "C10C5.1g") is the isoform-lettered
-locus name, but WormBase can have several numbered transcript versions under
-that same name (splice/UTR variants with no further distinguishing hint) —
-verified in a 300-accession sample, ~8% of name-prefix matches were
-ambiguous and ~1% had none at all. genome_regions.resolve_transcript_for_accession()
-resolves this by translating each same-prefix candidate's CDS and comparing
-to the UniProt protein sequence already in local_store — 296/300 (98.7%)
-resolved this way in that sample; the remainder (in that sample: two
-non-nuclear-code mitochondrial genes plus two others) raise LookupError so
-a batch driver can fall back to genewise_remote.py for them, per
-batch.config.json's documented "config with fallback" model (the actual
-per-task fallback dispatch is Phase C work, not yet implemented — this
-module only ever does the local lookup or raises).
+Output files keep Genewise's names and format ({outprefix}.genewise.out.txt,
+{outprefix}.genewise_genomic.fa, {outprefix}.genewise_orientation.txt) so the reagent code
+downstream is unchanged. The alignment score column is a fixed sentinel
+(parse_genewise.GROUND_TRUTH_SCORE), since annotation-derived exons are ground truth. Orientation
+is always "+": the extracted DNA is already reverse-complemented to the coding strand.
 
-Writes the same {outprefix}.genewise.out.txt / {outprefix}.genewise_genomic.fa
-/ {outprefix}.genewise_orientation.txt files genewise_remote.py's winning
-orientation produces, in the same GFF-embedded-score format
-parse_genewise.py's parser expects — with the alignment score column set to
-a fixed sentinel (see parse_genewise.GROUND_TRUTH_SCORE) since there's no genewise bitscore
-for annotation-derived exons, only exact ground truth. Orientation is always
-"+" because the extracted genomic FASTA is already reverse-complemented to
-the coding strand by genome_regions.extract_sequence() when needed, unlike
-genewise_remote.py's RC submission which reflects the *original* input
-region's orientation.
+Indexes built before the translation table existed fall back to the UniProt route: accession or
+checksum in local_store -> WormBase locus name -> same-prefix GFF3 transcripts, each translated
+and compared (genome_regions.resolve_transcript_for_accession). Raises LookupError when nothing
+translates to the input protein.
 """
 
+import json
 import sys
 from pathlib import Path
 
@@ -40,9 +26,13 @@ from site_selection_util import get_sequence, save_fasta, uniprot_accession_rege
 
 sys.path.insert(0, str(Path(__file__).parent))
 from local_store import lookup_by_accession, lookup_by_crc64, open_index as open_proteins_index
-from genome_regions import resolve_transcript_for_accession, open_index as open_genome_index
+from genome_regions import (
+    find_transcripts_by_sequence, get_transcript_region, resolve_transcript_for_accession,
+    open_index as open_genome_index,
+)
 from parse_genewise import write_genewise_gff
 from progress import report as _report, resolve_reporter
+
 
 def _resolve_accession(protein_fasta, proteins_conn):
     """Resolve protein_fasta to a UniProt accession: the string itself if it
@@ -66,54 +56,76 @@ def _resolve_accession(protein_fasta, proteins_conn):
     return matches[0]["accession"] if matches else None
 
 
+def _flank_bp():
+    """batch_run.genomic_flank_bp (default 2000): bases of genome kept around the gene.
+
+    Homology arms are up to 1 kb either side of an insertion site, so a gene without flank
+    would make every N- and C-terminal site fail the short-arm check.
+    """
+    from providers import _load_config
+
+    return int(_load_config().get("batch_run", {}).get("genomic_flank_bp", 2000) or 0)
+
+
+def _local_store_row(protein_fasta):
+    """local_store row for the input (accession, record id or checksum); None if absent or unbuilt."""
+    try:
+        conn = open_proteins_index()
+    except FileNotFoundError:
+        return None
+    try:
+        accession = _resolve_accession(protein_fasta, conn)
+        return lookup_by_accession(accession, conn=conn) if accession else None
+    finally:
+        conn.close()
+
+
+def _input_sequence(protein_fasta, protein_row):
+    """The protein sequence to match: the input file's own, else the local_store entry's."""
+    if Path(protein_fasta).exists():
+        return str(get_sequence(protein_fasta) if protein_fasta.endswith(".pdb")
+                   else read_fasta(protein_fasta)[1])
+    if protein_row:
+        return protein_row["sequence"]
+    raise LookupError(f"{protein_fasta!r} is neither a file nor a known UniProt accession")
+
+
 def main(protein_fasta, genomic_fasta, email, outprefix, report=None,
          job_id_cb=None, resume_job_ids=None):
-    """Look up the GFF3-derived CDS exon structure for protein_fasta's
-    protein and write the same {outprefix}.genewise.out.txt /
-    {outprefix}.genewise_genomic.fa / {outprefix}.genewise_orientation.txt
-    files genewise_remote.main() produces. genomic_fasta/email/job_id_cb/
-    resume_job_ids are accepted but unused (no genomic region needs to be
-    supplied — it's read from the local genome FASTA via the resolved
-    transcript's span — and no network job is submitted); kept so
-    providers.resolve("genewise") can call either backend identically.
+    """Write Genewise-format files for the GFF3 transcript whose CDS translates to the protein.
 
-    Raises LookupError if the protein's accession can't be resolved, or no
-    GFF3 transcript resolves to it — see this module's docstring for the
-    intended caller behaviour (fall back to genewise_remote.py).
+    genomic_fasta/email/job_id_cb/resume_job_ids are accepted but unused (the region comes from
+    the local genome, no network job is submitted) so providers.resolve("genewise") can call
+    either backend identically. batch_run.genomic_flank_bp of genome is added around the gene
+    (clipped at chromosome ends) and recorded, with the transcript coordinates and any
+    equivalent transcripts, in {outprefix}.region.json. Raises LookupError if no transcript matches.
     """
     reporter = resolve_reporter(report)
 
-    proteins_conn = open_proteins_index()
-    try:
-        accession = _resolve_accession(protein_fasta, proteins_conn)
-        if accession is None:
-            raise LookupError(
-                f"could not resolve a UniProt accession for {protein_fasta!r} "
-                "in the local index"
-            )
-        protein_row = lookup_by_accession(accession, conn=proteins_conn)
-        if protein_row is None or not protein_row.get("wormbase_gene"):
-            raise LookupError(
-                f"accession {accession!r} has no WormBase cross-reference in the local index"
-            )
-    finally:
-        proteins_conn.close()
+    protein_row = _local_store_row(protein_fasta)
+    seq = _input_sequence(protein_fasta, protein_row)
+    label = protein_row["accession"] if protein_row else Path(protein_fasta).stem
 
-    _report(reporter, f"Resolving GFF3 transcript for {accession}…", stage="genewise_bulk")
+    _report(reporter, f"Resolving GFF3 transcript for {label}…", stage="genewise_bulk")
 
     genome_conn = open_genome_index()
     try:
-        transcript_id = resolve_transcript_for_accession(
-            accession, protein_row["wormbase_gene"], protein_row["sequence"], conn=genome_conn,
-        )
-        if transcript_id is None:
-            raise LookupError(
-                f"no GFF3 transcript under locus {protein_row['wormbase_gene']!r} "
-                f"translates to accession {accession}'s sequence"
+        # exact translation match against every annotated CDS
+        matches = find_transcripts_by_sequence(seq, conn=genome_conn)
+        # older indexes lack the translation table: use the UniProt locus name instead
+        if not matches and protein_row and protein_row.get("wormbase_gene"):
+            transcript_id = resolve_transcript_for_accession(
+                protein_row["accession"], protein_row["wormbase_gene"], seq, conn=genome_conn,
             )
-
-        from genome_regions import get_transcript_region
-        region = get_transcript_region(transcript_id, conn=genome_conn)
+            matches = [transcript_id] if transcript_id else []
+        if not matches:
+            raise LookupError(
+                f"no GFF3 transcript translates to {label}'s sequence; supply a GenBank gene "
+                "model, or set backends.genewise to \"remote\" and upload a genomic region"
+            )
+        # transcripts with the same CDS (UTR/splice variants) are equivalent; take the longest
+        transcript_id = matches[0]
+        region = get_transcript_region(transcript_id, conn=genome_conn, flank=_flank_bp())
     finally:
         genome_conn.close()
 
@@ -127,6 +139,13 @@ def main(protein_fasta, genomic_fasta, email, outprefix, report=None,
     winner_out = f"{outprefix}.genewise.out.txt"
     write_genewise_gff(winner_out, region["cds_df"], region["chrom"],
                        "genome_regions.py (GFF3-derived)")
+
+    with open(f"{outprefix}.region.json", "w") as fh:
+        json.dump({"transcript_id": transcript_id, "chrom": region["chrom"],
+                   "start": region["start"], "stop": region["stop"],
+                   "strand": region["strand"], "flank_5p": region["flank_5p"],
+                   "flank_3p": region["flank_3p"],
+                   "equivalent_transcripts": matches}, fh)
 
     orient_file = f"{outprefix}.genewise_orientation.txt"
     with open(orient_file, "w") as fh:

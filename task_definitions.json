@@ -122,7 +122,7 @@
 				"genotyping": ".genotyping.tsv"
 			},
 			"params": {
-				"genomic_fasta": { "default": "",    "tooltip": "FASTA of the genomic region to search (orientation need not be known; run_genewise.py tests both strands automatically)" },
+				"genomic_fasta": { "default": "",    "tooltip": "FASTA of the genomic region to search (orientation need not be known; run_genewise.py tests both strands automatically). Optional when backends.genewise is bulk: the region is taken from the local GFF3 + genome" },
 				"genewise":      { "default": "",    "hidden": true, "tooltip": "path to a pre-computed Genewise .out.txt file (leave empty to run Genewise automatically via the EBI REST API)" },
 				"n_guides":      { "default": 5,     "tooltip": "maximum guide RNAs to report per insertion site" },
 				"arm_length":    { "default": 1000,  "tooltip": "homology arm length in bp on each side of insertion" },

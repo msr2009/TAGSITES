@@ -42,7 +42,8 @@ scripts/                # core analysis executables
   extract_from_pdb.py         # pLDDT + SASA from AlphaFold PDB
   regex_sites.py              # PTM site identification
   call_interpro.py            # EBI InterPro domain annotation
-  uniprot_features.py         # curated UniProt feature annotation (lipidation, PTMs, binding sites, ...)
+  uniprot_features.py         # curated UniProt feature annotation (lipidation, PTMs, binding sites, modified residues,
+                              # mutagenesis positions, ...)
   calculate_protein_scores.py # sliding-window property scoring
   site_selection_util.py      # shared library: FASTA/PDB I/O, BLAST API, sequence utils
   existing_AF_model.py        # search AFDB for existing predictions
@@ -87,6 +88,19 @@ scripts/                # core analysis executables
                               # unchanged. Build the database with
                               # `python scripts/reference_data.py --only blastdb`
 
+  proteome_run.py             # batch driver: runs the analysis tasks for every protein of
+                              # the proteome (one folder per protein, _status.jsonl)
+  build_proteome_db.py        # consolidates a proteome_run into ONE SQLite file (proteins,
+                              # features, per-residue tracks, tag-site scores, reagents).
+                              # Run --estimate first: it samples, measures and projects
+                              # the size and run time; a full build needs --yes
+  proteome_db.py              # read-only lookup over that file: find_protein(), get_*(),
+                              # query(), regenerate_arms(); CLI `lookup <name>` / `sql`
+
+docs/
+  LOCAL_SETUP.md  # step-by-step guide to running the app with all analyses local
+                  # (single-protein use; proteome-scale setup is not covered)
+
 utils/
   results.py    # load JSON output → DataFrames; Plotly + matplotlib visualization
   helpers.py    # taxonomy loading, Shiny reactive state helpers
@@ -107,6 +121,17 @@ not ENA accessions). Local-screen knobs live in `offtarget.config.json`'s `local
 Recall of the local spacer screen was measured at 100% (123 planted sites, 1-3 mismatches
 in positions 1-15) only with `local.spacer_evalue` >= 1e5: blastn drops a 3-mismatch 20 nt
 site at the shared `blast.evalue_spacer` of 1000.
+
+**Proteome database**: `scripts/build_proteome_db.py` builds `proteome.sqlite3` in stages
+(`ingest`, `scores`, `reagents`); `scripts/proteome_db.py` reads it (`lookup trxr-1`).
+Always `--estimate` first (disk is limited): it measures a sample with SQLite's dbstat and
+projects size and time. The file is assembled on LOCAL disk and copied out, since SQLite
+locking is unreliable on the network volume. A task's file is ingested only if its last
+status is `ok`. `proteins.sequence` is the sequence the batch analysed (the folder's `.fa`),
+flagged by `sequence_differs` where it differs from `local_store` (28 proteins). Reagent tables never store the ~1 kb arms; `regenerate_arms()` rebuilds them
+from the genome and was verified byte-identical to the reagent TSV. The reagent stage needs
+`TAGSITES_BATCH_CONFIG=batch.config.local.json` (local genewise backend) and is resumable.
+Knobs live in `batch.config.json`'s `proteome_db` block.
 
 ## Dual-use constraint: Shiny app + standalone CLI
 
@@ -145,6 +170,9 @@ splicing and reads short worm introns through as coding sequence; `genewise_remo
 sends `splice=model, init=global` (sweep of 11 genes x 17 settings; 10/11 exact, vs 3/11 at the
 default; EBI exposes no gap penalties). A GenBank with CDS/exon features uploaded as the genomic
 region replaces Genewise entirely (`genbank_input.py`) and is held to the same check.
+With `backends.genewise` set to `bulk` (a local run) there is no Genewise and no genomic upload:
+`genome_regions.find_transcripts_by_sequence` matches the input protein to the GFF3 transcript whose
+CDS translates to it exactly, and `genewise_bulk.py` cuts that gene's region from the local genome.
 
 **Alignment rendering**: sequence alignments are pre-rendered as matplotlib SVGs (stored in a dict keyed by alignment name) and displayed statically — this replaced an earlier real-time Plotly approach that was too slow.
 

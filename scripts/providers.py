@@ -2,10 +2,12 @@
 
 Batch-scale proteome runs can swap a network-backed analysis for a local/bulk
 equivalent by setting a mode in a config file — batch.config.json (repo root)
-by default. The interactive Shiny app never sets the TAGSITES_BATCH_CONFIG
-environment variable and the checked-in batch.config.json ships with every
-backend set to "remote", so the app always resolves to its "remote" backend —
-today's behavior, unchanged, by construction rather than by convention.
+by default. The interactive Shiny app reads the same file, so it follows
+whichever config is active. The checked-in batch.config.json keeps the EBI-backed
+analyses (domains, structure, genewise, conservation) at "remote", with
+offtarget_region "local" (falling back to BLAT/EBI when BLAST+ or its database is
+absent). To run the app with local backends, start it with
+TAGSITES_BATCH_CONFIG pointing at a separate file (docs/LOCAL_SETUP.md).
 
 Batch runs (scripts/proteome_run.py) that want local/bulk backends must NOT
 just edit batch.config.json in place: that file is read by this same fixed
@@ -75,6 +77,11 @@ def backend_mode(analysis, default="remote"):
     """
     config = _load_config()
     return config.get("backends", {}).get(analysis, default)
+
+
+def region_from_annotation():
+    """True when the gene model and genomic region come from the local GFF3 + genome."""
+    return backend_mode("genewise") == "bulk"
 
 
 def resolve(analysis, default="remote"):
