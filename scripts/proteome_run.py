@@ -23,10 +23,11 @@ file per finished protein, not a live per-task status file, so resuming a
 killed run only means skipping accessions already marked "success" in that
 file — no partial in-run state to reconcile.
 
-What this does NOT do (yet): consolidate the ~100k loose per-protein output
-files into one queryable store (Parquet/SQLite) — each protein's outputs are
-left as the same flat files utils/results.py already reads for a single run.
-Also does not implement per-task remote fallback when a local backend can't
+Each protein's outputs are left as the same flat files utils/results.py already reads
+for a single run; scripts/build_proteome_db.py consolidates them into one SQLite file
+(see its docstring, and run its --estimate first).
+
+What this does NOT do (yet): implement per-task remote fallback when a local backend can't
 resolve a protein (domains_bulk.py/structure_bulk.py degrade to an empty/
 "not found" result; genewise_bulk.py and conservation_local.py raise) —
 doing that safely at proteome scale needs its own rate-limited dispatch
@@ -126,7 +127,7 @@ def build_tasks_for_protein(accession, seq, working_dir, run_name, task_types,
                       "args": {**common, "output": out, "evalue": "1e-10",
                                "max_hits": "20", "db": "uniprotkb"}})
 
-    if include_reagents and "plddt" in task_types:
+    if include_reagents or "reagents" in task_types:
         # genomic_fasta only needs to be non-empty to trigger the genewise
         # pre-step in task_runners.run_reagents(); the bulk backend resolves
         # the actual genomic region from the accession, ignoring its content
@@ -158,6 +159,7 @@ def run_protein(accession, seq, out_dir, task_types, include_reagents=False):
     Never raises — a task's exception is caught and recorded so one protein's
     failure can't take down the whole batch.
     """
+    t_start = time.time()
     working_dir = os.path.join(out_dir, accession)
     os.makedirs(working_dir, exist_ok=True)
     run_name = accession
@@ -191,7 +193,8 @@ def run_protein(accession, seq, out_dir, task_types, include_reagents=False):
     overall = "success" if all(done) else "partial"
     if not any(done):
         overall = "failed"
-    return {"accession": accession, "status": overall, "tasks": task_results}
+    return {"accession": accession, "status": overall, "tasks": task_results,
+            "seconds": round(time.time() - t_start, 1)}
 
 
 def _append_status(status_path, result):
@@ -291,13 +294,16 @@ def isoform_rows(table_seqs):
 
 
 def main(out_dir, task_types=None, limit=None, accessions=None, workers=None,
-         include_reagents=False, force=False, presearch=None, isoforms=False):
+         include_reagents=False, force=False, presearch=None, isoforms=False, rows=None):
     """Run the configured tasks for every protein in local_store.py's proteins
     table (or `accessions`, if given), skipping accessions already marked
     "success" in {out_dir}/_status.jsonl unless force=True. presearch=None
     batch-searches conservation hits up front when that backend is local
     (scripts/conservation_presearch.py); True/False forces it on/off.
     isoforms=True runs isoform_rows() instead of the table, without the uniprot task.
+    rows=[(id, sequence)] runs exactly those proteins (ids need not be in the table), which
+    is how scripts/build_proteome_db.py drives the reagent stage; "reagents" is then an
+    ordinary task type.
     """
     task_types = task_types or DEFAULT_TASKS
     if isoforms:
@@ -308,7 +314,9 @@ def main(out_dir, task_types=None, limit=None, accessions=None, workers=None,
 
     conn = open_index()
     try:
-        if isoforms:
+        if rows is not None:
+            rows = list(rows)
+        elif isoforms:
             rows = isoform_rows(r[0] for r in conn.execute("SELECT sequence FROM proteins"))
             if limit:
                 rows = rows[:int(limit)]

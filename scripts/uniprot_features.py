@@ -7,7 +7,8 @@ the same conventions as regex_sites.py / call_interpro.py.
 Two output sources, distinguished by severity in tables/uniprot_features.txt:
   UniProt       - "blocking" features (lipidation, propeptide, signal peptide, ...):
                   tagging here is expected to disrupt processing/targeting/folding.
-  UniProt_site  - "site" features (binding site, motif, PTM, ...): informational only.
+  UniProt_site  - "site" features (binding site, motif, modified residue, mutagenesis, ...):
+                  informational only.
 
 Matt Rich, 2026
 """
@@ -61,7 +62,13 @@ def _feature_detail(feature, ftype):
     if not detail:
         ligand = feature.get("ligand") or {}
         detail = ligand.get("name", "")
-    return detail or ftype
+    detail = detail or ftype
+    # mutagenesis (and variants) carry the substitution outside the description
+    alt = feature.get("alternativeSequence") or {}
+    if alt.get("originalSequence"):
+        changes = alt.get("alternativeSequences") or ["missing"]
+        detail = "{}>{}; {}".format(alt["originalSequence"], "/".join(changes), detail)
+    return detail
 
 
 def _evidence_suffix(feature):

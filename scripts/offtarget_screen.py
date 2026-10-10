@@ -330,8 +330,18 @@ def own_locus_accessions(hsps):
 
 # ── Alignment window scoring ──────────────────────────────────────────────────
 
+_column_index_cache = {}   # id(hsp) -> (hsp, index); holding hsp keeps the id from being reused
+
+
 def _column_index(hsp):
-    """Map region coordinate -> alignment column for every ungapped query base."""
+    """Map region coordinate -> alignment column for every ungapped query base.
+
+    Memoised per HSP object: scoring one region visits the same few hundred HSPs once per
+    guide and per primer (2M calls for a 667 aa protein), and the index never changes.
+    """
+    hit = _column_index_cache.get(id(hsp))
+    if hit is not None and hit[0] is hsp:
+        return hit[1]
     index = {}
     q = hsp["q_from"] - 1
     for col, qc in enumerate(hsp["qseq"]):
@@ -339,6 +349,9 @@ def _column_index(hsp):
             continue
         index[q] = col
         q += 1
+    if len(_column_index_cache) >= 2048:
+        _column_index_cache.clear()
+    _column_index_cache[id(hsp)] = (hsp, index)
     return index
 
 

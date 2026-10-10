@@ -69,3 +69,9 @@ scripts/uniprot_species/speclist_testing.ipynb
 # Local model usage tracking
 MODELS.md
 batch.config.3090.json
+
+# Yeast tag-rescue comparison analysis (external reference, not app code)
+yeast_tag_rescue_analysis/
+
+# local exploration tables
+WORMPRO/

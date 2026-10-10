@@ -36,6 +36,7 @@ Matt Rich, 2026
 import argparse
 import collections
 import gzip
+import os
 import shutil
 import subprocess
 import sys
@@ -59,6 +60,11 @@ _chrom_length_cache = {}
 def _local_cfg(cfg):
     """The offtarget.config.json "local" block ({} when absent)."""
     return (cfg or {}).get("local") or {}
+
+
+def _threads(cfg):
+    """blastn -num_threads: TAGSITES_BLAST_THREADS if set (a worker pool sets it to 1), else config."""
+    return int(os.environ.get("TAGSITES_BLAST_THREADS") or _local_cfg(cfg).get("threads", 1))
 
 
 def _abs(path):
@@ -245,7 +251,7 @@ def run_region_screen(region_seq, email, taxid, exons=None, cfg=None, report=Non
     t0 = time.perf_counter()
     rows = run_blastn([region_seq], db, "blastn", blast["wordsize_region"],
                       blast["evalue_region"], blast["alignments"],
-                      threads=_local_cfg(cfg).get("threads", 1))
+                      threads=_threads(cfg))
     hsps = []
     for r in rows:
         lo, hi = sorted((r["s_from"], r["s_to"]))
@@ -352,7 +358,7 @@ def run_spacer_screen(spacers, email, taxid, pam="NGG", cfg=None, report=None,
     rows = run_blastn([query], db, "blastn-short", blast["wordsize_spacer"],
                       local.get("spacer_evalue", blast["evalue_spacer"]),
                       blast.get("alignments_spacer", blast["alignments"]),
-                      threads=local.get("threads", 1), min_len=int(local.get("spacer_min_len", 7)))
+                      threads=_threads(cfg), min_len=int(local.get("spacer_min_len", 7)))
     raw = spacer_hsps(rows, spacer_list, block_len, sq["separator_len"], db)
     # screen_spacer_hits collapses sites with identical sequence and PAM, which is right for
     # ENA (one locus appears once per assembly) but wrong for a single-assembly database,
@@ -407,7 +413,7 @@ def primer_sites(primers, db, cfg, report=None):
     # every primer is a query in ONE blastn call; each row's "q" maps back to its primer
     rows = run_blastn(unique, db, "blastn-short", local.get("primer_wordsize", 7),
                       local.get("primer_evalue", 1000), cfg["blast"]["alignments"],
-                      threads=local.get("threads", 1),
+                      threads=_threads(cfg),
                       min_len=int(local.get("primer_min_len", 10)))
     candidates = []   # (primer, chrom, start, end, strand)
     seen = set()

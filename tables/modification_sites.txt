@@ -1,6 +1,6 @@
 myristoylation	^MG...S
 N-terminal palmitoylation	^MGC..S
-CAAX prenylation	C...$
+CAAX prenylation	C[AILMV][AILMV].$
 RAB prenylation	C{1,2}$
 Canonical PDZ binding site	[ST]{1}.[VL]{1}$
 PDZ binding site class 1a (Tonikian 2008)	[VILFWYM][KR].SDV$
@@ -19,3 +19,5 @@ PDZ binding site class 2e (Tonikian 2008)	[VILFWYM]{4}$
 PDZ binding site class 2f (Tonikian 2008)	[DE][VILFWYM][FWY][VILFWYM]$
 PDZ binding site class 3a (Tonikian 2008)	W[FWY][ST]DW[VILM]$
 PDZ binding site class 4a (Tonikian 2008)	[FWY][VILFWYM]GWF$
+di-cysteine palmitoylation site	CC
+N-end rule degron	^M[CDER]

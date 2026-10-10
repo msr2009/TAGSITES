@@ -52,6 +52,17 @@
     "max_length": null
   },
 
+  "proteome_db": {
+    "_comment": "scripts/build_proteome_db.py / scripts/proteome_db.py. path = the finished SQLite file (read it with proteome_db.py; it is opened read-only/immutable because SQLite locking is unreliable on network volumes). run_dir = the proteome_run.py output folder to ingest. build_dir = LOCAL disk where the database is assembled before being copied to path (blank = the system temp dir); scratch_dir = where the reagent stage writes its transient per-protein TSVs, deleted after each chunk (blank = under build_dir). chunk_size = proteins per worker task when parsing; curated_sites = JSON lists of known tag sites (gene, wormbase_id, site, flank_n, flank_c) matched to proteins by flanking sequence; reagent_chunk = proteins designed per round of the reagent stage (bounds transient disk: ~6 MB of TSV per protein). Always run `build_proteome_db.py --estimate` first: it samples, measures each table, and projects the full size and reagent run time without building anything large.",
+    "path": "data/runs/proteome_v1/proteome.sqlite3",
+    "run_dir": "data/runs/proteome_v1",
+    "build_dir": "",
+    "scratch_dir": "",
+    "chunk_size": 200,
+    "reagent_chunk": 500,
+    "curated_sites": ["data/internal_batch_sites.json"]
+  },
+
   "batch_run": {
     "_comment": "scripts/proteome_run.py knobs",
     "max_workers": 16,

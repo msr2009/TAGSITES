@@ -23,6 +23,7 @@ Binding site		site	Binding site
 Active site		site	Active site
 Site			site	Site
 Modified residue	site	Modified residue
+Mutagenesis		site	Mutagenesis
 Glycosylation		site	Glycosylation
 Motif			site	Motif
 DNA binding		site	DNA binding

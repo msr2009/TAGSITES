@@ -16,9 +16,17 @@ isoform's accession won't have its own AF-*.pdb.gz member. That's a known,
 documented limitation (see the plan's Phase B), not something this backend
 tries to work around; it returns 1 (not found) for those, exactly like
 structure_remote.py's "no BLAST hit good enough" branch.
+
+A model is used only when its sequence EQUALS the input sequence. task_runners.afdb_presearch
+swaps the model's sequence in as the reference for every task, so a model built on an older
+UniProt release would silently move modifications, scores and conservation onto the wrong
+protein (28 of 28,626 proteome entries, three of them a different gene model, <45%
+identical). A mismatch returns 1, the same "no model" outcome, and the input sequence stays.
+Selenocysteine is compared as cysteine because the PDB carries it as CYS.
 """
 
 import gzip
+import os
 import sys
 from pathlib import Path
 
@@ -59,6 +67,11 @@ def main(fasta_in, email, workingdir, name, taxid, evalue, percentid,
     """
     reporter = resolve_reporter(report)
     accession = _resolve_accession(fasta_in)
+    # a FASTA path carries the sequence the model has to match; a bare accession does not
+    expected = None
+    if not uniprot_accession_regex(fasta_in):
+        from site_selection_util import read_fasta
+        expected = str(read_fasta(fasta_in)[1])
     if accession is None:
         _report(reporter,
                 "Could not resolve a UniProt accession for this sequence in "
@@ -80,7 +93,15 @@ def main(fasta_in, email, workingdir, name, taxid, evalue, percentid,
     _report(reporter, f"copied local AFDB structure for {accession} -> {pdb_path}",
             stage="afdb_save")
 
+    model_seq = str(get_sequence(pdb_path))
+    if expected is not None and model_seq.replace("U", "C") != expected.replace("U", "C"):
+        _report(reporter, f"AFDB model for {accession} is a different sequence version "
+                          f"({len(model_seq)} aa vs {len(expected)} aa); not used",
+                stage="afdb_bulk", level="warning")
+        os.remove(pdb_path)
+        return 1
+
     fasta_path = f"{outfile_prefix}.fa"
-    save_fasta(name, get_sequence(pdb_path), fasta_path)
+    save_fasta(name, model_seq, fasta_path)
     _report(reporter, f"saved FASTA from PDB to {fasta_path}", stage="afdb_save")
     return fasta_path

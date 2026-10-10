@@ -34,6 +34,8 @@ EXCLUDES=(
   -x '.ipynb_checkpoints/'         # 5.7 MB Jupyter autosaves
   -x 'scripts/uniprot_species/'    # 7.5 MB species flat file + notebook
   -x 'uniprot_species.flat.txt'
+  -x 'yeast_tag_rescue_analysis/'  # 15 MB yeast tagging comparison, analysis only
+  -x 'WORMPRO/'                    # local exploration tables
 
   # NOTE: ucsc.local.json is gitignored but MUST ship — shinyapps.io has no
   # secrets mechanism, so the UCSC BLAT API key travels inside this private
