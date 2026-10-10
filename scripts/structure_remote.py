@@ -36,6 +36,29 @@ def is_afdb_not_found(pdb_text):
     return "ERROR" in pdb_text[:50]
 
 
+def clean_sequence(seq):
+    """Strip stop-codon asterisks and whitespace so checksum and BLAST see the bare protein."""
+    return "".join(seq.replace("*", "").split())
+
+
+def fetch_afdb_pdb(accession, reporter):
+    """Download the AFDB PDB text for an accession, or None if unavailable."""
+    try:
+        pdb_bytes = ebi_rest.dbfetch("afdb", accession, "pdb", "raw")
+        pdb_text = pdb_bytes.decode("utf-8", errors="replace")
+    except Exception as e:
+        _report(reporter, f"dbfetch failed for {accession}: {e}",
+                stage="afdb_fetch", level="error")
+        return None
+
+    # the EBI dbfetch returns an error message as plain text when not found
+    if is_afdb_not_found(pdb_text):
+        _report(reporter, f"PDB not found in AFDB for {accession}",
+                stage="afdb_fetch", level="warning")
+        return None
+    return pdb_text
+
+
 def main(fasta_in, email, workingdir, name, taxid, evalue, percentid,
          clients_folder, report=None):
     """Checksum lookup → BLAST fallback → AFDB download → write PDB + FASTA.
@@ -43,17 +66,15 @@ def main(fasta_in, email, workingdir, name, taxid, evalue, percentid,
     Returns the path to the downloaded AF2 FASTA, or 1 if not found.
     """
     reporter = resolve_reporter(report)
-    match_accession = ""
-    match_eval = 1e-200
-    match_id = 100.0
+    candidates = []  # (accession, percent_id, evalue), best BLAST hit first
 
     outfile_prefix = f"{workingdir}/{name}.AF"
 
     # if fasta_in looks like a UniProt accession, skip all searching
     if uniprot_accession_regex(fasta_in) is not None:
-        match_accession = fasta_in
+        candidates.append((fasta_in, 100.0, 1e-200))
     else:
-        seq = get_sequence(fasta_in)
+        seq = clean_sequence(get_sequence(fasta_in))
 
         # fast path: exact sequence match via CRC64 checksum (no queue, milliseconds)
         _report(reporter, "Checking UniProt for exact sequence match…", stage="afdb_checksum")
@@ -66,7 +87,7 @@ def main(fasta_in, email, workingdir, name, taxid, evalue, percentid,
 
         if acc:
             _report(reporter, f"Exact UniProt match: {acc} — skipping BLAST", stage="afdb_checksum")
-            match_accession = acc
+            candidates.append((acc, 100.0, 1e-200))
         else:
             # fallback: BLAST against UniProt to find closest homolog
             _report(reporter, "No exact match; submitting NCBI BLAST job for AFDB lookup…",
@@ -98,26 +119,19 @@ def main(fasta_in, email, workingdir, name, taxid, evalue, percentid,
                 _report(reporter, "no BLAST hits found for AFDB lookup", stage="afdb_nohit")
                 return 1
 
-            hit = blast_tsv_line_to_afdb_hit(lines[1])
-            match_id        = hit["percent_id"]
-            match_eval      = hit["evalue"]
-            match_accession = hit["accession"]
+            # keep every hit: identical sequences tie, and the first may lack an AFDB model
+            for line in lines[1:]:
+                if line.strip():
+                    hit = blast_tsv_line_to_afdb_hit(line)
+                    candidates.append((hit["accession"], hit["percent_id"], hit["evalue"]))
 
-    # try to download AlphaFold model for the matched accession
-    if match_id >= percentid and match_eval <= evalue and match_accession != "":
-        try:
-            pdb_bytes = ebi_rest.dbfetch("afdb", match_accession, "pdb", "raw")
-            pdb_text = pdb_bytes.decode("utf-8", errors="replace")
-        except Exception as e:
-            _report(reporter, f"dbfetch failed for {match_accession}: {e}",
-                    stage="afdb_fetch", level="error")
-            return 1
-
-        # the EBI dbfetch returns an error message as plain text when not found
-        if is_afdb_not_found(pdb_text):
-            _report(reporter, f"PDB not found in AFDB for {match_accession}",
-                    stage="afdb_fetch", level="warning")
-            return 1
+    # try candidates in order; the first passing thresholds with an AFDB model wins
+    for match_accession, match_id, match_eval in candidates:
+        if match_accession == "" or match_id < percentid or match_eval > evalue:
+            continue
+        pdb_text = fetch_afdb_pdb(match_accession, reporter)
+        if pdb_text is None:
+            continue
 
         pdb_path = f"{outfile_prefix}.pdb"
         with open(pdb_path, "w") as f:
@@ -128,7 +142,7 @@ def main(fasta_in, email, workingdir, name, taxid, evalue, percentid,
         save_fasta(name, get_sequence(pdb_path), fasta_path)
         _report(reporter, f"saved FASTA from PDB to {fasta_path}", stage="afdb_save")
         return fasta_path
-    else:
-        _report(reporter, f"no BLAST hit better than E={evalue} and %ID={percentid}",
-                stage="afdb_nohit", level="warning")
-        return 1
+
+    _report(reporter, f"no hit with an AFDB model at E<={evalue} and %ID>={percentid}",
+            stage="afdb_nohit", level="warning")
+    return 1
