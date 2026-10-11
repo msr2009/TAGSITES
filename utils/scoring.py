@@ -93,6 +93,35 @@ def with_extra_criteria(config, extra):
     return out
 
 
+# topology labels that scores.config.json's hard "in_membrane_or_cleaved" mask also covers;
+# each group lifts together because the config matches descriptions as case-insensitive
+# substrings ("signal" also matches "Signal peptide")
+_HARD_MASK_TOPOLOGY_GROUPS = [
+    {"Signal peptide", "signal"},
+    {"Transmembrane", "TMhelix"},
+]
+
+
+def unmask_checked_topology(config, checked_labels):
+    """Copy of config whose hard signal/transmembrane mask skips groups the user has checked."""
+    lifted = set()
+    for group in _HARD_MASK_TOPOLOGY_GROUPS:
+        if group & set(checked_labels):
+            lifted |= group
+    if not lifted:
+        return config
+    out = dict(config)
+    out["criteria"] = []
+    for c in config["criteria"]:
+        if c.get("key") == "in_membrane_or_cleaved":
+            params = dict(c["params"])
+            params["include_descriptions"] = [d for d in params["include_descriptions"]
+                                              if d not in lifted]
+            c = {**c, "params": params}
+        out["criteria"].append(c)
+    return out
+
+
 _SUGGESTED_MAX_SITES = 3
 _SUGGESTED_MIN_SPACING = 10
 

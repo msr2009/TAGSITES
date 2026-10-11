@@ -28,6 +28,7 @@
   var inputNames = {};
   var committedSet = new Set();
   var perResidueColors = [];
+  var sidechainResidues = [];   // residue numbers shown with sidechains (Sites scheme)
   var currentBg = "transparent";
 
   // Plot data (sent from Python via tagsites_set_plot)
@@ -1238,6 +1239,12 @@
       }
     }
 
+    // sidechain sticks for site residues, colored like their cartoon segment
+    sidechainResidues.forEach(function (pos) {
+      viewer.addStyle({ resi: pos }, { stick: { color: perResidueColors[pos - 1] || "#888888",
+                                                 radius: 0.2 } });
+    });
+
     committedSet.forEach(function (pos) {
       viewer.setStyle({ resi: pos }, { cartoon: { color: "#28a745" } });
       viewer.addStyle({ resi: pos }, { stick: { colorscheme: "amino", radius: 0.2 } });
@@ -1299,48 +1306,121 @@
     setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
   }
 
-  // Render the 3D viewer at 3x and hand back {uri, w, h} (CSS-pixel size of the viewer).
-  function captureStructure(cb) {
+  // Render the 3D viewer at `dpi` (pixels per CSS inch of 96) and hand back {uri}.
+  // The container is temporarily enlarged with flex disabled so both axes scale.
+  function captureStructure(dpi, cb) {
     var container = document.getElementById("ts-viewer-container");
     var origW = container.offsetWidth;
     var origH = container.offsetHeight;
-    var SCALE = 3;
+    var origFlex = container.style.flex;
+    // 3Dmol multiplies by devicePixelRatio itself; cancel it so output px = css px * dpi/96
+    var scale = (dpi / 96) / (window.devicePixelRatio || 1);
 
-    container.style.width  = (origW * SCALE) + "px";
-    container.style.height = (origH * SCALE) + "px";
+    container.style.flex   = "none";
+    container.style.width  = Math.round(origW * scale) + "px";
+    container.style.height = Math.round(origH * scale) + "px";
     viewer.resize();
     viewer.render();
 
     setTimeout(function () {
       var uri = viewer.getCanvas().toDataURL("image/png");
+      container.style.flex   = origFlex;
       container.style.width  = origW + "px";
       container.style.height = origH + "px";
       viewer.resize();
       viewer.render();
-      cb({ uri: uri, w: origW, h: origH });
+      cb({ uri: uri });
     }, 120);
   }
 
-  window.tsDownloadStructure = function () {
-    if (!viewer) return;
-    captureStructure(function (img) {
-      var a = document.createElement("a");
-      a.href = img.uri;
-      a.download = "structure.png";
-      a.click();
-    });
-  };
+  // CRC-32 of a byte array (PNG chunk checksum).
+  function crc32(bytes) {
+    var c, crc = 0xffffffff;
+    for (var i = 0; i < bytes.length; i++) {
+      c = (crc ^ bytes[i]) & 0xff;
+      for (var k = 0; k < 8; k++) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+      crc = (crc >>> 8) ^ c;
+    }
+    return (crc ^ 0xffffffff) >>> 0;
+  }
 
-  // Structure SVG: 3Dmol renders with WebGL, so the SVG wraps the current view as an
-  // embedded raster image; the color legend is not included.
-  window.tsDownloadStructureSvg = function () {
+  // Return a PNG data URI with a pHYs chunk so viewers report `dpi` as its resolution.
+  function setPngDpi(uri, dpi) {
+    var bin = atob(uri.split(",")[1]);
+    var bytes = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    var ppm = Math.round(dpi / 0.0254);
+    var chunk = new Uint8Array(21);          // length(4) + "pHYs"(4) + data(9) + crc(4)
+    var dv = new DataView(chunk.buffer);
+    dv.setUint32(0, 9);
+    chunk.set([0x70, 0x48, 0x59, 0x73], 4);
+    dv.setUint32(8, ppm);
+    dv.setUint32(12, ppm);
+    chunk[16] = 1;                           // unit: metre
+    dv.setUint32(17, crc32(chunk.subarray(4, 17)));
+    // insert right after IHDR (8-byte signature + 25-byte IHDR chunk)
+    var out = new Uint8Array(bytes.length + 21);
+    out.set(bytes.subarray(0, 33), 0);
+    out.set(chunk, 33);
+    out.set(bytes.subarray(33), 54);
+    var str = "";
+    for (var j = 0; j < out.length; j++) str += String.fromCharCode(out[j]);
+    return "data:image/png;base64," + btoa(str);
+  }
+
+  // Crop a PNG data URI to the bounding box of its non-background pixels (background =
+  // the top-left pixel) plus a small margin; cb receives {uri, w, h} in pixels.
+  function cropToContent(uri, cb) {
+    var img = new Image();
+    img.onload = function () {
+      var c = document.createElement("canvas");
+      c.width = img.width;
+      c.height = img.height;
+      var cx = c.getContext("2d");
+      cx.drawImage(img, 0, 0);
+      var d = cx.getImageData(0, 0, c.width, c.height).data;
+      var bg = [d[0], d[1], d[2], d[3]];
+      var x0 = c.width, y0 = c.height, x1 = -1, y1 = -1;
+      for (var y = 0; y < c.height; y++) {
+        for (var x = 0; x < c.width; x++) {
+          var i = (y * c.width + x) * 4;
+          // pixel differs from the background in any channel (incl. alpha)
+          if (Math.abs(d[i] - bg[0]) > 8 || Math.abs(d[i + 1] - bg[1]) > 8 ||
+              Math.abs(d[i + 2] - bg[2]) > 8 || Math.abs(d[i + 3] - bg[3]) > 8) {
+            if (x < x0) x0 = x;
+            if (x > x1) x1 = x;
+            if (y < y0) y0 = y;
+            if (y > y1) y1 = y;
+          }
+        }
+      }
+      if (x1 < 0) { cb({ uri: uri, w: c.width, h: c.height }); return; }  // blank image
+      var m = Math.round(0.02 * Math.max(x1 - x0, y1 - y0));
+      x0 = Math.max(0, x0 - m); y0 = Math.max(0, y0 - m);
+      x1 = Math.min(c.width - 1, x1 + m); y1 = Math.min(c.height - 1, y1 + m);
+      var w = x1 - x0 + 1, h = y1 - y0 + 1;
+      var out = document.createElement("canvas");
+      out.width = w;
+      out.height = h;
+      out.getContext("2d").drawImage(c, x0, y0, w, h, 0, 0, w, h);
+      cb({ uri: out.toDataURL("image/png"), w: w, h: h });
+    };
+    img.src = uri;
+  }
+
+  // Structure PNG: the current view at PNG_DPI, cropped to the molecule, with the DPI
+  // written into the file's metadata.
+  var PNG_DPI = 600;
+  window.tsDownloadStructurePng = function () {
     if (!viewer) return;
-    captureStructure(function (img) {
-      var svg = '<?xml version="1.0" encoding="UTF-8"?>\n' +
-        '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"' +
-        ' width="' + img.w + '" height="' + img.h + '" viewBox="0 0 ' + img.w + ' ' + img.h + '">' +
-        '<image width="' + img.w + '" height="' + img.h + '" xlink:href="' + img.uri + '"/></svg>';
-      saveText(svg, "structure.svg", "image/svg+xml");
+    var dpi = PNG_DPI;
+    captureStructure(dpi, function (cap) {
+      cropToContent(cap.uri, function (img) {
+        var a = document.createElement("a");
+        a.href = setPngDpi(img.uri, dpi);
+        a.download = "structure_" + dpi + "dpi.png";
+        a.click();
+      });
     });
   };
 
@@ -1449,6 +1529,7 @@
 
   Shiny.addCustomMessageHandler("tagsites_set_colors", function (msg) {
     perResidueColors = msg.colors || [];
+    sidechainResidues = msg.sticks || [];
     applyViewerColors();
     // when no data colors are set (None), show the default N→C rainbow legend
     var legend = msg.legend || (perResidueColors.length === 0 ? {type: "rainbow"} : null);

@@ -10,6 +10,8 @@ from utils.results import (
     assign_task_colors,
     residue_colors_for_track,
     residue_colors_for_annotations,
+    residues_for_sidechains,
+    DOMAIN_STRUCT_SOURCES, SITES_STRUCT_SOURCES,
     residue_colors_for_topology,
     residue_colors_for_isoforms,
     residue_colors_for_patches,
@@ -22,6 +24,7 @@ from utils.results import (
 from utils.scoring import (
     score_tag_sites, failed_flags, mask_reasons, score_cmap_hex, score_max,
     load_scoring_config, pick_suggested_sites, position_mask_criterion, with_extra_criteria,
+    unmask_checked_topology,
 )
 from utils.tag_filters import isoform_key, isoform_allowed_positions, topology_tag_allowed_positions
 from config import RESULTS_TYPE_DICT, DOMAIN_SOURCE_COLORS, TOPOLOGY_SOURCES
@@ -58,10 +61,11 @@ def _build_colors_and_legend(track, task_name, scheme, aa_df, range_df, seq_len,
     or (None, None) when the track cannot be resolved.
     """
     # ── Annotation coloring (domains / modifications / topology) ─────────────────
-    if track == "__domains__":
+    if track in ("__domains__", "__sites__"):
         if range_df is None or not seq_len:
             return None, None
-        colors, items = residue_colors_for_annotations(range_df, seq_len)
+        sources = DOMAIN_STRUCT_SOURCES if track == "__domains__" else SITES_STRUCT_SOURCES
+        colors, items = residue_colors_for_annotations(range_df, seq_len, sources)
         return colors, {"type": "categorical", "items": items}
 
     if track == "__topology__":
@@ -108,6 +112,10 @@ def _build_colors_and_legend(track, task_name, scheme, aa_df, range_df, seq_len,
     return colors, legend
 
 
+# topology labels (Phobius / DeepTMHMM) whose Tag checkbox starts unchecked (masked)
+_TOPOLOGY_DEFAULT_OFF = {"Signal peptide", "Transmembrane", "signal", "TMhelix"}
+
+
 @module.server
 def results_server(input, output, session, shared_json, shared_sites, shared_results_trigger=None):
 
@@ -145,6 +153,10 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
             return default
         return default if v is None else bool(v)
 
+    def _topology_default(lbl):
+        """Default Tag state of a topology label: off (masked) for signal/transmembrane."""
+        return lbl not in _TOPOLOGY_DEFAULT_OFF
+
     def _topology_rows():
         """The current run's topology rows (Phobius and/or DeepTMHMM), or None if
         range_data isn't loaded/has none."""
@@ -178,7 +190,7 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
                 tagged_keys.add(k)
         constitutive = _checked("iso_constitutive_only", False)
         checked_topology = {lbl for lbl in _topology_labels()
-                            if _checked(f"topology_tag_{_safe_id(lbl)}", True)}
+                            if _checked(f"topology_tag_{_safe_id(lbl)}", _topology_default(lbl))}
         return visible_keys, tagged_keys, constitutive, checked_topology
 
     def _visible_iso_result():
@@ -207,6 +219,8 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
         isoforms = (iso_data.get() or {}).get("isoforms", [])
         visible_keys, tagged_keys, constitutive, checked_topology = user_filter_spec()
         all_topology = set(_topology_labels())
+        # checking Signal peptide / Transmembrane lifts the config's hard mask on them
+        cfg = unmask_checked_topology(cfg, checked_topology)
         all_positions = set(range(1, seq_len + 1))
 
         # isoform and topology restrictions are computed independently and each becomes
@@ -276,11 +290,13 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
             for col, name in other_cols:
                 choices[col] = name
         if range_df is not None and not range_df.empty:
-            if not range_df[range_df["source"].isin({"Pfam", "modification", "UniProt", "UniProt_site"})].empty:
+            if not range_df[range_df["source"].isin(DOMAIN_STRUCT_SOURCES)].empty:
                 choices["__domains__"] = "Domains"
+            if not range_df[range_df["source"].isin(SITES_STRUCT_SOURCES)].empty:
+                choices["__sites__"] = "Sites"
             topology_sources = sorted(set(range_df["source"]) & set(TOPOLOGY_SOURCES))
             if topology_sources:
-                choices["__topology__"] = f"Topology ({', '.join(topology_sources)})"
+                choices["__topology__"] = "Topology"
             if not range_df[range_df["source"] == "hydrophobic_patch"].empty:
                 choices["__hydrophobic_patch__"] = "Hydrophobic patches"
         if iso_result and len(iso_result.get("isoforms", [])) > 1:
@@ -614,8 +630,12 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
         if colors is None:
             return
 
+        # the Sites scheme also shows sidechains for the (short) site residues
+        sticks = []
+        if track == "__sites__":
+            sticks = residues_for_sidechains(range_data.get(), seq_len, SITES_STRUCT_SOURCES)
         await session.send_custom_message("tagsites_set_colors",
-                                          {"colors": colors, "legend": legend})
+                                          {"colors": colors, "legend": legend, "sticks": sticks})
 
     # ── Outputs ──────────────────────────────────────────────────────────────────
 
@@ -648,12 +668,12 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
             )
             for val, label in choices.items()
         ]
-        svg_btn = ui.tags.button(
-            "⬇ SVG", onclick="tsDownloadStructureSvg()",
-            title="Download the current structure view as SVG",
+        png_btn = ui.tags.button(
+            "⬇ PNG", onclick="tsDownloadStructurePng()",
+            title="Download the current structure view as PNG",
             class_="btn btn-sm ts-colorby-btn",
         )
-        return ui.div(*buttons, ui.span("|", class_="ts-divider"), svg_btn,
+        return ui.div(*buttons, ui.span("|", class_="ts-divider"), png_btn,
                       class_="ts-colorby-row")
 
     @render.ui
@@ -781,15 +801,15 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
 
         if topology_labels:
             topo_header = ui.div(
-                ui.span(f"Topology ({', '.join(topology_sources_present)})", class_="ts-matrix-name-label"),
+                ui.span("Topology", class_="ts-matrix-name-label"),
                 ui.span("Tag", class_="ts-matrix-col-label"),
                 class_="ts-topo-matrix-row ts-matrix-header",
             )
             topo_rows = [
                 ui.div(
                     ui.span(lbl, class_="ts-matrix-name"),
-                    ui.div(ui.input_checkbox(f"topology_tag_{_safe_id(lbl)}", "", value=True,
-                                             width="auto")),
+                    ui.div(ui.input_checkbox(f"topology_tag_{_safe_id(lbl)}", "",
+                                             value=_topology_default(lbl), width="auto")),
                     class_="ts-topo-matrix-row",
                 )
                 for lbl in topology_labels

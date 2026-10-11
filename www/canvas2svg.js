@@ -970,6 +970,9 @@
      * Generates a ClipPath from the clip command.
      */
     ctx.prototype.clip = function(){
+        // local fix: the pending rect()/lineTo() path is only written to the element's "d"
+        // by fill()/stroke(); without this, every clipPath is empty and clips out everything
+        this.__applyCurrentDefaultPath();
         var group = this.__closestGroupOrSvg(),
             clipPath = this.__createElement("clipPath"),
             id =  randomString(this.__ids),

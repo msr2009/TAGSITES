@@ -675,9 +675,11 @@ _ANNOTATION_PALETTE = [
 _FEATURE_SOURCES = {"Pfam", "Phobius", "DeepTMHMM", "modification", "hydrophobic_patch",
                      "UniProt", "UniProt_site"}
 
-# Sources painted in the __domains__ structure colorscheme (topology sources have
-# their own __topology__ scheme instead — see TOPOLOGY_SOURCES)
-_DOMAIN_STRUCT_SOURCES = {"Pfam", "modification", "UniProt", "UniProt_site"}
+# Structure colorschemes built from annotations: __domains__ shows Pfam domains,
+# __sites__ shows UniProt-fetched features plus regex-predicted modification sites
+# (topology sources have their own __topology__ scheme — see TOPOLOGY_SOURCES)
+DOMAIN_STRUCT_SOURCES = {"Pfam"}
+SITES_STRUCT_SOURCES = {"UniProt", "UniProt_site", "modification"}
 
 # paint priority: last painted wins; modifications and UniProt features end up on top
 _FEATURE_PAINT_ORDER = ["Pfam", "Phobius", "DeepTMHMM", "modification", "UniProt_site", "UniProt"]
@@ -702,8 +704,8 @@ def _annotation_color_map(range_df):
     return color_map
 
 
-def residue_colors_for_annotations(range_df, seq_len):
-    """Unique color per Pfam/modification annotation for the __domains__ structure scheme.
+def residue_colors_for_annotations(range_df, seq_len, sources):
+    """Unique color per annotation from the given sources (Pfam or sites structure scheme).
 
     Topology sources (Phobius/DeepTMHMM) are intentionally excluded here — they have
     their own __topology__ colorscheme. Returns (per_residue_colors, legend_items).
@@ -713,7 +715,7 @@ def residue_colors_for_annotations(range_df, seq_len):
 
     # paint only domain-struct sources; modifications land on top
     for source in _FEATURE_PAINT_ORDER:
-        if source not in _DOMAIN_STRUCT_SOURCES:
+        if source not in sources:
             continue
         for _, row in range_df[range_df["source"] == source].iterrows():
             key = (str(row["source"]), str(row["description"]))
@@ -727,9 +729,23 @@ def residue_colors_for_annotations(range_df, seq_len):
     legend_items = [
         {"color": color, "label": f"{desc} ({src})"}
         for (src, desc), color in color_map.items()
-        if src in _DOMAIN_STRUCT_SOURCES
+        if src in sources
     ]
     return colors, legend_items
+
+
+# features spanning more residues than this are colored on the cartoon but get no sidechains
+SIDECHAIN_MAX_SPAN = 10
+
+
+def residues_for_sidechains(range_df, seq_len, sources):
+    """Sorted residue numbers inside short (<= SIDECHAIN_MAX_SPAN) features of the given sources."""
+    residues = set()
+    for _, row in range_df[range_df["source"].isin(sources)].iterrows():
+        start, stop = int(row["start"]), min(int(row["stop"]), seq_len)
+        if stop - start + 1 <= SIDECHAIN_MAX_SPAN:
+            residues.update(range(max(start, 1), stop + 1))
+    return sorted(residues)
 
 
 def residue_colors_for_topology(range_df, seq_len):
