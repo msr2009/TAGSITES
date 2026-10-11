@@ -510,3 +510,10 @@
     left: -9999px;
 }
 .cfi-hidden .shiny-input-container { margin: 0 !important; }
+
+/* thin separator between button groups (plot toolbar, color-by row) */
+.ts-divider {
+  color: #bbb;
+  align-self: center;
+  padding: 0 2px;
+}

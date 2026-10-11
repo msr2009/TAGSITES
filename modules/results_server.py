@@ -17,7 +17,7 @@ from utils.results import (
     _guess_analysis_type,
     _pick_gradient_cmap,
     _build_isoform_pane,
-    _VIRIDIS, _PLASMA, _COOL, _BWR,
+    _VIRIDIS, _PLASMA, _COOL, _BWR, BLAST_CMAP_MAX,
 )
 from utils.scoring import (
     score_tag_sites, failed_flags, mask_reasons, score_cmap_hex, score_max,
@@ -100,6 +100,8 @@ def _build_colors_and_legend(track, task_name, scheme, aa_df, range_df, seq_len,
         cmap_name = _CMAP_NAMES.get(id(cmap), "viridis")
         # hydrophobic exposure uses named endpoints instead of 0/1
         vmin, vmax = ("polar", "hydrophobic") if cmap is _BWR else (0, 1)
+        if cmap is _VIRIDIS:
+            vmax = f"≥{BLAST_CMAP_MAX}"
         legend = {"type": "gradient", "label": task_name, "vmin": vmin, "vmax": vmax,
                   "cmap": cmap_name}
 
@@ -291,6 +293,7 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
         # condition for producing a non-empty frame (see utils.scoring.score_tag_sites).
         if meta.get("seq_len", 0) > 0:
             choices["__score__"] = "Score"
+        choices["__gray__"] = "None"
         color_by_choices.set(choices)
         ui.update_select("color_by", choices=choices, selected="(none)")
 
@@ -569,6 +572,13 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
                                                "legend": {"type": "rainbow"}})
             return
 
+        if track == "__gray__":
+            meta = run_meta.get()
+            seq_len = meta.get("seq_len", 0) if meta else 0
+            await session.send_custom_message("tagsites_set_colors",
+                                              {"colors": ["#d9d9d9"] * seq_len, "legend": None})
+            return
+
         if track == "__score__":
             scores, _ = site_scores()
             meta = run_meta.get()
@@ -638,7 +648,13 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
             )
             for val, label in choices.items()
         ]
-        return ui.div(*buttons, class_="ts-colorby-row")
+        svg_btn = ui.tags.button(
+            "⬇ SVG", onclick="tsDownloadStructureSvg()",
+            title="Download the current structure view as SVG",
+            class_="btn btn-sm ts-colorby-btn",
+        )
+        return ui.div(*buttons, ui.span("|", class_="ts-divider"), svg_btn,
+                      class_="ts-colorby-row")
 
     @render.ui
     def chosen_sites_display():

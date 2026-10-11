@@ -553,6 +553,10 @@ _PLDDT_GRADIENT = [
 ]
 
 
+# conservation values at or above this saturate the top of the structure colormap
+BLAST_CMAP_MAX = 0.7
+
+
 def _interp_cmap(t, stops):
     """Interpolate a (t, (r,g,b)) stop list at value t ∈ [0, 1]."""
     t = max(0.0, min(1.0, t))
@@ -602,11 +606,13 @@ def residue_colors_gradient(aa_df, task_name, hex_color=None):
     if task_name not in aa_df.columns:
         return []
     stops = _pick_gradient_cmap(task_name)
+    # conservation is pinned to [0, BLAST_CMAP_MAX]; other tracks use [0, 1]
+    vmax = BLAST_CMAP_MAX if stops is _VIRIDIS else 1.0
     series = aa_df.set_index("pos")[task_name]
     colors = []
     for pos in sorted(series.index):
         v = series.get(pos, float("nan"))
-        colors.append("#aaaaaa" if pd.isna(v) else _interp_cmap(v, stops))
+        colors.append("#aaaaaa" if pd.isna(v) else _interp_cmap(v / vmax, stops))
     return colors
 
 

@@ -22,6 +22,7 @@ def results_ui():
     return ui.page_fluid(
         # tagsites assets (3Dmol must load before tagsites.js)
         ui.tags.script(src="3Dmol-min.js"),
+        ui.tags.script(src="canvas2svg.js"),
         ui.tags.link(rel="stylesheet", href=f"tagsites.css?v={_asset_version('tagsites.css')}"),
         ui.tags.script(src=f"tagsites.js?v={_asset_version('tagsites.js')}"),
 
@@ -44,6 +45,10 @@ def results_ui():
                     ui.tags.button("⊖ Zoom out", onclick="tsZoomOut()",
                                    class_="btn btn-sm ts-mode-btn"),
                     ui.tags.button("↻ Reset", onclick="tsResetZoom()",
+                                   class_="btn btn-sm ts-mode-btn"),
+                    ui.span("|", class_="ts-divider"),
+                    ui.tags.button("⬇ SVG", onclick="tsDownloadPlotSvg()",
+                                   title="Download the current plot view as SVG",
                                    class_="btn btn-sm ts-mode-btn"),
                     class_="ts-plot-toolbar",
                 ),

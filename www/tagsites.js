@@ -244,6 +244,17 @@
 
   /* ── Core render ───────────────────────────────────────────────────────────── */
 
+  // Draw every plot panel onto ctx (shared by the on-screen canvas and the SVG export).
+  function drawPlotLayers(ctx, inf, layout) {
+    drawLinePanel(ctx, inf, layout);
+    drawLegendBand(ctx, inf, layout);
+    drawFeaturePanel(ctx, inf, layout);
+    drawIsoformPane(ctx, inf, layout);
+    drawScoreHeatmap(ctx, inf, layout);
+    drawSeqStrip(ctx, inf, layout);
+    drawCommittedMarkers(ctx, inf, layout);
+  }
+
   function render() {
     // set the canvas's CSS height to fit its content-driven panes before measuring —
     // getPanelLayout(0) reports the natural total height with zero slack.
@@ -272,14 +283,7 @@
     ctx.clearRect(0, 0, inf.cssW, inf.cssH);
 
     var layout = getPanelLayout(inf.cssH);
-
-    drawLinePanel(ctx, inf, layout);
-    drawLegendBand(ctx, inf, layout);
-    drawFeaturePanel(ctx, inf, layout);
-    drawIsoformPane(ctx, inf, layout);
-    drawScoreHeatmap(ctx, inf, layout);
-    drawSeqStrip(ctx, inf, layout);
-    drawCommittedMarkers(ctx, inf, layout);
+    drawPlotLayers(ctx, inf, layout);
 
     // drag-to-zoom rubber band overlaid on top
     if (dragState && wasDrag && dragState.mode === "zoom") {
@@ -1286,8 +1290,17 @@
 
   window.tsSetBackground = function (bg) { setViewerBackground(bg); };
 
-  window.tsDownloadStructure = function () {
-    if (!viewer) return;
+  // Save a Blob/text as a file download.
+  function saveText(text, filename, mime) {
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([text], { type: mime }));
+    a.download = filename;
+    a.click();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+  }
+
+  // Render the 3D viewer at 3x and hand back {uri, w, h} (CSS-pixel size of the viewer).
+  function captureStructure(cb) {
     var container = document.getElementById("ts-viewer-container");
     var origW = container.offsetWidth;
     var origH = container.offsetHeight;
@@ -1304,11 +1317,41 @@
       container.style.height = origH + "px";
       viewer.resize();
       viewer.render();
+      cb({ uri: uri, w: origW, h: origH });
+    }, 120);
+  }
+
+  window.tsDownloadStructure = function () {
+    if (!viewer) return;
+    captureStructure(function (img) {
       var a = document.createElement("a");
-      a.href = uri;
+      a.href = img.uri;
       a.download = "structure.png";
       a.click();
-    }, 120);
+    });
+  };
+
+  // Structure SVG: 3Dmol renders with WebGL, so the SVG wraps the current view as an
+  // embedded raster image; the color legend is not included.
+  window.tsDownloadStructureSvg = function () {
+    if (!viewer) return;
+    captureStructure(function (img) {
+      var svg = '<?xml version="1.0" encoding="UTF-8"?>\n' +
+        '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"' +
+        ' width="' + img.w + '" height="' + img.h + '" viewBox="0 0 ' + img.w + ' ' + img.h + '">' +
+        '<image width="' + img.w + '" height="' + img.h + '" xlink:href="' + img.uri + '"/></svg>';
+      saveText(svg, "structure.svg", "image/svg+xml");
+    });
+  };
+
+  // Plot SVG: redraws the current view (zoom range, hidden tracks) onto a canvas2svg
+  // context, so output is true vector (selection rubber band excluded).
+  window.tsDownloadPlotSvg = function () {
+    var inf = getCanvasInfo();
+    if (!inf || typeof C2S === "undefined") return;
+    var ctx = new C2S(inf.cssW, inf.cssH);
+    drawPlotLayers(ctx, inf, getPanelLayout(inf.cssH));
+    saveText(ctx.getSerializedSvg(true), "plot.svg", "image/svg+xml");
   };
 
   window.tsRemoveSite = function (pos, inputId) {
