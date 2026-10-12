@@ -293,6 +293,9 @@ def setup_ui():
                     # which source will be used at save time
                     ui.div(ui.output_text("seq_source_status"), class_="seq-source-status"),
 
+                    # precomputed results, offered when the sequence is in the proteome database
+                    ui.output_ui("proteome_match_ui"),
+
                     class_="inputs-inner",
                 ),
                 value="protein_seq",

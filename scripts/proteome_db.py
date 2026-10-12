@@ -12,11 +12,13 @@ return them unscaled. query() returns the raw stored values.
 
     python scripts/proteome_db.py lookup trxr-1
     python scripts/proteome_db.py sql "SELECT track, COUNT(*) FROM features GROUP BY track"
+    python scripts/proteome_db.py export Q17745 /path/to/run_folder
 
 Matt Rich, 2026
 """
 
 import argparse
+import functools
 import json
 import sqlite3
 import sys
@@ -41,6 +43,14 @@ def default_path():
     cfg = _load_config().get("proteome_db", {})
     p = Path(cfg.get("path") or "data/runs/proteome_v1/proteome.sqlite3")
     return p if p.is_absolute() else _REPO_ROOT / p
+
+
+def app_match_enabled():
+    """True when batch.config.json's proteome_db.app_match is on and the file exists."""
+    from providers import _load_config
+
+    cfg = _load_config().get("proteome_db", {})
+    return bool(cfg.get("app_match")) and default_path().exists()
 
 
 def open_db(path=None):
@@ -84,6 +94,50 @@ def find_protein(term, conn=None):
     finally:
         if own:
             conn.close()
+
+
+@functools.lru_cache(maxsize=4)
+def _crc_index(path):
+    """{crc64: [pid, ...]} for the database at path, built once per process (~30 ms)."""
+    index = {}
+    conn = open_db(path)
+    try:
+        for pid, crc in conn.execute("SELECT pid, crc64 FROM proteins"):
+            index.setdefault(crc, []).append(pid)
+    finally:
+        conn.close()
+    return index
+
+
+def match_sequence(seq, conn=None, path=None):
+    """Proteins whose stored sequence equals seq exactly, one row each with reagent status.
+
+    CRC64 narrows the candidates through an in-memory index; the stored sequence confirms
+    each one. Whitespace, case and a trailing stop are ignored.
+    """
+    from Bio.SeqUtils.CheckSum import crc64
+
+    seq = "".join(seq.split()).upper().rstrip("*")
+    if not seq:
+        return pd.DataFrame()
+    path = Path(path) if path else default_path()
+    pids = _crc_index(str(path)).get(crc64(seq), [])
+    if not pids:
+        return pd.DataFrame()
+    own = conn is None
+    conn = conn or open_db(path)
+    try:
+        marks = ",".join("?" * len(pids))
+        df = pd.read_sql_query(
+            "SELECT p.pid, p.id, p.kind, p.accession, p.gene_name, p.seq_length, p.sequence, "
+            "p.has_structure, r.status AS reagent_status, r.error AS reagent_error "
+            "FROM proteins p LEFT JOIN reagent_status r ON r.pid = p.pid "
+            "WHERE p.pid IN ({}) ORDER BY p.pid".format(marks), conn, params=pids)
+    finally:
+        if own:
+            conn.close()
+    # a CRC collision is possible in principle; the sequence itself decides
+    return df[df["sequence"] == seq].drop(columns=["sequence"]).reset_index(drop=True)
 
 
 def get_features(pid, tracks=None, conn=None):
@@ -183,15 +237,14 @@ def get_genotyping(pid, conn=None):
                  (pid,), conn)
 
 
-def regenerate_arms(pid, residue_index, gid, conn=None, arm_length=ARM_LENGTH, pam=PAM):
-    """Rebuild left_arm / right_arm / left_arm_wt / right_arm_wt for one residue x guide.
+def load_region(pid, conn=None):
+    """The gene region a protein's reagents were designed on, with its frame lookup.
 
-    The database stores no arms. They are recomputed from the genome with the same
-    deterministic functions design_reagents uses: the gene region (transcript + stored
-    flank), then disrupt_pam for the stored guide, then exon/intron casing.
+    Returns {"dna", "cds_df", "frame_lookup", "transcript_id", "chrom", "start", "stop",
+    "strand", "flank_5p", "flank_3p"}. The flank is clipped at chromosome ends, so max() of
+    the stored sides reproduces the region the design used.
     """
-    from crispr_util import build_frame_lookup, disrupt_pam
-    from design_tag_reagents import _case_arm
+    from crispr_util import build_frame_lookup
     from genome_regions import get_transcript_region
 
     own = conn is None
@@ -199,6 +252,54 @@ def regenerate_arms(pid, residue_index, gid, conn=None, arm_length=ARM_LENGTH, p
     try:
         reg = conn.execute("SELECT transcript_id, flank_5p, flank_3p FROM regions WHERE pid = ?",
                            (pid,)).fetchone()
+    finally:
+        if own:
+            conn.close()
+    if reg is None:
+        raise KeyError("no region stored for pid={}".format(pid))
+    region = get_transcript_region(reg[0], flank=max(reg[1], reg[2]))
+    region["transcript_id"] = reg[0]
+    region["frame_lookup"] = build_frame_lookup(region["cds_df"], region["dna"])
+    return region
+
+
+def _arms(region, insert_pos, strand, pam_fwd_start, method, arm_length, pam, mutated=None):
+    """The four arm strings for one site x guide; mutated caches the PAM-disrupted genome."""
+    from crispr_util import disrupt_pam
+    from design_tag_reagents import _case_arm
+
+    dna, frame_lookup = region["dna"], region["frame_lookup"]
+    left_start = max(0, insert_pos - arm_length)
+    right_end = min(len(dna), insert_pos + arm_length)
+    left_raw, right_raw = dna[left_start:insert_pos], dna[insert_pos:right_end]
+    left, right = left_raw, right_raw
+    # an insertion inside the seed already blocks re-cutting; every other method edits the PAM
+    if method != "insertion":
+        key = (strand, pam_fwd_start)
+        if mutated is not None and key in mutated:
+            seq = mutated[key]
+        else:
+            seq = disrupt_pam(dna, pam, pam_fwd_start, strand, frame_lookup,
+                              seed_len=SEED_LEN)[0]
+            if mutated is not None:
+                mutated[key] = seq
+        left, right = seq[left_start:insert_pos], seq[insert_pos:right_end]
+    return {"left_arm": _case_arm(left, left_start, frame_lookup),
+            "right_arm": _case_arm(right, insert_pos, frame_lookup),
+            "left_arm_wt": _case_arm(left_raw, left_start, frame_lookup),
+            "right_arm_wt": _case_arm(right_raw, insert_pos, frame_lookup)}
+
+
+def regenerate_arms(pid, residue_index, gid, conn=None, arm_length=ARM_LENGTH, pam=PAM):
+    """Rebuild left_arm / right_arm / left_arm_wt / right_arm_wt for one residue x guide.
+
+    The database stores no arms. They are recomputed from the genome with the same
+    deterministic functions design_reagents uses: the gene region (transcript + stored
+    flank), then disrupt_pam for the stored guide, then exon/intron casing.
+    """
+    own = conn is None
+    conn = conn or open_db()
+    try:
         site = conn.execute("SELECT insert_pos FROM insertion_sites WHERE pid = ? AND "
                             "residue_index = ?", (pid, residue_index)).fetchone()
         guide = conn.execute("SELECT strand, pam_fwd_start FROM guides WHERE gid = ?",
@@ -206,28 +307,35 @@ def regenerate_arms(pid, residue_index, gid, conn=None, arm_length=ARM_LENGTH, p
         method = conn.execute("SELECT recut_block_method FROM site_guides WHERE pid = ? AND "
                               "residue_index = ? AND gid = ?",
                               (pid, residue_index, gid)).fetchone()
+        if not (site and guide and method):
+            raise KeyError("no reagent for pid={} residue={} gid={}".format(pid, residue_index, gid))
+        region = load_region(pid, conn)
     finally:
         if own:
             conn.close()
-    if not (reg and site and guide and method):
-        raise KeyError("no reagent for pid={} residue={} gid={}".format(pid, residue_index, gid))
-    # flank is clipped at chromosome ends, so max() of the stored sides reproduces the region
-    region = get_transcript_region(reg[0], flank=max(reg[1], reg[2]))
-    dna, cds_df = region["dna"], region["cds_df"]
-    insert_pos = site[0]
-    frame_lookup = build_frame_lookup(cds_df, dna)
-    left_start = max(0, insert_pos - arm_length)
-    right_end = min(len(dna), insert_pos + arm_length)
-    left_raw, right_raw = dna[left_start:insert_pos], dna[insert_pos:right_end]
-    left, right = left_raw, right_raw
-    # an insertion inside the seed already blocks re-cutting; every other method edits the PAM
-    if method[0] != "insertion":
-        mutated, _, _ = disrupt_pam(dna, pam, guide[1], guide[0], frame_lookup, seed_len=SEED_LEN)
-        left, right = mutated[left_start:insert_pos], mutated[insert_pos:right_end]
-    return {"left_arm": _case_arm(left, left_start, frame_lookup),
-            "right_arm": _case_arm(right, insert_pos, frame_lookup),
-            "left_arm_wt": _case_arm(left_raw, left_start, frame_lookup),
-            "right_arm_wt": _case_arm(right_raw, insert_pos, frame_lookup)}
+    return _arms(region, site[0], guide[0], guide[1], method[0], arm_length, pam)
+
+
+def regenerate_all_arms(pid, reagents, region=None, conn=None, arm_length=ARM_LENGTH, pam=PAM):
+    """The four arm columns for every row of get_reagents(pid), as a DataFrame aligned to it.
+
+    One region load and one PAM-disrupted genome per guide, shared across its sites.
+    """
+    own = conn is None
+    conn = conn or open_db()
+    try:
+        region = region or load_region(pid, conn)
+        insert_pos = dict(conn.execute("SELECT residue_index, insert_pos FROM insertion_sites "
+                                       "WHERE pid = ?", (pid,)).fetchall())
+    finally:
+        if own:
+            conn.close()
+    mutated, rows = {}, []
+    for r in reagents.itertuples():
+        rows.append(_arms(region, insert_pos[r.residue_index], r.guide_strand, r.pam_fwd_start,
+                          r.recut_block_method, arm_length, pam, mutated))
+    return pd.DataFrame(rows, index=reagents.index,
+                        columns=["left_arm", "right_arm", "left_arm_wt", "right_arm_wt"])
 
 
 def _summary(pid, conn):
@@ -251,18 +359,31 @@ def _summary(pid, conn):
 
 
 def main(argv=None):
-    """CLI: `lookup <term>` or `sql "<query>"`."""
+    """CLI: `lookup <term>`, `sql "<query>"` or `export <term> <out_dir>`."""
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("--db", default=None, help="database path (default: batch.config.json)")
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("lookup", help="find proteins by name and summarise them").add_argument("term")
     sub.add_parser("sql", help="run a SELECT").add_argument("statement")
+    exp = sub.add_parser("export", help="write one protein as a run folder the app can load")
+    exp.add_argument("term")
+    exp.add_argument("out_dir")
     args = p.parse_args(argv)
     conn = open_db(args.db)
     if args.cmd == "sql":
         print(query(args.statement, conn=conn).to_string(index=False))
         return
     found = find_protein(args.term, conn=conn)
+    if args.cmd == "export":
+        from proteome_export import export_run
+
+        # an exact id wins over accession matches (isoforms share their canonical accession)
+        exact = found[found["id"].str.lower() == args.term.lower()]
+        found = exact if len(exact) == 1 else found
+        if len(found) != 1:
+            sys.exit("{} proteins match {!r}; use an exact id".format(len(found), args.term))
+        print(export_run(int(found.iloc[0]["pid"]), args.out_dir, conn=conn))
+        return
     if found.empty:
         print("no protein matches {!r}".format(args.term))
         return

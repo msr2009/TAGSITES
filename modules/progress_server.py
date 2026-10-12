@@ -55,8 +55,27 @@ def _param_grid(args, global_block, analysis=None):
     return ui.div(*cells, class_="param-grid")
 
 
+# the two pseudo-tasks shown for a run loaded from the proteome database
+DB_TASKS = ("Analyses_db", "Reagents_db")
+
+
+def _db_grid(prov):
+    """A read-only grid of where a precomputed run came from (database, protein, build)."""
+    cells = []
+    for k in ("id", "accession", "gene_name", "kind", "built", "git_commit", "path"):
+        if prov.get(k):
+            cells.append(ui.div(k.replace("_", " "), class_="param-label"))
+            cells.append(ui.div(str(prov[k]), class_="param-value"))
+    return ui.div(*cells, class_="param-grid")
+
+
 def _build_body(task, global_block, entry):
     """Build the full accordion panel body: param grid + log textarea + re-run button."""
+    if task.get("analysis") == "proteome_db":
+        # precomputed: nothing to re-run, so no button and no parameters
+        return ui.div(_db_grid(global_block.get("proteome_db", {})),
+                      ui.tags.textarea(entry.get("log", ""), readonly=True, class_="task-log",
+                                       rows=6, id=f"task-log-{task['id']}"))
     children = [_param_grid(task["args"], global_block, analysis=task.get("analysis"))]
     log = entry.get("log", "")
     children.append(
@@ -88,6 +107,7 @@ def progress_server(input, output, session, shared_json, shared_results_trigger,
     working_dir  = reactive.Value("")
     run_name     = reactive.Value(None)
     task_list    = reactive.Value([])   # [{"id","analysis","args","output"}, ...]
+    db_mode      = reactive.Value(False)  # True for a run loaded from the proteome database
 
     # tasks waiting for their current run to finish before rerunnning
     _pending_single = reactive.Value(frozenset())
@@ -123,6 +143,12 @@ def progress_server(input, output, session, shared_json, shared_results_trigger,
             return
 
         gb, tasks = parse_run(j)
+        # a precomputed run shows two tasks, Analyses and Reagents, instead of the real ones
+        is_db = gb.get("source") == "proteome_db"
+        if is_db:
+            tasks = [{"id": tid, "analysis": "proteome_db", "args": {}, "output": path}
+                     for tid in DB_TASKS]
+        db_mode.set(is_db)
         global_block.set(gb)
         working_dir.set(gb.get("working_dir", ""))
         run_name.set(gb.get("run_name", ""))
@@ -134,9 +160,11 @@ def progress_server(input, output, session, shared_json, shared_results_trigger,
             for t in tasks:
                 entry = _run_status.load_status(wd, rn).get(t["id"], {})
                 if not entry:
+                    # a precomputed run opened from a file has nothing left to wait for
                     _run_status.update_task(wd, rn, t["id"],
-                                            status="pending", job_ids=[],
-                                            message="", output=t["output"])
+                                            status="success" if is_db else "pending", job_ids=[],
+                                            message="", output=t["output"],
+                                            log="loaded from a saved run" if is_db else "")
         _parsed_path.set(path)
 
     # ── upload handler ─────────────────────────────────────────────────────────
@@ -260,7 +288,8 @@ def progress_server(input, output, session, shared_json, shared_results_trigger,
         has_json   = bool(shared_json.get())
         is_running = (run_all_tasks.status() == "running" or
                       run_single_task.status() == "running")
-        disabled   = not has_json or is_running
+        # a precomputed run has nothing to execute
+        disabled   = not has_json or is_running or db_mode.get()
         ui.update_action_button("run_analysis", disabled=disabled)
         ui.update_action_button("rerun_all",    disabled=disabled)
 
@@ -622,6 +651,10 @@ def progress_server(input, output, session, shared_json, shared_results_trigger,
         status = _run_status.load_status(wd, rn)
         # also poll while tasks are "queued": covers the race between stamp and run
         if any(e.get("status") == "queued" for e in status.values()):
+            reactive.invalidate_later(2)
+        # a precomputed run is written by a background thread, not by the runners above
+        if db_mode.get() and any(status.get(t, {}).get("status") not in ("success", "failed")
+                                 for t in DB_TASKS):
             reactive.invalidate_later(2)
         return status
 

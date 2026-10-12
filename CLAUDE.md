@@ -95,7 +95,12 @@ scripts/                # core analysis executables
                               # Run --estimate first: it samples, measures and projects
                               # the size and run time; a full build needs --yes
   proteome_db.py              # read-only lookup over that file: find_protein(), get_*(),
-                              # query(), regenerate_arms(); CLI `lookup <name>` / `sql`
+                              # query(), regenerate_arms(), match_sequence() (exact sequence ->
+                              # protein via an in-memory CRC64 index); CLI `lookup <name>` /
+                              # `sql` / `export <name> <dir>`
+  proteome_export.py          # writes one database protein as an ordinary run folder (run.json,
+                              # track files, reagents TSV with regenerated arms) so every app
+                              # loader works unchanged; used by Setup's precomputed-results card
 
 docs/
   LOCAL_SETUP.md  # step-by-step guide to running the app with all analyses local
@@ -132,6 +137,19 @@ flagged by `sequence_differs` where it differs from `local_store` (28 proteins).
 from the genome and was verified byte-identical to the reagent TSV. The reagent stage needs
 `TAGSITES_BATCH_CONFIG=batch.config.local.json` (local genewise backend) and is resumable.
 Knobs live in `batch.config.json`'s `proteome_db` block.
+
+**Precomputed results in the app**: with `proteome_db.app_match` true in `batch.config.json`
+and the SQLite file present, Setup looks the loaded sequence (UniProt hit, upload or paste) up
+by exact match and offers "Load precomputed results". The load runs `proteome_export`:
+`prepare_run` writes `{rn}.run.json` (`global.source = "proteome_db"`) at once, then a
+background thread runs `export_analysis` and `export_reagents` (3-10 s, mostly arm
+regeneration from the local genome). The Progress tab shows those as two tasks, Analyses and
+Reagents (`Analyses_db` / `Reagents_db` in `{rn}.status.json`), with Run disabled; Results and
+Reagents refresh from the usual status poll as each finishes. Exported files reflect the
+database, so a track the batch never ingested (e.g. modifications whose task was not `ok`) is
+absent. Site scores are recomputed by the app with the reagent rows, so they can differ
+slightly from the stored `site_scores` (stored without reagents: `near_guide` / `not_near_splice`
+missing). The deployed app has no database file, so the card never appears there.
 
 ## Dual-use constraint: Shiny app + standalone CLI
 

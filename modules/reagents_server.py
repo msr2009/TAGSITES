@@ -129,6 +129,35 @@ def reagents_server(input, output, session, shared_json, shared_sites):
         ui.update_select("tag_name", choices=choices,
                          selected=next(iter(_TAGS), "Custom"))
 
+    # ── gene-model companions of the reagents TSV ─────────────────────────────
+
+    _companion_args = {}   # reagent args / working_dir / run_name of the loaded run
+
+    def _refresh_companions(reagent_args, tsv_path, wd, rn):
+        """Point the model check, region FASTA and Genewise paths at the files beside the TSV.
+
+        Called at load and again when the TSV appears, because a from-database run writes the
+        gene-model files after the run JSON is first loaded.
+        """
+        _companion_args.update(reagent_args=reagent_args, tsv_path=tsv_path, wd=wd, rn=rn)
+        # written beside the TSV by design_tag_reagents; None when the run predates the check
+        model_check.set(
+            read_model_check(str(Path(tsv_path).with_suffix("")) + ".model_check.json")
+            if tsv_path else None
+        )
+        # the GenBank records span the whole genomic region, so keep the paths to
+        # the region FASTA and the Genewise output the reagents were designed
+        # against. The runner rewrites both to its own *_genewise.* files when it
+        # runs Genewise itself, so prefer those and fall back to the run JSON's.
+        gw_prefix = os.path.join(wd, rn + "_genewise") if wd and rn else ""
+        cand_fa = [reagent_args.get("genomic_fasta", "")]
+        cand_gw = [reagent_args.get("genewise", "")]
+        if gw_prefix:
+            cand_fa.insert(0, gw_prefix + ".genewise_genomic.fa")
+            cand_gw.insert(0, gw_prefix + ".genewise.out.txt")
+        genomic_path.set(next((p for p in cand_fa if p and os.path.exists(p)), ""))
+        genewise_path.set(next((p for p in cand_gw if p and os.path.exists(p)), ""))
+
     # ── load run JSON whenever shared path changes ────────────────────────────
 
     @reactive.effect
@@ -157,24 +186,7 @@ def reagents_server(input, output, session, shared_json, shared_sites):
 
         tsv_path = reagent_args.get("output", "")
         _tsv_path_cache.set(tsv_path)   # reactive set so _poll_for_tsv re-fires
-        # written beside the TSV by design_tag_reagents; None when the run predates the check
-        model_check.set(
-            read_model_check(str(Path(tsv_path).with_suffix("")) + ".model_check.json")
-            if tsv_path else None
-        )
-
-        # the GenBank records span the whole genomic region, so keep the paths to
-        # the region FASTA and the Genewise output the reagents were designed
-        # against. The runner rewrites both to its own *_genewise.* files when it
-        # runs Genewise itself, so prefer those and fall back to the run JSON's.
-        gw_prefix = os.path.join(wd, rn + "_genewise") if wd and rn else ""
-        cand_fa = [reagent_args.get("genomic_fasta", "")]
-        cand_gw = [reagent_args.get("genewise", "")]
-        if gw_prefix:
-            cand_fa.insert(0, gw_prefix + ".genewise_genomic.fa")
-            cand_gw.insert(0, gw_prefix + ".genewise.out.txt")
-        genomic_path.set(next((p for p in cand_fa if p and os.path.exists(p)), ""))
-        genewise_path.set(next((p for p in cand_gw if p and os.path.exists(p)), ""))
+        _refresh_companions(reagent_args, tsv_path, wd, rn)
         if tsv_path and os.path.exists(tsv_path):
             df = pd.read_csv(tsv_path, sep='\t')
             df["guide_id"] = (
@@ -249,6 +261,9 @@ def reagents_server(input, output, session, shared_json, shared_sites):
             except Exception:
                 pass
             reagents_df.set(df)
+            if _companion_args:
+                _refresh_companions(_companion_args["reagent_args"], path,
+                                    _companion_args["wd"], _companion_args["rn"])
         except Exception:
             pass
 

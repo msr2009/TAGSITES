@@ -11,6 +11,7 @@ import re
 import requests
 import shutil
 import sys
+import tempfile
 from datetime import date
 from pathlib import Path
 
@@ -31,6 +32,7 @@ from modules.setup_logic import (
     build_task_entry,
     make_task,
 )
+from Bio import SeqIO
 from scripts.site_selection_util import get_sequence, save_fasta, extract_bfactors_from_pdb
 from scripts.uniprot_api import fetch_isoform_sequences
 
@@ -40,6 +42,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 import ebi_rest
 import ensembl_rest
 import providers
+import proteome_db
+import proteome_export
 from fetch_genomic_sequence import fetch_genomic_sequence
 
 
@@ -943,6 +947,124 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
             )
 
     # ── save-status hint ──────────────────────────────────────────────────────
+
+    # ── precomputed results from the proteome database ────────────────────────
+    #
+    # Active only when batch.config.json's proteome_db.app_match is on and the file exists,
+    # so the deployed app never shows it. A matching sequence offers to load the batch's
+    # results; the Progress tab then shows them being written out as two tasks.
+
+    _db_on = proteome_db.app_match_enabled()
+    _db_matches = reactive.Value(None)     # DataFrame of matching proteins, or None
+    _db_dir = [""]                         # per-session folder the runs are written to
+    _db_jobs = set()                       # keeps background export futures referenced
+
+    @reactive.calc
+    def _current_sequence():
+        """The protein sequence Setup would use at save time (UniProt hit > file > paste)."""
+        hit = _selected_hit()
+        if hit is not None:
+            return hit["sequence"]
+        files = input.input_file()
+        if files:
+            path = files[0]["datapath"]
+            try:
+                if path.lower().endswith(".pdb") or files[0]["name"].lower().endswith(".pdb"):
+                    return get_sequence(path)
+                return str(next(SeqIO.parse(path, "fasta")).seq)
+            except Exception:
+                return ""
+        raw = input.protein_seq_paste().strip()
+        lines = raw.splitlines()
+        # a pasted FASTA contributes only its first record's sequence lines
+        if lines and lines[0].startswith(">"):
+            body = []
+            for ln in lines[1:]:
+                if ln.startswith(">"):
+                    break
+                body.append(ln)
+            lines = body
+        return "".join("".join(lines).split())
+
+    @reactive.effect
+    async def _find_db_matches():
+        """Look the current sequence up in the database, off the event loop."""
+        if not _db_on:
+            return
+        seq = _current_sequence()
+        if len(seq) < 20:
+            _db_matches.set(None)
+            return
+        try:
+            found = await _off_loop(proteome_db.match_sequence, seq, budget=20)
+        except Exception:
+            found = None
+        _db_matches.set(found if found is not None and not found.empty else None)
+
+    @render.ui
+    def proteome_match_ui():
+        """The precomputed-results card, shown only when the sequence is in the database."""
+        found = _db_matches()
+        if found is None:
+            return None
+
+        def label(r):
+            """One match as 'id · gene · length · reagents status'."""
+            reagents = "reagents ok" if r.reagent_status == "success" else "no reagents"
+            return " · ".join(str(x) for x in (r.id, r.gene_name or "", f"{r.seq_length} aa",
+                                               reagents) if x != "")
+
+        rows = list(found.itertuples())
+        if len(rows) == 1:
+            pick = ui.span(label(rows[0]))
+        else:
+            pick = ui.input_select("proteome_pick", "",
+                                   choices={str(r.pid): label(r) for r in rows})
+        return ui.div(
+            ui.tags.p("Precomputed results available in the proteome database:",
+                      style="font-size:0.8rem; margin:0.4rem 0 0.2rem;"),
+            pick,
+            ui.input_action_button("load_proteome", "Load precomputed results",
+                                   class_="btn-sm btn-outline-primary"),
+            class_="section-hint",
+        )
+
+    def _export_rest(pid, out_dir, rn):
+        """Write the analysis then reagent files; failures land in the status file."""
+        for step in (proteome_export.export_analysis, proteome_export.export_reagents):
+            try:
+                step(pid, out_dir, rn)
+            except Exception:
+                pass   # recorded as failed in {rn}.status.json by the step itself
+
+    @reactive.effect
+    @reactive.event(input.load_proteome)
+    async def _load_proteome():
+        """Write the run JSON, open the Progress tab and export the files in the background."""
+        found = _db_matches()
+        if found is None:
+            return
+        pid = int(input.proteome_pick()) if "proteome_pick" in input else int(found.iloc[0]["pid"])
+        row = found[found["pid"] == pid].iloc[0]
+        if not _db_dir[0]:
+            _db_dir[0] = tempfile.mkdtemp(prefix="tagsites_proteome_")
+            session.on_ended(lambda d=_db_dir[0]: shutil.rmtree(d, ignore_errors=True))
+        rn = re.sub(r"[^A-Za-z0-9_.-]", "_", str(row["id"]))
+        out_dir = os.path.join(_db_dir[0], rn)
+        try:
+            path = await _off_loop(proteome_export.prepare_run, pid, out_dir, rn, budget=30)
+        except Exception as e:
+            ui.notification_show(f"Could not load from the database: {e}", type="error",
+                                 duration=8)
+            return
+        # the Progress tab shows the DB tasks; the Setup form keeps the user's own inputs
+        _skip_next_load[0] = True
+        shared_json.set(path)
+        loop = asyncio.get_running_loop()
+        job = loop.run_in_executor(None, _export_rest, pid, out_dir, rn)
+        _db_jobs.add(job)
+        job.add_done_callback(_db_jobs.discard)
+        ui.update_navs("main_tabs", selected="progress", session=session.root_scope())
 
     @render.text
     def save_status():
