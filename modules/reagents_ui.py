@@ -166,11 +166,7 @@ def reagents_ui():
                         "currently selected sites, using the tag/insert sequence above.",
                         class_="section-hint",
                     ),
-                    ui.div(
-                        "⚠ Set the insert sequence using the \"Tag / insert sequence\" "
-                        "dropdown above (select Custom to paste a sequence).",
-                        class_="ts-warn",
-                    ),
+                    ui.output_ui("genotyping_insert_warning"),
                     ui.row(
                         ui.column(
                             6,

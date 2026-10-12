@@ -718,6 +718,17 @@ def reagents_server(input, output, session, shared_json, shared_sites):
         return ui.span()
 
     @render.ui
+    def genotyping_insert_warning():
+        """Warn in the genotyping card only while no insert sequence is set."""
+        if _insert_seq():
+            return ui.span()
+        return ui.div(
+            "⚠ Set the insert sequence using the \"Tag / insert sequence\" "
+            "dropdown above (select Custom to paste a sequence).",
+            class_="ts-warn",
+        )
+
+    @render.ui
     def repair_options():
         """Repair-type-specific options block rendered server-side."""
         repair = input.repair_type()
