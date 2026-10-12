@@ -463,6 +463,7 @@ def reagents_server(input, output, session, shared_json, shared_sites):
         for _, row in df.iterrows():
             gid = str(row["guide_id"])
             used_fallback = False
+            primer_tm = None   # Tm target (°C) of the primer-design path in use
             try:
                 wt_left_src, wt_right_src, wt_is_true = _wt_arms_for_row(row)
 
@@ -500,6 +501,7 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                         int(row["cut_pos"]), int(row["insert_pos"]),
                     )
                     used_fallback = pcr_meta["used_fallback"]
+                    primer_tm = tm
                 elif saptrap_long_arm:
                     wleft, wright = truncate_arms_with_tolerance(
                         str(row["left_arm"]), str(row["right_arm"]), arm_len, tolerance,
@@ -517,12 +519,13 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                         nominal_length=arm_len, tolerance=tolerance, pinned_side='fwd',
                     )
                     used_fallback = meta5["used_fallback"] or meta3["used_fallback"]
+                    primer_tm = saptrap_tm
             except Exception as e:
                 left, right, diag = "", "", str(e)
             result[gid] = {
                 "left": left, "right": right, "diagram": diag,
                 "left_bp": len(left), "right_bp": len(right), "arm_len": arm_len,
-                "used_fallback": used_fallback,
+                "used_fallback": used_fallback, "primer_tm": primer_tm,
             }
         return result
 
@@ -1082,9 +1085,8 @@ def reagents_server(input, output, session, shared_json, shared_sites):
 
             primer_fallback_warning = (
                 ui.div(
-                    "⚠ primer3 could not find a primer within the requested window — "
-                    "fell back to the exact {} bp arm with basic Tm-based primer "
-                    "design.".format(cached.get("arm_len", "?")),
+                    "⚠ Amplification primers designed to meet Tm requirement ({:g}°C). "
+                    "Primer3 not used.".format(cached.get("primer_tm") or 0),
                     class_="ts-warn",
                 ) if cached.get("used_fallback", False) else ui.span()
             )

@@ -676,10 +676,14 @@ _FEATURE_SOURCES = {"Pfam", "Phobius", "DeepTMHMM", "modification", "hydrophobic
                      "UniProt", "UniProt_site"}
 
 # Structure colorschemes built from annotations: __domains__ shows Pfam domains,
-# __sites__ shows UniProt-fetched features plus regex-predicted modification sites
+# __sites__ shows UniProt-fetched features (minus mutagenesis) plus regex-predicted modification
+# sites, __mutations__ shows the UniProt mutagenesis positions
 # (topology sources have their own __topology__ scheme — see TOPOLOGY_SOURCES)
 DOMAIN_STRUCT_SOURCES = {"Pfam"}
 SITES_STRUCT_SOURCES = {"UniProt", "UniProt_site", "modification"}
+# UniProt mutagenesis rows are UniProt_site rows whose description starts with this label
+# (tables/uniprot_features.txt); the __mutations__ scheme shows them, __sites__ excludes them
+MUTATION_PREFIX = "Mutagenesis:"
 
 # paint priority: last painted wins; modifications and UniProt features end up on top
 _FEATURE_PAINT_ORDER = ["Pfam", "Phobius", "DeepTMHMM", "modification", "UniProt_site", "UniProt"]
@@ -704,20 +708,30 @@ def _annotation_color_map(range_df):
     return color_map
 
 
-def residue_colors_for_annotations(range_df, seq_len, sources):
-    """Unique color per annotation from the given sources (Pfam or sites structure scheme).
+def _select_rows(range_df, sources, mutations):
+    """Rows of the given sources; mutations None = all, True = only mutagenesis, False = none."""
+    rows = range_df[range_df["source"].isin(sources)]
+    if mutations is None:
+        return rows
+    is_mut = rows["description"].astype(str).str.startswith(MUTATION_PREFIX)
+    return rows[is_mut] if mutations else rows[~is_mut]
 
+
+def residue_colors_for_annotations(range_df, seq_len, sources, mutations=None):
+    """Unique color per annotation from the given sources (domains / sites / mutations scheme).
+
+    mutations: None keeps every row, True only UniProt mutagenesis rows, False drops them.
+    Colors come from the shared palette over all features, so they match the 2D panel.
     Topology sources (Phobius/DeepTMHMM) are intentionally excluded here — they have
     their own __topology__ colorscheme. Returns (per_residue_colors, legend_items).
     """
     color_map = _annotation_color_map(range_df)
     colors = ["#e8e8e8"] * seq_len
+    rows = _select_rows(range_df, sources, mutations)
 
-    # paint only domain-struct sources; modifications land on top
+    # paint in source priority order; later sources land on top
     for source in _FEATURE_PAINT_ORDER:
-        if source not in sources:
-            continue
-        for _, row in range_df[range_df["source"] == source].iterrows():
+        for _, row in rows[rows["source"] == source].iterrows():
             key = (str(row["source"]), str(row["description"]))
             color = color_map.get(key)
             if color is None:
@@ -726,10 +740,11 @@ def residue_colors_for_annotations(range_df, seq_len, sources):
             stop = min(stop, seq_len)
             colors[start - 1:stop] = [color] * (stop - (start - 1))
 
+    shown = set(zip(rows["source"].astype(str), rows["description"].astype(str)))
     legend_items = [
         {"color": color, "label": f"{desc} ({src})"}
         for (src, desc), color in color_map.items()
-        if src in sources
+        if (src, desc) in shown
     ]
     return colors, legend_items
 
@@ -738,10 +753,10 @@ def residue_colors_for_annotations(range_df, seq_len, sources):
 SIDECHAIN_MAX_SPAN = 10
 
 
-def residues_for_sidechains(range_df, seq_len, sources):
-    """Sorted residue numbers inside short (<= SIDECHAIN_MAX_SPAN) features of the given sources."""
+def residues_for_sidechains(range_df, seq_len, sources, mutations=None):
+    """Sorted residue numbers inside short (<= SIDECHAIN_MAX_SPAN) features of the given rows."""
     residues = set()
-    for _, row in range_df[range_df["source"].isin(sources)].iterrows():
+    for _, row in _select_rows(range_df, sources, mutations).iterrows():
         start, stop = int(row["start"]), min(int(row["stop"]), seq_len)
         if stop - start + 1 <= SIDECHAIN_MAX_SPAN:
             residues.update(range(max(start, 1), stop + 1))

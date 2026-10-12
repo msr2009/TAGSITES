@@ -11,7 +11,7 @@ from utils.results import (
     residue_colors_for_track,
     residue_colors_for_annotations,
     residues_for_sidechains,
-    DOMAIN_STRUCT_SOURCES, SITES_STRUCT_SOURCES,
+    DOMAIN_STRUCT_SOURCES, SITES_STRUCT_SOURCES, _select_rows,
     residue_colors_for_topology,
     residue_colors_for_isoforms,
     residue_colors_for_patches,
@@ -61,11 +61,11 @@ def _build_colors_and_legend(track, task_name, scheme, aa_df, range_df, seq_len,
     or (None, None) when the track cannot be resolved.
     """
     # ── Annotation coloring (domains / modifications / topology) ─────────────────
-    if track in ("__domains__", "__sites__"):
+    if track in ("__domains__", "__sites__", "__mutations__"):
         if range_df is None or not seq_len:
             return None, None
-        sources = DOMAIN_STRUCT_SOURCES if track == "__domains__" else SITES_STRUCT_SOURCES
-        colors, items = residue_colors_for_annotations(range_df, seq_len, sources)
+        sources, mutations = _ANNOTATION_SCHEMES[track]
+        colors, items = residue_colors_for_annotations(range_df, seq_len, sources, mutations)
         return colors, {"type": "categorical", "items": items}
 
     if track == "__topology__":
@@ -114,6 +114,14 @@ def _build_colors_and_legend(track, task_name, scheme, aa_df, range_df, seq_len,
 
 # topology labels (Phobius / DeepTMHMM) whose Tag checkbox starts unchecked (masked)
 _TOPOLOGY_DEFAULT_OFF = {"Signal peptide", "Transmembrane", "signal", "TMhelix"}
+
+
+# annotation color-by tracks → (sources, mutations filter; see residue_colors_for_annotations)
+_ANNOTATION_SCHEMES = {
+    "__domains__":   (DOMAIN_STRUCT_SOURCES, None),
+    "__sites__":     (SITES_STRUCT_SOURCES, False),
+    "__mutations__": ({"UniProt_site"}, True),
+}
 
 
 @module.server
@@ -292,8 +300,10 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
         if range_df is not None and not range_df.empty:
             if not range_df[range_df["source"].isin(DOMAIN_STRUCT_SOURCES)].empty:
                 choices["__domains__"] = "Domains"
-            if not range_df[range_df["source"].isin(SITES_STRUCT_SOURCES)].empty:
-                choices["__sites__"] = "Sites"
+            for track, label in (("__sites__", "Sites"), ("__mutations__", "Mutations")):
+                scheme_sources, scheme_mut = _ANNOTATION_SCHEMES[track]
+                if not _select_rows(range_df, scheme_sources, scheme_mut).empty:
+                    choices[track] = label
             topology_sources = sorted(set(range_df["source"]) & set(TOPOLOGY_SOURCES))
             if topology_sources:
                 choices["__topology__"] = "Topology"
@@ -632,8 +642,9 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
 
         # the Sites scheme also shows sidechains for the (short) site residues
         sticks = []
-        if track == "__sites__":
-            sticks = residues_for_sidechains(range_data.get(), seq_len, SITES_STRUCT_SOURCES)
+        if track in ("__sites__", "__mutations__"):
+            sticks = residues_for_sidechains(range_data.get(), seq_len,
+                                             *_ANNOTATION_SCHEMES[track])
         await session.send_custom_message("tagsites_set_colors",
                                           {"colors": colors, "legend": legend, "sticks": sticks})
 
