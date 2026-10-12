@@ -61,7 +61,7 @@ _TAGS_PATH = Path(__file__).parent.parent / "tables" / "tags.tsv"
 _TAGS = load_tags(_TAGS_PATH) if _TAGS_PATH.exists() else {}
 
 # Arm-length defaults by repair type
-_ARM_DEFAULTS = {"ha": 1000, "ssodn": 50, "amplicon": 50, "plasmid": 57}
+_ARM_DEFAULTS = {"ha": 1000, "ssodn": 45, "amplicon": 45, "plasmid": 57}
 
 # Genotyping-primer design window: how far off the insert primers must sit
 _GENOTYPING_FLANK_MIN = 50
