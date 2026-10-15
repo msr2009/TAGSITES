@@ -927,13 +927,16 @@
     var tip = document.getElementById("ts-tooltip");
     if (!tip) return;
     tip.textContent = lines.join("\n");
-    tip.style.display = "block";
-    // flip left if near right edge
+    // cap width so long text wraps (see #ts-tooltip css) instead of overflowing the plot
     var wrap = document.getElementById("ts-plot-wrap");
     var wrapW = wrap ? wrap.offsetWidth : 600;
+    tip.style.maxWidth = Math.max(160, Math.min(380, wrapW - 16)) + "px";
+    tip.style.display = "block";
     var tipW  = tip.offsetWidth || 140;
     var left  = x + 14;
+    // flip left if near right edge, then clamp so it never leaves the plot on either side
     if (left + tipW > wrapW - 8) left = x - tipW - 10;
+    left = Math.max(4, Math.min(left, wrapW - tipW - 4));
     tip.style.left = left + "px";
     tip.style.top  = (y + 4) + "px";
   }

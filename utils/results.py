@@ -1,6 +1,7 @@
 """utility functions for loading and visualizing analysis results"""
 
 import os
+import textwrap
 import pandas as pd
 import json
 import plotly.graph_objs as go
@@ -395,6 +396,11 @@ def _guess_analysis_type(task_name):
     return "unknown"
 
 
+def _wrap_hover(text, width=40):
+    """Wrap hover text with <br> so long tooltips stay inside the plot area."""
+    return "<br>".join(textwrap.wrap(str(text), width=width, break_long_words=True)) or str(text)
+
+
 def plot_results(aa_df, range_df, title="Results Plot"):
     """Build the two-row Plotly results figure (continuous scores + range annotations).
 
@@ -479,7 +485,7 @@ def plot_results(aa_df, range_df, title="Results Plot"):
                 name=display_name,
                 legendgroup=f"{source}|{desc}",
                 showlegend=first_of_label,
-                hovertemplate=f"{display_name} ({start}-{stop})<extra></extra>",
+                hovertemplate=_wrap_hover(f"{display_name} ({start}-{stop})") + "<extra></extra>",
             ),
             row=2, col=1
         )
@@ -496,6 +502,7 @@ def plot_results(aa_df, range_df, title="Results Plot"):
         showlegend=True,
         xaxis=dict(fixedrange=False),
         hovermode="closest",
+        hoverlabel=dict(align="left", namelength=-1),
         height=500,
         margin=dict(l=60, r=20, t=40, b=40),
     )
