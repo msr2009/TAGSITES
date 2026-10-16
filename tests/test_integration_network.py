@@ -393,7 +393,8 @@ def test_fetch_genomic_sequence_worm_unc18():
     """Live-fetch C. elegans unc-18 and confirm expected coordinates + flank length."""
     from fetch_genomic_sequence import fetch_genomic_sequence
 
-    fasta_text, meta = fetch_genomic_sequence(taxid=6239, gene_symbol="unc-18", flank_bp=500)
+    fasta_text, meta = fetch_genomic_sequence(taxid=6239, gene_symbol="unc-18", flank_bp=500,
+                                              sources=["ensembl"])
 
     assert meta["species"] == "caenorhabditis_elegans"
     assert meta["gene_id"] == "WBGene00006757"
@@ -407,7 +408,8 @@ def test_fetch_genomic_sequence_ecoli_assembly_qualified_slug():
     """Live-fetch E. coli thrA to confirm the assembly-qualified species slug path works."""
     from fetch_genomic_sequence import fetch_genomic_sequence
 
-    fasta_text, meta = fetch_genomic_sequence(taxid=562, gene_symbol="thrA", flank_bp=300)
+    fasta_text, meta = fetch_genomic_sequence(taxid=562, gene_symbol="thrA", flank_bp=300,
+                                              sources=["ensembl"])
 
     assert meta["species"] == "escherichia_coli_str_k_12_substr_mg1655_gca_000005845"
     assert meta["gene_id"] == "b0002"
@@ -429,7 +431,8 @@ def test_fetch_genomic_sequence_brca1_full_genewise_coverage(email, tmp_path):
     import requests
     from fetch_genomic_sequence import fetch_genomic_sequence
 
-    fasta_text, meta = fetch_genomic_sequence(taxid=9606, gene_symbol="BRCA1", flank_bp=2000)
+    fasta_text, meta = fetch_genomic_sequence(taxid=9606, gene_symbol="BRCA1", flank_bp=2000,
+                                              sources=["ensembl"])
     assert meta["gene_id"] == "ENSG00000012048", "should resolve to the real gene, not LRG_292"
     assert meta["ambiguous"] is False, "LRG_ duplicate should already be filtered out"
 

@@ -49,9 +49,9 @@ scripts/                # core analysis executables
   existing_AF_model.py        # search AFDB for existing predictions
   uniprot_api.py               # shared UniProt REST helpers (checksum lookup, entry fetch)
   http_retry.py               # shared bounded-retry + wall-clock-deadline wrapper around
-                              # requests; used by ebi_rest.py and ensembl_rest.py
-  ensembl_rest.py             # Ensembl REST client for the genomic-sequence auto-fetch
-                              # (knobs in ensembl.config.json)
+                              # requests; used by ebi_rest.py and the genomic-fetch clients
+  fetch_genomic_sequence.py   # genomic-sequence auto-fetch: ncbi_rest.py -> ucsc_rest.py ->
+                              # ensembl_rest.py, first success wins (ensembl.config.json sources)
   cds_check.py                # gene-model gate: translates the model's CDS and compares it to
                               # the input protein (length differs = hard fail, substitutions =
                               # warning + {run}.reagents.model_check.json for the UI banner)
@@ -229,6 +229,7 @@ Note rsconnect only ignores `__pycache__/` at the top level, so nested ones need
 
 - **NCBI BLAST** (via EBI REST API) — `scripts/site_selection_util.py:ncbiblast_call()`
 - **EBI InterPro API** — `scripts/call_interpro.py`
+- **Genomic auto-fetch** — NCBI Datasets + efetch, then UCSC REST, then Ensembl REST — `scripts/fetch_genomic_sequence.py`
 - **AlphaFold DB** — `scripts/existing_AF_model.py`
 - **UniProt REST** (entry fetch + checksum lookup) — `scripts/uniprot_api.py`, used by `scripts/uniprot_features.py` and `scripts/existing_AF_model.py`
 - **UniProt taxonomy** — `uniprot_species.flat.txt` (local flat file, ~1.7MB)

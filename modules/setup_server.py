@@ -42,6 +42,9 @@ import ensembl_rest
 import providers
 from fetch_genomic_sequence import fetch_genomic_sequence
 
+# display names for fetch_genomic_sequence's meta["source"]
+_GENOMIC_SOURCE_LABELS = {"ucsc": "UCSC", "ncbi": "NCBI", "ensembl": "Ensembl"}
+
 
 async def _off_loop(fn, *args, budget=None, grace=0, **kwargs):
     """Run a blocking function in a worker thread, optionally under a wall-clock cap.
@@ -390,7 +393,7 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
             ),
         )
 
-    # ── genomic sequence auto-fetch (Ensembl) ─────────────────────────────────
+    # ── genomic sequence auto-fetch (NCBI -> UCSC -> Ensembl) ────────────────
 
     _genomic_fetch_status = reactive.Value("")
 
@@ -404,7 +407,7 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
     @reactive.effect
     @reactive.event(input.fetch_genomic_btn)
     async def _fetch_genomic():
-        """Fetch genomic FASTA from Ensembl and populate the paste textarea.
+        """Fetch genomic FASTA (NCBI, UCSC, then Ensembl) and populate the paste textarea.
 
         Never blocks saving on failure — manual upload/paste remain usable.
         """
@@ -446,9 +449,15 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
             await session.send_custom_message("tagsites_genomic_fetch_done", {"ok": ok})
 
         ui.update_text_area("genomic_seq_paste", value=fasta_text)
-        status = f"Fetched {meta['gene_id']} ({meta['species']}) {meta['region']}"
+        source = _GENOMIC_SOURCE_LABELS.get(meta.get("source"), meta.get("source", ""))
+        status = (f"Fetched {meta['gene_id']} ({meta['species']}) {meta['region']} "
+                  f"from {source}, assembly {meta['assembly']}")
         _genomic_fetch_status.set(status)
         ui.notification_show(status, type="message", duration=6)
+        # earlier sources that failed before this one answered
+        if meta.get("fallbacks"):
+            ui.notification_show(
+                "Skipped: " + "; ".join(meta["fallbacks"]), type="default", duration=8)
 
         if meta["ambiguous"]:
             ui.notification_show(
