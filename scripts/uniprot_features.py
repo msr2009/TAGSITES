@@ -19,6 +19,8 @@ from site_selection_util import get_sequence, read_fasta, uniprot_accession_rege
 from uniprot_api import checksum_lookup, fetch_entry
 from progress import report as _report, resolve_reporter
 
+MAX_DELETION = 10  # deletions longer than this (aa) are not reported
+
 
 def load_feature_config(path):
     """Parse tables/uniprot_features.txt into {feature_type: (severity, label)}.
@@ -71,6 +73,17 @@ def _feature_detail(feature, ftype):
     return detail
 
 
+def _is_large_deletion(feature, start, stop):
+    """True for a mutagenesis/variant feature that deletes more than MAX_DELETION residues."""
+    if feature.get("type") not in ("Mutagenesis", "Natural variant"):
+        return False
+    alt = feature.get("alternativeSequence") or {}
+    changes = alt.get("alternativeSequences") or []
+    # no replacement residues (or "missing") means the span is deleted outright
+    is_deletion = not changes or all(c.lower() == "missing" for c in changes)
+    return is_deletion and stop - start + 1 > MAX_DELETION
+
+
 def _evidence_suffix(feature):
     """' (PubMed:id1, id2)' for experimentally-cited features, ' (predicted)' for
     rule-based/inferred ones (ECO codes with no PubMed source), '' if unevidenced.
@@ -104,6 +117,8 @@ def entry_to_feature_rows(entry_json, feature_config):
         if span is None:
             continue
         start, stop = span
+        if _is_large_deletion(feature, start, stop):
+            continue
         severity, label = feature_config[ftype]
         source = "UniProt" if severity == "blocking" else "UniProt_site"
         detail = _feature_detail(feature, ftype) + _evidence_suffix(feature)
