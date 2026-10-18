@@ -5,7 +5,9 @@ Use a user-supplied GenBank file (genomic region + annotated CDS or exon feature
 model in place of Genewise. Writes the same three files genewise_remote.main() produces
 ({outprefix}.genewise.out.txt, .genewise_genomic.fa, .genewise_orientation.txt) so reagent
 design is unchanged, after checking the model's translation against the input protein with the
-same rule as a Genewise model (cds_check.check_model: length difference fails).
+same rules as every other model source (cds_check: clustered substitutions, long gaps and gaps
+beside substitutions fail). Every CDS feature is tried and the closest wins; exon features (used
+only when there is no CDS) are merged into one model, so they must be this isoform's only.
 
 A GenBank file with no CDS/exon features is only a genomic sequence: it is written as
 {outprefix}.genomic.fa and the caller falls through to Genewise.
@@ -96,18 +98,6 @@ def _trim_to_query(positions, odna, query_seq):
     return positions
 
 
-def _rank(check):
-    """Sort key for candidate models: exact match, then fewest substitutions, then length gap."""
-    if check["status"] == "ok":
-        return (0, 0)
-    if check["status"] == "warn":
-        gaps = sum(i["length"] for i in check["insertions"]) + sum(
-            d["stop"] - d["start"] + 1 for d in check["deletions"]
-        )
-        return (1, len(check["mismatches"]) + gaps)
-    return (2, abs(check["model_len"] - check["query_len"]))
-
-
 def genbank_to_genewise(gb_path, protein_fasta, outprefix, report=None):
     """Convert a GenBank gene model to the Genewise output files; raise ValueError if it fails."""
     reporter = resolve_reporter(report)
@@ -130,10 +120,9 @@ def genbank_to_genewise(gb_path, protein_fasta, outprefix, report=None):
             continue
         df = spans_from_positions(positions)
         check = cds_check.compare_to_query(cds_check.translate_model(df, odna), query_seq)
-        _report(reporter, f"GenBank {label}: {check['status']} "
-                          f"({check['model_len']} vs {check['query_len']} residues)",
+        _report(reporter, cds_check.summary_line(check, f"GenBank {label}"),
                 stage="genbank_input")
-        if best is None or _rank(check) < _rank(best[0]):
+        if best is None or cds_check.rank(check) < cds_check.rank(best[0]):
             best = (check, df, odna, label)
 
     if best is None:
@@ -141,10 +130,12 @@ def genbank_to_genewise(gb_path, protein_fasta, outprefix, report=None):
             os.path.basename(gb_path), cds_check.MODEL_MISMATCH_HELP))
     check, df, odna, label = best
     if check["status"] == "fail":
-        raise ValueError("GenBank gene model ({}): {} {}".format(
-            label, check["message"], cds_check.MODEL_MISMATCH_HELP))
+        message = cds_check.describe(check, f"GenBank {label}")
+        _report(reporter, message, stage="genbank_input", level="error")
+        raise ValueError(f"{message}\n{cds_check.MODEL_MISMATCH_HELP}")
     if check["status"] == "warn":
-        _report(reporter, check["message"], stage="genbank_input", level="warning")
+        _report(reporter, cds_check.describe(check, f"GenBank {label}"), stage="genbank_input",
+                level="warning")
 
     out_txt = f"{outprefix}.genewise.out.txt"
     genomic_fa = f"{outprefix}.genewise_genomic.fa"

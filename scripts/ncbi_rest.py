@@ -4,6 +4,9 @@ First source in fetch_genomic_sequence's fallback chain (the fastest), and the b
 organism with an annotated NCBI genome, including E. coli and non-preset taxa.
 
   Datasets /gene/symbol/{symbol}/taxon/{taxid}   -> accession, range, orientation
+  Datasets /gene/id/{id}[/product_report]         -> reference location; RefSeq transcript
+                                                      per protein (ncbi_gene_model.py)
+  efetch db=nuccore rettype=ft                     -> the genome annotation's CDS features
   efetch db=nuccore seq_start/seq_stop/strand      -> flanked FASTA, already in the
                                                       gene's orientation (strand=2
                                                       returns the reverse complement)
@@ -24,6 +27,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 import http_retry
 
 DATASETS_URL = "https://api.ncbi.nlm.nih.gov/datasets/v2/gene/symbol/{symbol}/taxon/{taxid}"
+GENE_ID_URL = "https://api.ncbi.nlm.nih.gov/datasets/v2/gene/id/{gene_id}"
+PRODUCT_URL = "https://api.ncbi.nlm.nih.gov/datasets/v2/gene/id/{gene_id}/product_report"
 EFETCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
 KEY_ENV = "NCBI_API_KEY"
 
@@ -62,25 +67,92 @@ def gene_locations(taxid, symbol, cfg, deadline=None):
         # the endpoint can return synonym matches; keep only the symbol itself
         if str(gene.get("symbol", "")).lower() != symbol.lower():
             continue
-        annotations = gene.get("annotations") or []
-        if not annotations:
-            continue
-        ann = annotations[0]
-        for loc in ann.get("genomic_locations") or []:
-            rng = loc.get("genomic_range") or {}
-            if not rng.get("begin") or not loc.get("genomic_accession_version"):
-                continue
-            out.append({
-                "gene_id":   str(gene.get("gene_id", "")),
-                "accession": loc["genomic_accession_version"],
-                "chrom":     loc.get("sequence_name") or loc["genomic_accession_version"],
-                "start":     int(rng["begin"]),
-                "end":       int(rng["end"]),
-                "strand":    "-" if rng.get("orientation") == "minus" else "+",
-                "assembly":  ann.get("assembly_name", ""),
-                "taxname":   gene.get("taxname", ""),
-            })
+        out += _locations(gene)
     return out
+
+
+def _locations(gene):
+    """Genomic locations of one Datasets gene record on its first (reference) annotation."""
+    annotations = gene.get("annotations") or []
+    if not annotations:
+        return []
+    ann = annotations[0]
+    out = []
+    for loc in ann.get("genomic_locations") or []:
+        rng = loc.get("genomic_range") or {}
+        if not rng.get("begin") or not loc.get("genomic_accession_version"):
+            continue
+        out.append({
+            "gene_id":   str(gene.get("gene_id", "")),
+            "accession": loc["genomic_accession_version"],
+            "chrom":     loc.get("sequence_name") or loc["genomic_accession_version"],
+            "start":     int(rng["begin"]),
+            "end":       int(rng["end"]),
+            "strand":    "-" if rng.get("orientation") == "minus" else "+",
+            "assembly":  ann.get("assembly_name", ""),
+            "taxname":   gene.get("taxname", ""),
+            "symbol":    gene.get("symbol", ""),
+        })
+    return out
+
+
+def gene_report(gene_id, cfg, deadline=None):
+    """Reference-assembly locations of an NCBI GeneID (gene_locations() dicts), [] if unknown."""
+    payload = _get(GENE_ID_URL.format(gene_id=quote(str(gene_id), safe="")), {}, cfg,
+                   deadline).json()
+    out = []
+    for report in payload.get("reports") or []:
+        out += _locations(report.get("gene") or {})
+    return out
+
+
+def product_report(gene_id, cfg, deadline=None):
+    """RefSeq products of a GeneID: {protein accession: {transcript, select_category}}."""
+    payload = _get(PRODUCT_URL.format(gene_id=quote(str(gene_id), safe="")), {}, cfg,
+                   deadline).json()
+    out = {}
+    for report in payload.get("reports") or []:
+        for t in (report.get("product") or {}).get("transcripts") or []:
+            prot = (t.get("protein") or {}).get("accession_version")
+            if prot:
+                out[prot] = {"transcript": t.get("accession_version", ""),
+                             "select_category": t.get("select_category", "")}
+    return out
+
+
+def _ft_coord(text):
+    """'<13347' -> 13347 (partial-feature markers dropped)."""
+    return int(text.lstrip("<>^"))
+
+
+def feature_table(accession, start, end, cfg, deadline=None):
+    """Annotated features of accession:start-end (1-based) from efetch's 5-column feature table.
+
+    Returns [{type, intervals: [(begin, end)] genomic 1-based in feature order (begin > end on
+    the minus strand), qualifiers: {name: [values]}}]. These are the genome annotation's own
+    coordinates, so a CDS is exact even where its RefSeq mRNA differs from the genome.
+    """
+    resp = _get(EFETCH_URL, {
+        "db": "nuccore", "id": accession, "seq_start": start, "seq_stop": end,
+        "rettype": "ft", "retmode": "text", "tool": "tagsites",
+    }, cfg, deadline, read_timeout=cfg["timeouts"]["fasta_read_timeout_s"])
+    features = []
+    for line in resp.text.splitlines():
+        if not line.strip() or line.startswith(">"):
+            continue
+        cols = line.split("\t")
+        if cols[0]:
+            # a location line: begin, end and (first line only) the feature key
+            interval = (start + _ft_coord(cols[0]) - 1, start + _ft_coord(cols[1]) - 1)
+            if len(cols) > 2 and cols[2]:
+                features.append({"type": cols[2], "intervals": [interval], "qualifiers": {}})
+            elif features:
+                features[-1]["intervals"].append(interval)
+        elif features and len(cols) >= 4:
+            # a qualifier line: three leading tabs, then name and value
+            features[-1]["qualifiers"].setdefault(cols[3], []).append(
+                cols[4] if len(cols) > 4 else "")
+    return features
 
 
 def find_gene(taxid, symbol, cfg, deadline=None):

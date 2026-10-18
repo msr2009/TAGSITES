@@ -410,19 +410,26 @@ def design_reagents(
     if protein_length and protein_length > 0:
         coverage = cds_coverage(cds_df, protein_length)
 
-    # Translate the model and compare it to the query: a length difference raises here, so
-    # residue numbers are never reported from a shifted model; substitutions only warn.
+    # Translate the model and compare it to the query: a wrong exon (clustered substitutions,
+    # a long gap, a gap beside substitutions) raises here, so residue numbers are never
+    # reported from a wrong model; isolated substitutions and short gaps only warn.
     if protein_seq:
-        check = check_model(cds_df, dna, protein_seq)
+        # which gene-model source won (GenBank / UCSC / NCBI / GFF3 / Genewise) labels the report
+        from gene_model import read_source
+
+        source = read_source(genewise_out.replace('.genewise.out.txt', ''))
+        try:
+            check = check_model(cds_df, dna, protein_seq,
+                                label=(source or {}).get('note', ''))
+        except ValueError as e:
+            # the located report goes to the log as plain text, not only in the traceback
+            _report(reporter, str(e), stage='model_check', level='error')
+            raise
         if check['status'] == 'warn':
             _report(reporter, check['message'], stage='model_check', level='warning')
         else:
             _report(reporter, 'gene model matches the input protein', stage='model_check')
         if model_check_sidecar:
-            # record which gene-model source won (GenBank / UCSC / Genewise / GFF3)
-            from gene_model import read_source
-
-            source = read_source(genewise_out.replace('.genewise.out.txt', ''))
             write_sidecar(model_check_sidecar, dict(check, source=source))
         score = coverage = None  # exact translation supersedes the score/coverage heuristics
 
@@ -830,7 +837,8 @@ if __name__ == '__main__':
     # --input_file is the name run_tag_sites_from_json.py passes for the run's protein
     parser.add_argument('--protein_fasta', '--input_file', dest='protein_fasta',
                         help='Protein FASTA (or PDB); the gene model must translate to this '
-                             'sequence (length mismatch fails, substitutions warn)')
+                             'sequence (clustered substitutions or long gaps fail; '
+                             'isolated substitutions and short gaps warn)')
     # Optional guide / arm parameters
     parser.add_argument('--n_guides', type=int, default=5,
                         help='Max guide RNAs to report per insertion site (default: 5)')

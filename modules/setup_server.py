@@ -32,17 +32,17 @@ from modules.setup_logic import (
     make_task,
 )
 from scripts.site_selection_util import get_sequence, save_fasta, extract_bfactors_from_pdb
-from scripts.uniprot_api import fetch_isoform_sequences
+from scripts.uniprot_api import (
+    checksum_lookup, fetch_entry, fetch_isoform_sequences, parse_accession,
+)
 
 # ebi_rest / fetch_genomic_sequence live in scripts/; make them importable
 # regardless of working dir
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 import ebi_rest
 import ensembl_rest
-import offtarget_blat
-import offtarget_screen
 import providers
-from fetch_genomic_sequence import fetch_genomic_sequence
+from fetch_genomic_sequence import fetch_by_gene_id, fetch_genomic_sequence
 
 # display names for fetch_genomic_sequence's meta["source"]
 _GENOMIC_SOURCE_LABELS = {"ucsc": "UCSC", "ncbi": "NCBI", "ensembl": "Ensembl"}
@@ -64,6 +64,139 @@ async def _off_loop(fn, *args, budget=None, grace=0, **kwargs):
     if budget is None:
         return await call
     return await asyncio.wait_for(call, timeout=budget + grace)
+
+
+# a pasted protein shorter than this is taken as still being typed: no auto-fetch yet
+MIN_AUTO_FETCH_AA = 30
+
+
+def _read_protein_text(text):
+    """(sequence, header) from pasted FASTA or raw protein text; header is '' if absent."""
+    lines = text.strip().splitlines()
+    header = lines[0][1:].strip() if lines and lines[0].startswith(">") else ""
+    body = lines[1:] if lines and lines[0].startswith(">") else lines
+    # first record only; letters only, so stops, digits and spaces drop out
+    seq = []
+    for line in body:
+        if line.startswith(">"):
+            break
+        seq.append(re.sub(r"[^A-Za-z]", "", line))
+    return "".join(seq).upper(), header
+
+
+def _read_protein_file(path, name):
+    """(sequence, header) from an uploaded protein FASTA or PDB; ('', '') if unreadable."""
+    try:
+        # PDB: the SEQRES sequence; the upload's own name carries the extension
+        if name.lower().endswith(".pdb"):
+            from Bio import SeqIO
+
+            rec = next(SeqIO.parse(path, "pdb-seqres"), None)
+            return (str(rec.seq), "") if rec is not None else ("", "")
+        with open(path) as fh:
+            return _read_protein_text(fh.read())
+    except Exception:
+        return "", ""
+
+
+def _gene_for_sequence(seq, header, taxid):
+    """(gene symbol, taxid, accession) for a protein via its FASTA-header accession or CRC64."""
+    acc = parse_accession(header) or checksum_lookup(seq, taxid or None)
+    if not acc:
+        raise LookupError("no UniProt entry matches this sequence")
+    entry = fetch_entry(acc.split("-")[0])
+    genes = entry.get("genes", [])
+    gene = genes[0].get("geneName", {}).get("value", "") if genes else ""
+    # the selected organism wins; else the entry's own
+    return gene, taxid or str(entry.get("organism", {}).get("taxonId", "")), acc
+
+
+# wall-clock budget for the input-time isoform check (gene_model.select_model); UCSC and NCBI
+# run in parallel and took 4-7 s on 9 proteins (Oct 2026)
+ISOFORM_BUDGET_S = 30
+
+# panel-3 status colours by isoform verdict ("warning" = the fetch itself failed)
+_VERDICT_COLORS = {"ok": "#15803d", "warn": "#b45309", "fail": "#b91c1c",
+                   "unknown": "#6b7280", "warning": "#b45309"}
+
+
+def _quiet(*args, **kwargs):
+    """Reporter that drops progress lines; the preview reports through the status card."""
+
+
+def _verdict(sel):
+    """Panel-3 verdict {level, text, details} for a gene_model.select_model result."""
+    import cds_check
+
+    win, best = sel["winner"], sel["best"]
+    if win is not None and win["check"]["status"] == "ok":
+        return {"level": "ok", "details": "",
+                "text": f"Isoform match: {sel['note']} translates exactly to your protein."}
+    if win is not None:
+        return {"level": "warn", "details": cds_check.describe(win["check"], win["label"]),
+                "text": f"Closest isoform: {win['label']} differs from your protein only by "
+                        "isolated substitutions or short gaps. Reagents will be designed on "
+                        "it, renumbered to your protein."}
+    tried = "; ".join(sel["reasons"])
+    closest = f" Closest: {best['label']}." if best else ""
+    help_text = cds_check.MODEL_MISMATCH_HELP
+    return {"level": "fail",
+            "details": cds_check.describe(best["check"], best["label"]) if best else tried,
+            "text": f"No annotated isoform matches your protein ({tried}).{closest} Options: "
+                    "run as is and Genewise will predict exons from the fetched region at run "
+                    "time (EBI, minutes; often off by a residue at splice junctions), or "
+                    + help_text[0].lower() + help_text[1:]}
+
+
+def _isoform_region(seq, accession, taxid, symbol, flank_bp):
+    """Isoform check, then the genomic region: {verdict, fasta, meta, error}; never raises.
+
+    The region is the matching model's own window when one qualifies (so it holds that
+    isoform), else the gene by NCBI GeneID (no paralog mix-up), else by gene symbol.
+    """
+    import tempfile
+
+    import gene_model
+
+    out = {"verdict": None, "fasta": "", "meta": None, "error": ""}
+    sel = None
+    if accession and seq:
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                fa = os.path.join(tmp, "protein.fa")
+                save_fasta(accession, seq, fa)
+                sel = gene_model.select_model(fa, taxid, accession=accession, flank_bp=flank_bp,
+                                              report=_quiet, deadline_s=ISOFORM_BUDGET_S)
+            out["verdict"] = _verdict(sel)
+        except Exception as e:
+            reason = str(e) or type(e).__name__
+    else:
+        reason = "no UniProt accession for this protein"
+    if out["verdict"] is None:
+        out["verdict"] = {"level": "unknown", "details": "",
+                          "text": f"Isoform check unavailable ({reason}); region fetched by "
+                                  "gene symbol. The check runs again in the reagents task."}
+    try:
+        # the matching model's window: header >source:assembly:chrom:lo:hi:strand
+        if sel and sel["winner"] is not None:
+            out["fasta"] = gene_model.model_fasta(sel["winner"])
+            source, rest = out["fasta"].split("\n", 1)[0][1:].split(":", 1)
+            assembly, chrom, lo, hi, strand = rest.rsplit(":", 4)
+            out["meta"] = {"gene_id": f"GeneID:{sel['gene_id']}" if sel["gene_id"] else accession,
+                           "species": "", "assembly": assembly, "source": source,
+                           "region": f"{chrom}:{lo}-{hi}:{strand}", "ambiguous": False,
+                           "candidates": [], "fallbacks": [],
+                           "locus": f"the matching isoform's locus ± {flank_bp} bp"}
+        elif sel and sel["gene_id"]:
+            out["fasta"], out["meta"] = fetch_by_gene_id(sel["gene_id"], flank_bp, report=_quiet)
+        elif symbol:
+            out["fasta"], out["meta"] = fetch_genomic_sequence(taxid, symbol, flank_bp=flank_bp,
+                                                               report=_quiet)
+        else:
+            out["error"] = "no gene symbol"
+    except Exception as e:
+        out["error"] = str(e) or type(e).__name__
+    return out
 
 _ROOT = Path(__file__).parent.parent
 _PARAMS_DIR = _ROOT / "params"
@@ -397,7 +530,12 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
 
     # ── genomic sequence auto-fetch (NCBI -> UCSC -> Ensembl) ────────────────
 
-    _genomic_fetch_status = reactive.Value("")
+    _genomic_fetch_status = reactive.Value(None)   # {"text", "level"} or None
+    # non-reactive bookkeeping for the automatic fetch: gen numbers invocations so a
+    # superseded result is dropped; text is the region the app last wrote into the paste
+    # box (replaceable, unlike the user's own paste); key is the (protein, taxid) it was
+    # fetched for; failure is the last automatic failure, quoted by the save warning
+    _auto_state = {"gen": 0, "text": "", "key": None, "failure": "", "verdict": None}
 
     @reactive.effect
     def _prefill_genomic_gene_symbol():
@@ -406,56 +544,37 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
         if hit and hit.get("gene"):
             ui.update_text("genomic_gene_symbol", value=hit["gene"])
 
-    @reactive.effect
-    @reactive.event(input.fetch_genomic_btn)
-    async def _fetch_genomic():
-        """Fetch genomic FASTA (NCBI, UCSC, then Ensembl) and populate the paste textarea.
+    def _genomic_target_free():
+        """True when filling the paste box would not overwrite a user-supplied region."""
+        with reactive.isolate():
+            if input.input_genomic():
+                return False
+            pasted = input.genomic_seq_paste().strip()
+        return not pasted or pasted == _auto_state["text"].strip()
 
-        Never blocks saving on failure — manual upload/paste remain usable.
+    def _show_fetched(fasta_text, meta, symbol, auto, verdict=None):
+        """Fill the paste box with a fetched region and report it (status card + notifications).
+
+        verdict is the isoform check's {level, text, details} (None: no check was run).
         """
-        taxid  = organism_taxid()
-        symbol = input.genomic_gene_symbol().strip()
-        # these two early returns must still release the button: the client
-        # disables it on click and only re-enables on the done message
-        if not taxid:
-            ui.notification_show("Select an organism first.", type="warning", duration=5)
-            await session.send_custom_message("tagsites_genomic_fetch_done", {"ok": False})
-            return
-        if not symbol:
-            ui.notification_show("Enter a gene symbol first.", type="warning", duration=5)
-            await session.send_custom_message("tagsites_genomic_fetch_done", {"ok": False})
-            return
-        try:
-            flank_bp = int(input.genomic_flank_bp())
-        except Exception:
-            flank_bp = 2000
-
-        cfg = ensembl_rest.timeouts()
-        ok  = False
-        try:
-            fasta_text, meta = await _off_loop(
-                fetch_genomic_sequence, taxid, symbol, flank_bp=flank_bp,
-                budget=cfg["total_timeout_s"], grace=cfg["outer_grace_s"],
-            )
-            ok = True
-        except (TimeoutError, asyncio.TimeoutError):
-            # the client already shows its own timed-out line at this point, so a
-            # notification here would just duplicate it
-            _genomic_fetch_status.set("")
-            return
-        except Exception as e:
-            _genomic_fetch_status.set("")
-            ui.notification_show(f"Genomic fetch failed: {e}", type="error", duration=8)
-            return
-        finally:
-            await session.send_custom_message("tagsites_genomic_fetch_done", {"ok": ok})
-
         ui.update_text_area("genomic_seq_paste", value=fasta_text)
+        _auto_state["text"] = fasta_text
+        _auto_state["failure"] = ""
+        _auto_state["verdict"] = verdict
         source = _GENOMIC_SOURCE_LABELS.get(meta.get("source"), meta.get("source", ""))
-        status = (f"Fetched {meta['gene_id']} ({meta['species']}) {meta['region']} "
-                  f"from {source}, assembly {meta['assembly']}")
-        _genomic_fetch_status.set(status)
-        ui.notification_show(status, type="message", duration=6)
+        species = f" ({meta['species']})" if meta.get("species") else ""
+        locus = f" — {meta['locus']}" if meta.get("locus") else ""
+        region = (f"{'Auto-fetched' if auto else 'Fetched'} {meta['gene_id']}{species} "
+                  f"{meta['region']} from {source}, assembly {meta['assembly']}{locus}")
+        verdict = verdict or {}
+        _genomic_fetch_status.set({"level": verdict.get("level", "plain"),
+                                   "text": verdict.get("text", ""),
+                                   "details": verdict.get("details", ""), "region": region})
+        # a failed isoform check is the news here; otherwise the region line
+        if verdict.get("level") == "fail":
+            ui.notification_show(verdict["text"], type="warning", duration=12)
+        else:
+            ui.notification_show(verdict.get("text") or region, type="message", duration=6)
         # earlier sources that failed before this one answered
         if meta.get("fallbacks"):
             ui.notification_show(
@@ -470,13 +589,239 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
                 type="warning", duration=10,
             )
 
+    def _flank_bp():
+        """Flank length from the auto-fetch box, 2000 bp when unset or invalid."""
+        with reactive.isolate():
+            try:
+                return int(input.genomic_flank_bp())
+            except Exception:
+                return 2000
+
+    def _current_protein():
+        """(protein, taxid, key, delay) for the protein on the page, or None.
+
+        Precedence matches _save_analysis: UniProt hit > uploaded file > paste. protein is
+        {"seq", "gene", "accession"} for a hit, {"seq", "header"} otherwise; key identifies
+        the protein and organism; delay debounces a typed paste.
+        """
+        hit    = _selected_hit()
+        files  = input.input_file()
+        pasted = input.protein_seq_paste().strip()
+        taxid  = organism_taxid()
+        if hit is not None:
+            taxid = taxid or hit.get("taxid", "")
+            return ({"seq": hit.get("sequence", ""), "gene": hit.get("gene", ""),
+                     "accession": hit["accession"]}, taxid, ("hit", hit["accession"], taxid), 0)
+        if files:
+            seq, header = _read_protein_file(files[0]["datapath"], files[0]["name"])
+            return {"seq": seq, "header": header}, taxid, ("file", files[0]["datapath"], taxid), 0
+        if pasted:
+            seq, header = _read_protein_text(pasted)
+            # wait for a whole sequence before looking it up
+            if len(seq) < MIN_AUTO_FETCH_AA:
+                return None
+            return {"seq": seq, "header": header}, taxid, ("paste", seq, taxid), 1.0
+        return None
+
+    @reactive.effect
+    @reactive.event(input.fetch_genomic_btn)
+    async def _fetch_genomic():
+        """Fetch genomic FASTA and populate the paste textarea.
+
+        With a protein on the page this re-runs the automatic pipeline (isoform check, then
+        the region; the typed symbol is used only when no isoform matches), overwriting the
+        paste box since the click asked for it. Without one it is a plain symbol fetch (NCBI,
+        UCSC, then Ensembl). Never blocks saving on failure — manual upload/paste remain usable.
+        """
+        taxid  = organism_taxid()
+        symbol = input.genomic_gene_symbol().strip()
+        current = _current_protein()
+        if current is not None:
+            protein, ptaxid, key, _ = current
+            _auto_state["gen"] += 1
+            _auto_fetch_task.cancel()
+            _auto_fetch_task.invoke(_auto_state["gen"], key, protein, ptaxid, _flank_bp(), 0,
+                                    symbol, True)
+            return
+        # these two early returns must still release the button: the client
+        # disables it on click and only re-enables on the done message
+        if not taxid:
+            ui.notification_show("Select an organism first.", type="warning", duration=5)
+            await session.send_custom_message("tagsites_genomic_fetch_done", {"ok": False})
+            return
+        if not symbol:
+            ui.notification_show("Enter a gene symbol first.", type="warning", duration=5)
+            await session.send_custom_message("tagsites_genomic_fetch_done", {"ok": False})
+            return
+
+        # a manual fetch supersedes any automatic one still in flight
+        _auto_state["gen"] += 1
+        _auto_fetch_task.cancel()
+        cfg = ensembl_rest.timeouts()
+        ok  = False
+        try:
+            fasta_text, meta = await _off_loop(
+                fetch_genomic_sequence, taxid, symbol, flank_bp=_flank_bp(),
+                budget=cfg["total_timeout_s"], grace=cfg["outer_grace_s"],
+            )
+            ok = True
+        except (TimeoutError, asyncio.TimeoutError):
+            # the client already shows its own timed-out line at this point, so a
+            # notification here would just duplicate it
+            _genomic_fetch_status.set(None)
+            return
+        except Exception as e:
+            _genomic_fetch_status.set(None)
+            ui.notification_show(f"Genomic fetch failed: {e}", type="error", duration=8)
+            return
+        finally:
+            await session.send_custom_message("tagsites_genomic_fetch_done", {"ok": ok})
+
+        _show_fetched(fasta_text, meta, symbol, auto=False)
+
+    # ── automatic fetch once the protein is known ─────────────────────────────
+
+    @reactive.extended_task
+    async def _auto_fetch_task(gen, key, protein, taxid, flank_bp, delay, symbol="",
+                               force=False):
+        """Find the protein's isoform model, then its region; returns a result dict.
+
+        symbol (the typed one, from the Fetch button) overrides UniProt's gene name for the
+        no-match region fetch; force skips the never-overwrite-the-user's-paste rule. Runs
+        outside the session's reactive flush, so the page stays responsive, and never
+        raises: every failure comes back as {"ok": False, "reason": ...}.
+        """
+        # debounce for typed pastes: a newer keystroke cancels this invocation here
+        await asyncio.sleep(delay)
+        res = {"gen": gen, "key": key, "ok": False, "symbol": symbol or protein.get("gene", ""),
+               "reason": "", "verdict": None, "force": force}
+        cfg = ensembl_rest.timeouts()
+        try:
+            accession = protein.get("accession", "")
+            # a pasted/uploaded sequence: its UniProt entry gives the accession and gene name
+            if "header" in protein:
+                try:
+                    found, taxid, accession = await _off_loop(
+                        _gene_for_sequence, protein["seq"], protein["header"], taxid, budget=20)
+                    res["symbol"] = symbol or found
+                except Exception:
+                    # a typed symbol can still fetch the region
+                    if not symbol:
+                        raise
+            if not taxid:
+                res["reason"] = "no organism"
+                return res
+            # bulk mode designs on the local genome: no remote isoform check
+            if providers.region_from_annotation():
+                if not res["symbol"]:
+                    res["reason"] = "no gene name in UniProt"
+                    return res
+                res["fasta"], res["meta"] = await _off_loop(
+                    fetch_genomic_sequence, taxid, res["symbol"], flank_bp=flank_bp,
+                    budget=cfg["total_timeout_s"], grace=cfg["outer_grace_s"])
+                res["ok"] = True
+                return res
+            out = await _off_loop(
+                _isoform_region, protein["seq"], accession, taxid, res["symbol"], flank_bp,
+                budget=ISOFORM_BUDGET_S + cfg["total_timeout_s"], grace=cfg["outer_grace_s"])
+            res["verdict"] = out["verdict"]
+            if out["error"]:
+                res["reason"] = out["error"]
+                return res
+            res["fasta"], res["meta"], res["ok"] = out["fasta"], out["meta"], True
+        except (TimeoutError, asyncio.TimeoutError):
+            res["reason"] = "timed out"
+        except Exception as e:
+            res["reason"] = str(e) or type(e).__name__
+        return res
+
+    @reactive.effect
+    async def _auto_fetch_genomic():
+        """Start the isoform check and region fetch as soon as a protein (and organism) is known.
+
+        Skipped when the user supplied a region, or the same protein and organism were
+        already fetched.
+        """
+        current = _current_protein()
+        if current is None:
+            return
+        protein, taxid, key, delay = current
+        if key == _auto_state["key"] or not _genomic_target_free():
+            return
+
+        _auto_state["gen"] += 1
+        _auto_fetch_task.cancel()
+        _auto_fetch_task.invoke(_auto_state["gen"], key, protein, taxid, _flank_bp(), delay)
+        await session.send_custom_message("tagsites_genomic_fetch_start", {})
+
+    @reactive.effect
+    async def _apply_auto_fetch():
+        """Write a finished automatic fetch into the page, or report why it failed."""
+        status = _auto_fetch_task.status()
+        if status not in ("success", "error"):
+            return
+        res = _auto_fetch_task.result() if status == "success" else None
+        # superseded by a newer protein/manual fetch: that one owns the button state
+        if res is not None and res["gen"] != _auto_state["gen"]:
+            return
+        ok = False
+        try:
+            if res is None:
+                res = {"ok": False, "symbol": "", "reason": "unexpected error", "verdict": None,
+                       "force": False}
+            # the user filled the region meanwhile: theirs wins, unless they clicked Fetch
+            if not res["force"] and not _genomic_target_free():
+                return
+            if res["symbol"]:
+                ui.update_text("genomic_gene_symbol", value=res["symbol"])
+            if res["ok"]:
+                _show_fetched(res["fasta"], res["meta"], res["symbol"], auto=not res["force"],
+                              verdict=res["verdict"])
+                _auto_state["key"] = res["key"]
+                ok = True
+                return
+            if res["symbol"]:
+                text = (f"Genomic fetch failed for '{res['symbol']}' ({res['reason']}). Check "
+                        "the gene symbol and click Fetch, or upload/paste the genomic region.")
+            else:
+                text = (f"Genomic fetch could not identify the gene ({res['reason']}). Select "
+                        "the organism, enter the gene symbol and click Fetch, or "
+                        "upload/paste the genomic region.")
+            _auto_state["failure"] = text
+            _auto_state["verdict"] = res["verdict"]
+            verdict = res["verdict"] or {}
+            # keep the isoform verdict, when the check ran, above the failure
+            _genomic_fetch_status.set({"level": verdict.get("level", "warning"),
+                                       "text": verdict.get("text", ""),
+                                       "details": verdict.get("details", ""),
+                                       "region": text})
+            ui.notification_show(text, type="warning", duration=10)
+        finally:
+            await session.send_custom_message("tagsites_genomic_fetch_done", {"ok": ok})
+
     @render.ui
     def fetch_genomic_status():
-        """Show the last successful auto-fetch's summary line."""
+        """Show the isoform verdict (coloured by level), the region line and the alignment."""
         status = _genomic_fetch_status()
         if not status:
             return None
-        return ui.div(status, class_="section-hint")
+        color = _VERDICT_COLORS.get(status["level"], "")
+        parts = []
+        if status.get("text"):
+            parts.append(ui.div(status["text"], style=f"color:{color}; font-weight:600;"))
+        if status.get("region"):
+            # the region line is the warning itself when there is no verdict to show
+            style = f"color:{color};" if not status.get("text") else ""
+            parts.append(ui.div(status["region"], style=style))
+        if status.get("details"):
+            parts.append(ui.tags.details(
+                ui.tags.summary("Alignment details"),
+                ui.tags.pre(status["details"],
+                            style="font-size:0.75rem; white-space:pre; overflow-x:auto; "
+                                  "margin:0.25rem 0 0;"),
+            ))
+        style = f"border-left:3px solid {color}; padding-left:0.5rem;" if color else ""
+        return ui.div(*parts, class_="section-hint", style=style)
 
     # ── PDB pLDDT validity check ──────────────────────────────────────────────
 
@@ -961,8 +1306,12 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
         missing = _missing_requirements()
         if missing:
             return f"Still required: {', '.join(missing)}."
+        # reagent design needs a region, but the other analyses do not: note, don't block
+        no_region = not (input.input_genomic() or input.genomic_seq_paste().strip()
+                         or providers.region_from_annotation())
+        note = " (no genomic sequence: reagent design will be skipped)" if no_region else ""
         if input.save_analysis() == 0:
-            return "Ready — click Save Analysis to write the run configuration."
+            return f"Ready — click Save Analysis to write the run configuration.{note}"
         return f"Saved → {input.working_dir()}{input.run_name()}.run.json"
 
     @render.text
@@ -1412,12 +1761,10 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
 
         # ── build reagents entry or warn ──────────────────────────────────────
         reagents_entry = None
-        # no upload is needed when the gene model can come from UCSC's UniProt alignment
-        # (gene_model.py) or, in bulk mode, from the local genome; the region is a fallback
-        ucsc_genome = offtarget_blat.assembly_for_taxid(organism_taxid(),
-                                                        offtarget_screen.load_config()) \
-            if organism_taxid() else ""
-        if genomic_path or providers.region_from_annotation() or ucsc_genome:
+        # the app needs a genomic region (auto-fetched when the protein is chosen) unless bulk
+        # mode supplies the local genome; the gene model itself still comes from UCSC/NCBI
+        # first (gene_model.py), so the region is Genewise's fallback
+        if genomic_path or providers.region_from_annotation():
             reagents_entry = build_reagents_entry(
                 defaults     = task_defaults("reagents"),
                 genomic_path = genomic_path,
@@ -1430,20 +1777,30 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
             if not genomic_path:
                 ui.notification_show(
                     "Gene model and genomic region will be taken from the local genome "
-                    "(UCSC UniProt alignment, then GFF3)." if providers.region_from_annotation()
-                    else f"Gene model will be taken from UCSC {ucsc_genome} (UniProt "
-                         "alignment). If UCSC has none for this protein, reagent design needs "
-                         "a genomic region: fetch or upload one and re-save.",
+                    "(UCSC UniProt alignment, then GFF3).",
                     type="message",
                     duration=8,
                 )
+            # the input-time isoform check found no model: say what the run will do, unless
+            # an uploaded GenBank (which wins at run time) supplies it
+            verdict = _auto_state["verdict"] or {}
+            gb = Path(genomic_path).suffix.lower() in (".gb", ".gbk", ".genbank", ".gbff")
+            if verdict.get("level") == "fail" and not gb:
+                ui.notification_show(
+                    "No annotated isoform matched your protein: reagent design will use Genewise "
+                    "on the genomic region, unless you upload a GenBank with this isoform's "
+                    "CDS/exon features and re-save.",
+                    type="warning",
+                    duration=12,
+                )
         else:
+            # quote the automatic fetch's failure, when there was one
+            reason = f" ({_auto_state['failure']})" if _auto_state["failure"] else ""
             ui.notification_show(
-                "No genomic FASTA uploaded and no UCSC assembly for this organism — CRISPR "
-                "reagent design will not run. Upload a genomic region FASTA and re-save to "
-                "enable it.",
+                "No genomic sequence — CRISPR reagent design will not run. Fetch, upload or "
+                f"paste the genomic region in panel 3 and re-save.{reason}",
                 type="warning",
-                duration=8,
+                duration=12,
             )
 
         run_json = build_run_json(

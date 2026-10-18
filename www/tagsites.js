@@ -1620,7 +1620,7 @@
   // arrives at all (a dropped websocket on shinyapps.io, say), so the spinner can no
   // longer be left running forever the way it was in issue #64.
   function wireBlockingButton(btnClass, wrapClass, spinnerClass, doneMessage,
-                              warnMs, failMs, warnText, failText) {
+                              warnMs, failMs, warnText, failText, startMessage) {
     var timers = [];
 
     function clearTimers() {
@@ -1650,12 +1650,13 @@
       });
     }
 
-    document.addEventListener("click", function (e) {
-      var btn = e.target.closest(btnClass);
-      if (!btn) return;
-      var container = btn.closest(wrapClass);
-      btn.disabled = true;
-      var spinner = container && container.querySelector(spinnerClass);
+    // disable the container's button, show its spinner and arm the timers
+    function start(container) {
+      if (!container) return;
+      container.querySelectorAll(btnClass).forEach(function (btn) {
+        btn.disabled = true;
+      });
+      var spinner = container.querySelector(spinnerClass);
       if (spinner) spinner.style.display = "flex";
 
       clearTimers();
@@ -1674,7 +1675,20 @@
           release();
         }, failMs));
       }
+    }
+
+    document.addEventListener("click", function (e) {
+      var btn = e.target.closest(btnClass);
+      if (!btn) return;
+      start(btn.closest(wrapClass));
     });
+
+    // a server-initiated call (e.g. the automatic genomic fetch) shows the same state
+    if (startMessage) {
+      Shiny.addCustomMessageHandler(startMessage, function (msg) {
+        start(document.querySelector(wrapClass));
+      });
+    }
 
     Shiny.addCustomMessageHandler(doneMessage, function (msg) {
       clearTimers();
@@ -1689,11 +1703,12 @@
     });
   }
 
-  // 20 s / 40 s match total_timeout_s and warn_at_s in ensembl.config.json
+  // 20 s matches warn_at_s in ensembl.config.json; 80 s covers the isoform check
+  // (setup_server.ISOFORM_BUDGET_S, 30 s) plus the region fetch (total_timeout_s, 40 s)
   wireBlockingButton(".ts-genomic-fetch-btn", ".ts-genomic-fetch-wrap",
                       ".ts-genomic-spinner", "tagsites_genomic_fetch_done",
-                      20000, 40000, "Taking a while…",
-                      "Fetch timed out. Try again?");
+                      20000, 80000, "Taking a while…",
+                      "Fetch timed out. Try again?", "tagsites_genomic_fetch_start");
   wireBlockingButton(".ts-uniprot-search-btn", ".ts-uniprot-search-wrap",
                       ".ts-uniprot-spinner", "tagsites_uniprot_search_done",
                       20000, 40000, "Taking a while…",

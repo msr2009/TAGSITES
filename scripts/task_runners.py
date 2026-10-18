@@ -205,7 +205,8 @@ def run_reagents(args, report=None, job_id_cb=None, resume_job_ids=None):
     """Run design_tag_reagents.main() from a JSON args dict.
 
     Builds the gene model first if needed (empty 'genewise' arg) via gene_model.ensure_model:
-    GenBank exons > UCSC UniProt alignment > Genewise (or the local GFF3 in bulk mode).
+    GenBank exons > UCSC UniProt alignment > NCBI RefSeq (or local GFF3) transcripts >
+    closest passing candidate > Genewise.
     """
     import cds_check
     import design_tag_reagents

@@ -309,7 +309,7 @@ def setup_ui():
                 ui.div(
                     # auto-fetch genomic sequence (NCBI, then UCSC, then Ensembl)
                     ui.div(
-                        ui.tags.label("Auto-fetch from NCBI / UCSC / Ensembl (gives up after 40 s — paste or upload below if it fails)", class_="form-label"),
+                        ui.tags.label("Auto-fetch — runs when a protein is chosen: checks UCSC/NCBI for an isoform model matching your protein, then fetches its region; edit the symbol and click Fetch to retry (paste or upload below if it fails)", class_="form-label"),
                         ui.div(
                             ui.input_text("genomic_gene_symbol", "",
                                           placeholder="Gene symbol (e.g. unc-18)"),
@@ -337,7 +337,7 @@ def setup_ui():
                     # genomic file upload
                     compact_file_input("input_genomic",
                         label_with_tip("Genomic region (FASTA or GenBank)", _t.get("input_genomic", "")),
-                        accept=[".fasta", ".fa", ".fsa", ".gb", ".gbk", ".genbank"]),
+                        accept=[".fasta", ".fa", ".fsa", ".gb", ".gbk", ".genbank", ".gbff"]),
 
                     # — or — divider between file upload and paste
                     ui.div(ui.span("— or paste —"), class_="or-divider"),

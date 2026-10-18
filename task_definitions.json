@@ -6,7 +6,7 @@
 	"global_tooltips": {
 		"email":         "EBI requires an email address for remote jobs",
 		"input_file":    "Protein sequence as FASTA (.fa/.fasta) or an AlphaFold PDB (.pdb). PDB input auto-extracts the sequence and pre-fills the pLDDT analysis.",
-		"input_genomic": "FASTA or GenBank of genomic region containing gene (include at least 500bp up- and downstream). A GenBank file with CDS or exon features annotated is used as the gene model instead of Genewise; it must translate to the input protein",
+		"input_genomic": "Required for reagent design; fetched automatically once the protein and organism are known (or use Fetch, upload or paste). At the same time the protein is matched against every UCSC/NCBI isoform model, and the verdict shows above: a match means the region is that isoform's locus; no match means Genewise or your own GenBank. The gene model itself comes from UCSC's UniProt alignment, then NCBI RefSeq isoforms; a FASTA region (at least 500bp up- and downstream) is used by the Genewise fallback. A GenBank (.gb/.gbk/.genbank/.gbff) with a CDS feature for this isoform (a join over its exons), or exon features for this isoform only, replaces the automatic model; it must translate to the input protein",
 		"run_name":      "Short identifier used as the prefix for all output files",
 		"working_dir":   "Directory for output. Autocompleted from Analysis name and editable"
 	},

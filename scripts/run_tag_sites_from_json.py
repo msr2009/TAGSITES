@@ -100,8 +100,8 @@ def main(json_input_file, force=False):
     ###############################################
     # PRE-STEP: gene model (for reagents tasks)
     ###############################################
-    # gene_model.py picks GenBank exons > UCSC UniProt alignment > Genewise (or the local
-    # GFF3 in bulk mode), the same code the app runs in-process (task_runners.run_reagents)
+    # gene_model.py picks GenBank exons > UCSC UniProt alignment > NCBI RefSeq (or local GFF3)
+    # transcripts > Genewise, the same code the app runs in-process (task_runners.run_reagents)
     reagents_task_key = genewise_required(tasks)
     if reagents_task_key is not None:
         task_args   = tasks[reagents_task_key]["args"]
@@ -122,7 +122,7 @@ def main(json_input_file, force=False):
                 f"--taxid '{task_args.get('taxid', global_args.get('taxid', ''))}' "
                 f"--accession '{accession}' --email {global_args.get('email', '')}"
             )
-            print("BUILDING GENE MODEL (GenBank > UCSC > Genewise)\n\n" + gm_call)
+            print("BUILDING GENE MODEL (GenBank > UCSC > NCBI/GFF3 > Genewise)\n\n" + gm_call)
             ret = subprocess.call(gm_call, shell=True)
         if ret == 0 and os.path.exists(gw_out_file):
             tasks[reagents_task_key]["args"]["genewise"]      = gw_out_file

@@ -218,6 +218,39 @@ def _fetch_ncbi(taxid, gene_symbol, flank_bp, reporter, deadline):
     return fasta_text, meta
 
 
+def fetch_by_gene_id(gene_id, flank_bp=2000, report=None, total_timeout=None):
+    """Flanked genomic FASTA for an NCBI GeneID (no symbol lookup, so no paralog mix-up).
+
+    Returns (fasta_text, meta) shaped like fetch_genomic_sequence's; raises ValueError when
+    NCBI has no reference location for the GeneID.
+    """
+    reporter = resolve_reporter(report)
+    cfg = ensembl_rest.load_config()
+    if total_timeout is None:
+        total_timeout = ensembl_rest.timeouts()["total_timeout_s"]
+    deadline = http_retry.deadline_from(total_timeout)
+    locs = ncbi_rest.gene_report(gene_id, cfg, deadline=deadline)
+    if not locs:
+        raise ValueError(f"NCBI has no reference location for GeneID {gene_id}")
+    loc = locs[0]
+    acc, start, end, strand = loc["accession"], loc["start"], loc["end"], loc["strand"]
+    seq, lo, hi = ncbi_rest.fetch_region(acc, start, end, strand, flank_bp, cfg,
+                                         deadline=deadline)
+    _report(reporter, f"GeneID {gene_id} {acc}:{start}-{end}:{strand}: fetched {len(seq)} bp",
+            stage="ncbi_fetch")
+    meta = {
+        "species":    loc.get("taxname") or "",
+        "gene_id":    f"GeneID:{gene_id}",
+        "assembly":   loc["assembly"],
+        "region":     f"{acc}:{start}-{end}:{_strand_int(strand)}",
+        "ambiguous":  False,
+        "candidates": [],
+        "source":     "ncbi",
+        "fallbacks":  [],
+    }
+    return _format_fasta("ncbi", loc["assembly"], acc, lo, hi, strand, seq), meta
+
+
 _FETCHERS = {"ncbi": _fetch_ncbi, "ucsc": _fetch_ucsc, "ensembl": _fetch_ensembl}
 
 
