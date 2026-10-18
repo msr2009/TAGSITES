@@ -25,4 +25,5 @@ xmltramp2
 ridgeplot
 reportlab
 primer3-py
+pyBigWig               # full-precision phastCons from UCSC's bigWig over HTTP (scripts/phastcons_track.py); optional: without it the track uses UCSC's byte-quantized REST values
 kaleido==0.2.1

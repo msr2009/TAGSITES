@@ -17,11 +17,9 @@ CLI:
 import os
 import sys
 
-import pandas as pd
-
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import cds_check
-from parse_genewise import GROUND_TRUTH_SCORE, write_genewise_gff
+from parse_genewise import GROUND_TRUTH_SCORE, spans_from_positions, write_genewise_gff
 from progress import report as _report, resolve_reporter
 from site_selection_util import save_fasta
 
@@ -98,30 +96,15 @@ def _trim_to_query(positions, odna, query_seq):
     return positions
 
 
-def _spans_df(positions):
-    """Collapse transcript-ordered positions into exon rows (0-based start/stop, GFF phase)."""
-    rows = []
-    run_start = prev = positions[0]
-    for p in positions[1:]:
-        if p == prev + 1:
-            prev = p
-        else:
-            rows.append([run_start, prev])
-            run_start = prev = p
-    rows.append([run_start, prev])
-    df = pd.DataFrame(rows, columns=["start", "stop"])
-    # phase = bases at the start of this exon that finish the previous exon's split codon
-    before = (df["stop"] - df["start"] + 1).cumsum().shift(fill_value=0)
-    df["frame"] = (3 - before % 3) % 3
-    return df
-
-
 def _rank(check):
     """Sort key for candidate models: exact match, then fewest substitutions, then length gap."""
     if check["status"] == "ok":
         return (0, 0)
     if check["status"] == "warn":
-        return (1, len(check["mismatches"]))
+        gaps = sum(i["length"] for i in check["insertions"]) + sum(
+            d["stop"] - d["start"] + 1 for d in check["deletions"]
+        )
+        return (1, len(check["mismatches"]) + gaps)
     return (2, abs(check["model_len"] - check["query_len"]))
 
 
@@ -145,7 +128,7 @@ def genbank_to_genewise(gb_path, protein_fasta, outprefix, report=None):
                 else positions
         if not positions:
             continue
-        df = _spans_df(positions)
+        df = spans_from_positions(positions)
         check = cds_check.compare_to_query(cds_check.translate_model(df, odna), query_seq)
         _report(reporter, f"GenBank {label}: {check['status']} "
                           f"({check['model_len']} vs {check['query_len']} residues)",

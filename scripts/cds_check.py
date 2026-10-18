@@ -6,10 +6,13 @@ Validate a gene model (Genewise output or a user GenBank) against the query prot
 Residue numbers in the reagent table come from translating the model's CDS, so any indel
 between model and query silently shifts every downstream residue (DBL-1: two unspliced short
 introns added 42 residues and Q239 was reported as F239). The model is globally aligned to the
-query and the alignment is parsed: any gap (model-only or query-only residues) is a hard
-failure, even when the lengths happen to agree. Substitutions alone are a warning that lists the
-positions (the reagents are still built on the right codons) up to MAX_SUBSTITUTION_FRACTION of
-the query length, and a failure above it.
+query and the alignment is parsed. Substitutions and gaps (model-only or query-only residues) are
+warnings that list the positions; each is judged against its own limit (MAX_SUBSTITUTION_FRACTION,
+MAX_GAP_FRACTION of the query length) and either one over its limit fails, so a model with a gap
+cannot hide a divergent stretch (unc-5: a 1-residue gap plus 23 substitutions in 947 residues).
+With gaps the result carries a residue_map (model position -> query position, None for
+model-only residues) so reagent numbering stays in input-protein coordinates; query residues
+the model lacks have no genomic codon and get no reagents.
 """
 
 import json
@@ -21,6 +24,7 @@ MODEL_MISMATCH_HELP = (
     "to replace the Genewise gene model."
 )
 MAX_SUBSTITUTION_FRACTION = 0.02  # substitutions above this share of the query length fail
+MAX_GAP_FRACTION = 0.02  # gap residues (model-only + query-only) above this share fail
 MAX_LISTED = 25  # mismatches / indels spelled out in a message before truncating
 
 
@@ -91,8 +95,22 @@ def parse_alignment(aligned_query, aligned_model, query_seq, model_seq):
     return mismatches, insertions, deletions
 
 
+def build_residue_map(aligned_query, aligned_model):
+    """Map each model residue (1-based) to its query residue number, None if model-only."""
+    residue_map = {}
+    qpos = mpos = 0
+    for q, m in zip(aligned_query, aligned_model):
+        # advance each sequence only on its own non-gap columns
+        if q != "-":
+            qpos += 1
+        if m != "-":
+            mpos += 1
+            residue_map[mpos] = qpos if q != "-" else None
+    return residue_map
+
+
 def compare_to_query(model_seq, query_seq):
-    """Align model to query and judge the parsed result: 'ok', 'warn' (substitutions only) or 'fail'."""
+    """Align model to query and judge the parsed result: 'ok', 'warn' or 'fail'."""
     query_seq = query_seq.rstrip("*")
     aligned_query, aligned_model = align_to_query(query_seq, model_seq)
     mismatches, insertions, deletions = parse_alignment(
@@ -105,11 +123,19 @@ def compare_to_query(model_seq, query_seq):
         "mismatches": mismatches,
         "insertions": insertions,
         "deletions": deletions,
+        "residue_map": None,
         "message": "",
     }
+    qlen = max(len(query_seq), 1)
+    gap_residues = sum(i["length"] for i in insertions) + sum(
+        d["stop"] - d["start"] + 1 for d in deletions
+    )
+    # gaps and substitutions are judged independently: either one over its limit fails
+    too_gappy = gap_residues / qlen > MAX_GAP_FRACTION
+    sub_frac = len(mismatches) / qlen
+    too_divergent = sub_frac > MAX_SUBSTITUTION_FRACTION
+    messages = []
     if insertions or deletions:
-        # any gap shifts the numbering of every downstream residue, even when lengths agree
-        result["status"] = "fail"
         parts = [
             "model has {} extra residue{} after query residue {}".format(
                 i["length"], "s" if i["length"] != 1 else "", i["after"]
@@ -121,23 +147,40 @@ def compare_to_query(model_seq, query_seq):
             )
             for d in deletions[:MAX_LISTED]
         ]
-        result["message"] = "Gene model translates to {} residues, input protein has {}: {}.".format(
+        msg = "Gene model translates to {} residues, input protein has {}: {}.".format(
             len(model_seq), len(query_seq), "; ".join(parts)
         )
-    elif mismatches:
-        frac = len(mismatches) / max(len(query_seq), 1)
+        if too_gappy:
+            msg += " The gap limit is {:.0%} of the protein.".format(MAX_GAP_FRACTION)
+        messages.append(msg)
+    if mismatches:
         detail = "{} residue{} ({:.1%} of {}): {}".format(
-            len(mismatches), "s" if len(mismatches) != 1 else "", frac, len(query_seq),
+            len(mismatches), "s" if len(mismatches) != 1 else "", sub_frac, len(query_seq),
             format_mismatches(mismatches),
         )
-        if frac > MAX_SUBSTITUTION_FRACTION:
+        msg = "Gene model differs from the input protein at {}.".format(detail)
+        if too_divergent:
             # too divergent to be the same protein (wrong gene, isoform or strain)
-            result["status"] = "fail"
-            result["message"] = "Gene model differs from the input protein at {}; the limit is " \
-                "{:.0%}.".format(detail, MAX_SUBSTITUTION_FRACTION)
-        else:
-            result["status"] = "warn"
-            result["message"] = "Gene model differs from the input protein at {}.".format(detail)
+            msg = msg[:-1] + "; the substitution limit is {:.0%}.".format(MAX_SUBSTITUTION_FRACTION)
+        messages.append(msg)
+
+    if too_gappy or too_divergent:
+        result["status"] = "fail"
+    elif insertions or deletions or mismatches:
+        result["status"] = "warn"
+        if insertions or deletions:
+            # a gap shifts the model's numbering downstream, so renumber through the alignment;
+            # JSON keys are strings and only residues whose number differs need an entry
+            result["residue_map"] = {
+                str(m): q
+                for m, q in build_residue_map(aligned_query, aligned_model).items()
+                if q != m
+            }
+            messages.append(
+                "Residue numbers follow the input protein; query residues the model lacks "
+                "get no reagents."
+            )
+    result["message"] = " ".join(messages)
     return result
 
 

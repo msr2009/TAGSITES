@@ -1,10 +1,13 @@
 """
 genewise_bulk.py
 
-Local gene-model backend. No Genewise runs: the CDS exons are read from the GFF3 index
-(scripts/genome_regions.py), the matching region is cut from the local genome FASTA, and the
-transcript is chosen by translating every annotated CDS and matching the input protein exactly
-(genome_regions.find_transcripts_by_sequence). No genomic region needs to be supplied.
+Local gene-model backend, the bulk-mode FALLBACK: gene_model.ensure_model first tries UCSC's
+UniProt alignment from the local index (ucsc_local.py / ucsc_gene_model.py, same rules as the
+remote path), and calls this only when that has no exact model. No Genewise runs: the CDS
+exons are read from the GFF3 index (scripts/genome_regions.py), the matching region is cut
+from the local genome FASTA, and the transcript is chosen by translating every annotated CDS
+and matching the input protein exactly (genome_regions.find_transcripts_by_sequence). No
+genomic region needs to be supplied.
 
 Output files keep Genewise's names and format ({outprefix}.genewise.out.txt,
 {outprefix}.genewise_genomic.fa, {outprefix}.genewise_orientation.txt) so the reagent code
@@ -22,7 +25,7 @@ import json
 import sys
 from pathlib import Path
 
-from site_selection_util import get_sequence, save_fasta, uniprot_accession_regex, read_fasta
+from site_selection_util import get_sequence, save_fasta, read_fasta
 
 sys.path.insert(0, str(Path(__file__).parent))
 from local_store import lookup_by_accession, lookup_by_crc64, open_index as open_proteins_index
@@ -31,6 +34,7 @@ from genome_regions import (
     open_index as open_genome_index,
 )
 from parse_genewise import write_genewise_gff
+from uniprot_api import parse_accession
 from progress import report as _report, resolve_reporter
 
 
@@ -39,16 +43,18 @@ def _resolve_accession(protein_fasta, proteins_conn):
     already looks like one, else its FASTA/PDB record id, else a CRC64
     checksum lookup against local_store. Returns None if nothing resolves.
     """
-    if uniprot_accession_regex(protein_fasta):
-        return protein_fasta
+    acc = parse_accession(protein_fasta)
+    if acc:
+        return acc
 
     if protein_fasta.endswith(".pdb"):
         seq = get_sequence(protein_fasta)
         name = None
     else:
         name, seq = read_fasta(protein_fasta)
-        if uniprot_accession_regex(name):
-            return name
+        acc = parse_accession(name)
+        if acc:
+            return acc
 
     from Bio.SeqUtils.CheckSum import crc64
     checksum = crc64(str(seq)).replace("CRC-", "")

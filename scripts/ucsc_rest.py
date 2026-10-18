@@ -13,6 +13,9 @@ Three calls per lookup, all through http_retry with the caller's deadline:
 symbol (case-insensitive) on a gene track are kept. UCSC asks for roughly one
 request per second; REQUEST_PAUSE_S spaces the three calls.
 
+Also used by ucsc_gene_model.py (search_accession + track_items on the UniProt alignment
+tracks) and phastcons_track.py (track_items on a phastCons wiggle, chrom_aliases).
+
 Matt Rich, 2026
 """
 
@@ -31,6 +34,9 @@ TRACK_URL = "https://api.genome.ucsc.edu/getData/track"
 # gene tracks in preference order: refGene carries the symbol as posName on every
 # preset assembly; ensGene is the only one that does on sacCer3
 GENE_TRACKS = ("refGene", "ncbiRefSeq", "ensGene", "sgdGene", "knownGene")
+
+# UniProt-to-genome alignments (bigPsl), Swiss-Prot preferred; present on native assemblies only
+UNIPROT_TRACKS = ("unipAliSwissprot", "unipAliTrembl")
 
 REQUEST_PAUSE_S = 1.0
 
@@ -92,14 +98,55 @@ def search_gene(genome, symbol, cfg, deadline=None):
     return None, []
 
 
-def gene_strand(genome, track, symbol, chrom, start, end, cfg, deadline=None):
-    """Strand ('+'/'-') of the symbol's gene-track items in a 1-based span, or None if unclear."""
+def track_items(genome, track, chrom, start0, end, cfg, deadline=None):
+    """Items of any track over a 0-based half-open span (gene tracks, bigPsl, wiggle)."""
     payload = _get(TRACK_URL, {"genome": genome, "track": track, "chrom": chrom,
-                               "start": start - 1, "end": end}, cfg, deadline)
+                               "start": start0, "end": end}, cfg, deadline)
     items = payload.get(track) or []
     # a dict keyed by chrom is returned for some tracks; flatten it
     if isinstance(items, dict):
         items = [it for chunk in items.values() for it in chunk]
+    return items
+
+
+def search_accession(genome, accession, cfg, deadline=None):
+    """UniProt alignment hits for an accession: [(track, chrom, start, end, posName)].
+
+    A bare accession also returns its isoforms ("Q26261" -> "Q26261-1", "-2", ...);
+    coordinates are 1-based inclusive. Empty when the assembly has no UniProt tracks.
+    """
+    payload = _get(SEARCH_URL, {"search": accession, "genome": genome}, cfg, deadline)
+    base = accession.split("-")[0].upper()
+    hits = []
+    for group in payload.get("positionMatches") or []:
+        track = group.get("trackName", "")
+        if track not in UNIPROT_TRACKS:
+            continue
+        for m in group.get("matches") or []:
+            name = str(m.get("posName", ""))
+            # keep the accession itself and isoforms of its base entry
+            if m.get("position") and name.split("-")[0].upper() == base:
+                hits.append((track, *_parse_position(m["position"]), name))
+    return hits
+
+
+def chrom_aliases(genome, cfg, deadline=None):
+    """{alias: UCSC chrom} from the assembly's chromAlias table (RefSeq, Ensembl, GenBank names)."""
+    payload = _get(TRACK_URL, {"genome": genome, "track": "chromAlias"}, cfg, deadline)
+    table = payload.get("chromAlias") or {}
+    aliases = {}
+    # rows are grouped by UCSC chrom name
+    for chrom, rows in (table.items() if isinstance(table, dict) else []):
+        aliases[chrom] = chrom
+        for row in rows:
+            if row.get("alias"):
+                aliases[row["alias"]] = chrom
+    return aliases
+
+
+def gene_strand(genome, track, symbol, chrom, start, end, cfg, deadline=None):
+    """Strand ('+'/'-') of the symbol's gene-track items in a 1-based span, or None if unclear."""
+    items = track_items(genome, track, chrom, start - 1, end, cfg, deadline=deadline)
     inside = [it for it in items
               if it.get("txStart", -1) >= start - 1 and it.get("txEnd", 0) <= end]
     # prefer items named for the symbol (refGene/ncbiRefSeq name2), so a nested

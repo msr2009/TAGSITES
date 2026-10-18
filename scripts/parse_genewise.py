@@ -127,6 +127,40 @@ def write_genewise_gff(out_path, cds_df, chrom, source_note):
         f.write("\n".join(lines) + "\n")
 
 
+def spans_from_positions(positions):
+    """Collapse transcript-ordered CDS positions into exon rows (0-based start/stop, GFF phase).
+
+    Used by every annotation-derived gene model (GenBank, UCSC) to build the cds_df that
+    write_genewise_gff() writes and parse_genewise() reads back.
+    """
+    rows = []
+    run_start = prev = positions[0]
+    for p in positions[1:]:
+        # a gap in the positions ends the current exon
+        if p == prev + 1:
+            prev = p
+        else:
+            rows.append([run_start, prev])
+            run_start = prev = p
+    rows.append([run_start, prev])
+    df = pd.DataFrame(rows, columns=["start", "stop"])
+    # phase = bases at the start of this exon that finish the previous exon's split codon
+    before = (df["stop"] - df["start"] + 1).cumsum().shift(fill_value=0)
+    df["frame"] = (3 - before % 3) % 3
+    return df
+
+
+def codon_positions(cds_df):
+    """Per-residue [p1, p2, p3] region positions (0-based) of the model's codons, in order.
+
+    Walks the CDS spans exactly as cds_check.translate_model() joins them, so entry i is the
+    codon of model residue i + 1 and split codons take their bases from both exons.
+    """
+    bases = [p for r in cds_df.sort_values("start").itertuples()
+             for p in range(int(r.start), int(r.stop) + 1)]
+    return [bases[i:i + 3] for i in range(0, len(bases) // 3 * 3, 3)]
+
+
 # ── Parsing ───────────────────────────────────────────────────────────────────
 
 def parse_genewise(out_txt):

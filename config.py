@@ -43,6 +43,20 @@ ANALYSIS_COLORS = {t: d["colors"] for t, d in TASK_DEFS.items() if "colors" in d
 # no entry in TASK_DEFS; give it a palette here so it doesn't fall back to gray
 ANALYSIS_COLORS["hydrophobic"] = ["#b2182b", "#2166ac", "#762a83"]
 
+# line colors for the continuous Results tracks: one shared categorical palette assigned in
+# track order (utils/results.assign_task_colors), so no two of the first eight tracks share a
+# color whatever their analysis type; a ninth track starts the cycle again. Eight hues in this
+# fixed order pass a colorblind-separation check (worst adjacent CVD ΔE 9.1, normal-vision
+# ΔE 19.6 on a light surface); ANALYSIS_COLORS still drives per-type gradients.
+PLOT_LINE_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100",
+                    "#e87ba4", "#008300", "#6250d6", "#e34948"]
+
+# phastCons is a sidecar of the reagents task (phastcons_track.py), not its own task;
+# register it as a continuous track type so plotting and scoring criteria
+# (scores.config.json params.analysis: "phastcons") can find the PHASTCONS_phastcons column
+ANALYSIS_COLORS["phastcons"] = ["#1b7837", "#5aae61", "#00441b"]
+RESULTS_TYPE_DICT["CONTINUOUS"].append("phastcons")
+
 # stable colors for domain/annotation sources (not task-type-keyed, stays in config)
 DOMAIN_SOURCE_COLORS = {
     "Phobius":      "#9467bd",   # purple

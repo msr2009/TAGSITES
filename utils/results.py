@@ -2,6 +2,7 @@
 
 import os
 import textwrap
+from pathlib import Path
 import pandas as pd
 import json
 import plotly.graph_objs as go
@@ -11,6 +12,7 @@ import numpy as np
 from numpy import linspace
 
 from config import ANALYSIS_COLORS, DOMAIN_SOURCE_COLORS, ISOFORM_CLASS_COLORS, GLOBAL_KEYS, TOPOLOGY_SOURCES
+from config import PLOT_LINE_COLORS
 from scripts.task_registry import companion_path
 
 
@@ -136,8 +138,20 @@ def load_data_from_json(json_in, type_dict):
         analysis    = v.get("type", "")
         output_path = v.get("args", {}).get("output", "")
 
-        # reagents tasks feed the Reagents tab, not the Results plots — skip quietly
+        # reagents tasks feed the Reagents tab, not the Results plots; their phastCons
+        # sidecar (phastcons_track.py, one row per residue) is the one exception
         if analysis == "reagents":
+            phast_path = str(Path(output_path).with_suffix("")) + ".phastcons.tsv" \
+                if output_path else ""
+            if phast_path and os.path.exists(phast_path):
+                try:
+                    read_df = pd.read_csv(phast_path, sep="\t", header=None, comment="#",
+                                          na_values=[-1000])
+                    tmp_df = pd.DataFrame({"pos": range(1, read_df.shape[0] + 1),
+                                           "PHASTCONS_phastcons": read_df.iloc[:, 1]})
+                    df = pd.merge(df, tmp_df, how="outer", on="pos")
+                except Exception as e:
+                    print(f"Error loading phastCons track {phast_path}: {e}")
             continue
 
         # skip tasks whose output files haven't been written yet
@@ -370,16 +384,14 @@ def load_reagents_df(json_in):
 ###FOR PLOTTING RESULTS DATA
 
 def assign_task_colors(aa_df):
-    """Assign a stable hex color to each task column, cycling through the palette per analysis type."""
-    colors = {}
-    counters = {}
-    for col_name in aa_df.columns[1:]:
-        analysis = _guess_analysis_type(col_name)
-        palette = ANALYSIS_COLORS.get(analysis, ["#888888", "#aaaaaa", "#666666"])
-        idx = counters.get(analysis, 0)
-        colors[col_name] = palette[idx % len(palette)]
-        counters[analysis] = idx + 1
-    return colors
+    """Assign each track column its own color from PLOT_LINE_COLORS, in column order.
+
+    One palette across all analysis types, so tracks never share a color until there are
+    more tracks than colors (then the cycle repeats). Column order follows the run JSON's
+    task order, so colors are stable for a run.
+    """
+    return {col: PLOT_LINE_COLORS[i % len(PLOT_LINE_COLORS)]
+            for i, col in enumerate(aa_df.columns[1:])}
 
 
 def _guess_analysis_type(task_name):

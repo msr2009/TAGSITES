@@ -122,7 +122,7 @@
 				"genotyping": ".genotyping.tsv"
 			},
 			"params": {
-				"genomic_fasta": { "default": "",    "tooltip": "FASTA of the genomic region to search (orientation need not be known; run_genewise.py tests both strands automatically). Optional when backends.genewise is bulk: the region is taken from the local GFF3 + genome" },
+				"genomic_fasta": { "default": "",    "tooltip": "FASTA (or GenBank) of the genomic region. Optional: the gene model is taken from UCSC's UniProt alignment when the protein has a UniProt accession on a UCSC assembly (exact translation required); this region is used only as the Genewise fallback, unless it is a GenBank with CDS/exon features, which always wins. Not needed in bulk mode" },
 				"genewise":      { "default": "",    "hidden": true, "tooltip": "path to a pre-computed Genewise .out.txt file (leave empty to run Genewise automatically via the EBI REST API)" },
 				"n_guides":      { "default": 5,     "tooltip": "maximum guide RNAs to report per insertion site" },
 				"arm_length":    { "default": 1000,  "tooltip": "homology arm length in bp on each side of insertion" },
@@ -138,7 +138,9 @@
 				"rs3":                 { "default": true, "tooltip": "compute Rule Set 3 on-target cutting scores for each guide — display only, never changes which guides are chosen or their order" },
 				"rs3_tracr":           { "default": "Hsu2013", "hidden": true, "tooltip": "tracrRNA scaffold assumed by the RS3 model (Hsu2013 = standard SpCas9 scaffold; Chen2013 = extended scaffold)" },
 				"offtarget":           { "default": false, "tooltip": "screen guides and genotyping primers for off-targets with taxid-scoped EBI blastn — display only, never changes which guides are chosen; needs a species to be selected. OFF by default because the region query takes ~3-13 min depending on repeat content, long enough to risk a shinyapps.io session timeout" },
-				"offtarget_spacer":    { "default": true, "hidden": true, "tooltip": "when off-target screening is on, also run the slower per-spacer guide screen. Turning this off keeps the region screen (which is what flags primer co-amplification in gene families) and skips the guide near-match search that CRISPOR covers better" }
+				"offtarget_spacer":    { "default": true, "hidden": true, "tooltip": "when off-target screening is on, also run the slower per-spacer guide screen. Turning this off keeps the region screen (which is what flags primer co-amplification in gene families) and skips the guide near-match search that CRISPOR covers better" },
+				"phastcons":           { "default": true, "tooltip": "write a per-residue phastCons conservation track (UCSC genome alignment, mean over each codon) through the reagents gene model; shown on the Results plot" },
+				"phastcons_track":     { "default": "", "hidden": true, "tooltip": "UCSC phastCons track to read (empty = the assembly's narrow-clade alignment, e.g. phastCons26way on ce11)" }
 			}
 		}
 	}

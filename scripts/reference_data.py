@@ -33,6 +33,9 @@ Ensembl's plain FTP mirror instead — same WBcel235 assembly and gene models):
             (per-protein backend, on-demand fallback for cache misses)
   blastdb   BLAST+ database of the genome for scripts/offtarget_local.py's local
             off-target / primer screens (needs the "genome" step and BLAST+ installed)
+  ucsc      UCSC UniProt-to-genome alignments (unipAliSwissprot/Trembl bigBeds, ~12 MB)
+            + the phastCons bigWig (~160 MB for ce11) and their accession index, for
+            the bulk-mode UCSC gene model and phastCons track (scripts/ucsc_local.py)
 
 All downloads are resumable (curl -C -) and skipped if the target file already
 exists with a non-zero size — re-running this script after an interrupted
@@ -447,6 +450,26 @@ def build_blastdb(cfg, force=False):
         offtarget_local.build_blastdb(taxid, ot_cfg, force=force)
 
 
+def fetch_ucsc(cfg, force=False):
+    """Download UCSC's UniProt alignments + phastCons bigWig and build the accession index.
+
+    Bulk-mode counterpart of the REST calls ucsc_gene_model.py / phastcons_track.py make
+    (see ucsc_local.py). Assembly and track come from reference_data.ucsc_genome /
+    ucsc_phastcons_track (default ce11 / phastCons26way, ~170 MB in all).
+    """
+    import ucsc_local
+
+    genome, track, _, folder = ucsc_local.settings()
+    folder.mkdir(parents=True, exist_ok=True)
+    paths = ucsc_local.paths()
+    base = "https://hgdownload.soe.ucsc.edu"
+    for name in ucsc_local.TRACKS:
+        _curl_download(f"{base}/gbdb/{genome}/uniprot/{name}.bb", paths[name], force=force)
+    _curl_download(f"{base}/goldenPath/{genome}/{track}/{genome}.{track}.bw",
+                   paths["phastcons"], force=force)
+    ucsc_local.build_index(force=force)
+
+
 STEPS = {
     "uniprot":           fetch_uniprot,
     "afdb":              fetch_afdb,
@@ -457,6 +480,7 @@ STEPS = {
     "rhabditida_trembl": fetch_rhabditida_trembl,
     "pfam":              fetch_pfam,
     "blastdb":           build_blastdb,    # depends on "genome" having run first
+    "ucsc":              fetch_ucsc,       # validation needs "genome" (local translation)
 }
 
 

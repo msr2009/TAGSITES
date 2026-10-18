@@ -106,4 +106,4 @@ fi
 
 # app_id comes from rsconnect-python/TAGSITES.json, so this updates the existing
 # app in place rather than creating a second one
-rsconnect deploy shiny . --entrypoint "$ENTRYPOINT" "${EXCLUDES[@]}"
+rsconnect deploy shiny . -n "${RSCONNECT_NAME:-mattrich}" -a "${RSCONNECT_APP_ID:-17661063}" --entrypoint "$ENTRYPOINT" "${EXCLUDES[@]}"

@@ -39,6 +39,8 @@ from scripts.uniprot_api import fetch_isoform_sequences
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 import ebi_rest
 import ensembl_rest
+import offtarget_blat
+import offtarget_screen
 import providers
 from fetch_genomic_sequence import fetch_genomic_sequence
 
@@ -1388,6 +1390,7 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
             pdb          = pdb_path,
             genomic_file = genomic_path,
             taxid        = organism_taxid(),
+            uniprot_accession = hit["accession"] if hit is not None else "",
         )
 
         # ── build per-task entries ────────────────────────────────────────────
@@ -1409,8 +1412,12 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
 
         # ── build reagents entry or warn ──────────────────────────────────────
         reagents_entry = None
-        # bulk mode cuts the region from the local genome, so no upload is needed
-        if genomic_path or providers.region_from_annotation():
+        # no upload is needed when the gene model can come from UCSC's UniProt alignment
+        # (gene_model.py) or, in bulk mode, from the local genome; the region is a fallback
+        ucsc_genome = offtarget_blat.assembly_for_taxid(organism_taxid(),
+                                                        offtarget_screen.load_config()) \
+            if organism_taxid() else ""
+        if genomic_path or providers.region_from_annotation() or ucsc_genome:
             reagents_entry = build_reagents_entry(
                 defaults     = task_defaults("reagents"),
                 genomic_path = genomic_path,
@@ -1422,14 +1429,19 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
             )
             if not genomic_path:
                 ui.notification_show(
-                    "Gene model and genomic region will be taken from the local GFF3 + genome.",
+                    "Gene model and genomic region will be taken from the local genome "
+                    "(UCSC UniProt alignment, then GFF3)." if providers.region_from_annotation()
+                    else f"Gene model will be taken from UCSC {ucsc_genome} (UniProt "
+                         "alignment). If UCSC has none for this protein, reagent design needs "
+                         "a genomic region: fetch or upload one and re-save.",
                     type="message",
-                    duration=6,
+                    duration=8,
                 )
         else:
             ui.notification_show(
-                "No genomic FASTA uploaded — CRISPR reagent design will not run. "
-                "Upload a genomic region FASTA and re-save to enable it.",
+                "No genomic FASTA uploaded and no UCSC assembly for this organism — CRISPR "
+                "reagent design will not run. Upload a genomic region FASTA and re-save to "
+                "enable it.",
                 type="warning",
                 duration=8,
             )
