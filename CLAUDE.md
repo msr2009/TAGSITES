@@ -242,6 +242,10 @@ evidence behind this tradeoff.
 ./deploy.sh --manifest   # dry run: list what would be bundled, upload nothing
 ```
 
+`deploy.sh` is gitignored (it holds the shinyapps.io account and app id); create it with
+`cp deploy-blank.sh deploy.sh` and fill in the values its header lists. Keep the `-x`
+exclusions of the two files in sync.
+
 **Always deploy via `deploy.sh`, never a bare `rsconnect deploy`.** `.rscignore` is an
 R-only feature that rsconnect-python does not read, so every exclusion lives as a
 `-x` flag in that script. A bare deploy bundles ~10 GB (`data/` is 9.7 GB and
