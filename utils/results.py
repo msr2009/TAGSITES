@@ -562,6 +562,12 @@ _BWR = [
     (1.0, (178, 24,  43)),
 ]
 
+# white → black, as the UCSC browser draws phastCons (black = most conserved)
+_GRAYS = [
+    (0.0, (255, 255, 255)),
+    (1.0, (0,   0,   0)),
+]
+
 # pLDDT gradient: band boundary values are used as t stops so the colour
 # transitions coincide with the categorical 4-band cutoffs (stored 0–1)
 _PLDDT_GRADIENT = [
@@ -603,6 +609,8 @@ def _pick_gradient_cmap(task_name):
         return _PLDDT_GRADIENT
     if analysis == "blast":
         return _VIRIDIS
+    if analysis == "phastcons":
+        return _GRAYS
     return _PLASMA
 
 

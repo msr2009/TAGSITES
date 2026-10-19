@@ -19,7 +19,7 @@ from utils.results import (
     _guess_analysis_type,
     _pick_gradient_cmap,
     _build_isoform_pane,
-    _VIRIDIS, _PLASMA, _COOL, _BWR, BLAST_CMAP_MAX,
+    _VIRIDIS, _PLASMA, _COOL, _BWR, _GRAYS, BLAST_CMAP_MAX,
 )
 from utils.scoring import (
     score_tag_sites, failed_flags, mask_reasons, score_cmap_hex, score_max,
@@ -99,6 +99,7 @@ def _build_colors_and_legend(track, task_name, scheme, aa_df, range_df, seq_len,
         _CMAP_NAMES = {
             id(_VIRIDIS): "viridis", id(_PLASMA): "plasma",
             id(_COOL): "cool",       id(_BWR): "bwr",
+            id(_GRAYS): "grays",
         }
         cmap = _pick_gradient_cmap(task_name)
         cmap_name = _CMAP_NAMES.get(id(cmap), "viridis")

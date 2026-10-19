@@ -1551,6 +1551,8 @@
     plddt:   "linear-gradient(to right,#ff7d45 0%,#ffdb13 50%,#65cbf3 70%,#0053d6 100%)",
     // blue-white-red diverging: polar (buried/hydrophilic) → hydrophobic surface exposure
     bwr:     "linear-gradient(to right,#2166ac,#f7f7f7,#b2182b)",
+    // white → black, as the UCSC browser draws phastCons
+    grays:   "linear-gradient(to right,#ffffff,#000000)",
   };
 
   // rainbow N→C matches 3Dmol's default chain-spectrum coloring
