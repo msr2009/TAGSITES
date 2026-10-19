@@ -47,14 +47,24 @@ scripts/                # core analysis executables
   calculate_protein_scores.py # sliding-window property scoring
   site_selection_util.py      # shared library: FASTA/PDB I/O, BLAST API, sequence utils
   existing_AF_model.py        # search AFDB for existing predictions
-  uniprot_api.py               # shared UniProt REST helpers (checksum lookup, entry fetch)
+  uniprot_api.py               # shared UniProt REST helpers (checksum lookup, entry fetch,
+                              # resolve_accession: the one protein -> accession resolver)
   http_retry.py               # shared bounded-retry + wall-clock-deadline wrapper around
-                              # requests; used by ebi_rest.py and ensembl_rest.py
-  ensembl_rest.py             # Ensembl REST client for the genomic-sequence auto-fetch
-                              # (knobs in ensembl.config.json)
+                              # requests; used by ebi_rest.py and the genomic-fetch clients
+  fetch_genomic_sequence.py   # genomic-sequence auto-fetch: ncbi_rest.py -> ucsc_rest.py ->
+                              # ensembl_rest.py, first success wins (ensembl.config.json sources)
   cds_check.py                # gene-model gate: translates the model's CDS and compares it to
-                              # the input protein (length differs = hard fail, substitutions =
-                              # warning + {run}.reagents.model_check.json for the UI banner)
+                              # the input protein (clustered substitutions / long gaps fail, see
+                              # below; {run}.reagents.model_check.json for the UI banner)
+  gene_model.py               # the ONE gene-model step (app + CLI): GenBank exons > UCSC UniProt
+                              # alignment > NCBI RefSeq (GFF3 in bulk mode) transcripts > closest
+                              # passing candidate > Genewise; writes *_genewise.* files
+  ucsc_gene_model.py          # candidate models from UCSC unipAli* tracks by UniProt accession
+  ncbi_gene_model.py          # candidate models from every NCBI RefSeq transcript (NM_ + XM_) of
+                              # the gene: efetch feature-table genomic CDS + Datasets product_report
+  ucsc_local.py               # bulk-mode offline copies: UniProt bigBed index, phastCons bigWig
+  phastcons_track.py          # per-residue phastCons through the run's own gene model
+                              # ({run}.reagents.phastcons.tsv, plotted as a Results track)
   genbank_input.py            # user GenBank (CDS or exon features) used as the gene model in place
                               # of Genewise; writes the same *_genewise.* files, then the same
                               # cds_check gate applies. Sequence-only GenBank falls through to Genewise
@@ -105,6 +115,7 @@ scripts/                # core analysis executables
 docs/
   LOCAL_SETUP.md  # step-by-step guide to running the app with all analyses local
                   # (single-protein use; proteome-scale setup is not covered)
+  GNOMAD_CONSTRAINT_SPEC.md  # feasibility spec: gnomAD constraint track via Alliance orthologs
 
 utils/
   results.py    # load JSON output → DataFrames; Plotly + matplotlib visualization
@@ -179,18 +190,37 @@ setting. `scripts/http_retry.py` enforces a real wall-clock budget. See issue #6
 
 **Gene model must translate to the input protein**: residue numbers in the reagent table come
 from translating the gene model's CDS, so an exon-structure error shifts every downstream site
-(DBL-1: Q239 reported as F239). `design_tag_reagents` therefore runs `cds_check.check_model`
-against the input protein (`--protein_fasta`, also accepted as `--input_file`): a length
-difference (any alignment gap) raises with an indel summary and points to the GenBank upload;
-substitutions alone warn (positions listed in the log, the sidecar and the Reagents tab) and
-reagents are still designed, unless they exceed 2% of the protein length, which also fails. The cause of the DBL-1 error: EBI Genewise defaults to flat GT/AG
-splicing and reads short worm introns through as coding sequence; `genewise_remote.py` now
-sends `splice=model, init=global` (sweep of 11 genes x 17 settings; 10/11 exact, vs 3/11 at the
-default; EBI exposes no gap penalties). A GenBank with CDS/exon features uploaded as the genomic
-region replaces Genewise entirely (`genbank_input.py`) and is held to the same check.
-With `backends.genewise` set to `bulk` (a local run) there is no Genewise and no genomic upload:
-`genome_regions.find_transcripts_by_sequence` matches the input protein to the GFF3 transcript whose
-CDS translates to it exactly, and `genewise_bulk.py` cuts that gene's region from the local genome.
+(DBL-1: Q239 reported as F239). `cds_check.compare_to_query` judges every model source the same
+way. A model **fails** on two substitutions closer than 15 residues (a different alternative exon),
+a gap run over 3 residues, a substitution within 10 residues of a gap, or either over 2% of the
+protein. Isolated substitutions and short gaps **warn**; reagents are still designed and
+`residue_index` is renumbered to the input protein via the alignment. A sweep of 150 UniProt
+isoforms (38 genes, 6 species) motivated this: all 21 models where UCSC lifted an isoform through
+the wrong RefSeq transcript (Sh P08510-1: 4 substitutions, 0.6%) clustered, while real
+genome/UniProt differences were isolated (Act5C, mouse Mapt). `cds_check.describe` renders
+failures with residue ranges, counts and aligned sequences, plus GenBank upload guidance.
+EBI Genewise defaults to flat GT/AG splicing and reads short worm introns as coding sequence;
+`genewise_remote.py` sends `splice=model, init=global`.
+
+**One gene model per run** (`scripts/gene_model.py`, called by both run paths): a GenBank with
+CDS/exon features wins (each CDS feature is tried; exon features merge into one model, so only
+this isoform's). Else every UCSC UniProt alignment of the accession (`ucsc_local.py`'s index in
+bulk mode), then every NCBI RefSeq transcript of the gene (`ncbi_gene_model.py`; UniProt GeneID
+xref -> Datasets `product_report`; remote only) or every GFF3 transcript at the locus
+(`genewise_bulk.evaluate`, bulk mode). An exact translation wins; else the closest candidate that
+only warns; else Genewise on the supplied region. Models are never merged. When the protein is
+chosen the app previews `gene_model.select_model` (UCSC and NCBI in parallel, ~5-7 s), shows the
+verdict in panel 3 and fetches the matching model's window as the region (else the gene by GeneID);
+the run repeats the selection. The app saves no reagents task without a region; the CLI still runs
+on UCSC/NCBI alone. Anything that combines
+two sources (e.g. phastCons placing a model on the assembly) must confirm both translate
+identically; `phastcons_track.py` reads the assembly's codons back and writes no track on a
+mismatch. NCBI models carry the NC_ accession as chrom (chromAlias maps it). UCSC `/search` does
+not work on GenArk hubs (native assemblies only). UCSC's REST wiggle values are byte-quantized;
+phastCons is read from the bigWig instead (pyBigWig over HTTP; REST only without pyBigWig). The
+accession comes from `uniprot_api.resolve_accession` (global `uniprot_accession`, FASTA header,
+`user_{run}.fa`, CRC64, or the `{run}.uniprot_accession.txt` sidecar `structure_remote.py` writes
+on an AFDB match).
 
 **Alignment rendering**: sequence alignments are pre-rendered as matplotlib SVGs (stored in a dict keyed by alignment name) and displayed statically — this replaced an earlier real-time Plotly approach that was too slow.
 
@@ -198,9 +228,11 @@ CDS translates to it exactly, and `genewise_bulk.py` cuts that gene's region fro
 
 Key dependencies: `shiny`, `biopython`, `plotly`, `pandas`, `numpy`, `scipy`, `matplotlib`,
 `requests`, `primer3-py`, `pyhmmer` (local Pfam scanning), `reportlab` (alignment PDFs), and
-`rs3` + `lightgbm` (RS3 guide scoring). `diamond` and `mafft` are used only by the batch-mode
-local backends. No local bioinformatics binaries are required for the interactive app —
-Clustal Omega, BLAST, Genewise, and InterPro all run via the EBI REST API.
+`rs3` + `lightgbm` (RS3 guide scoring). `diamond`, `mafft` and `pybigwig` are used only by the
+batch-mode local backends (pyBigWig also gives full-precision phastCons remotely when present).
+`python scripts/reference_data.py --only ucsc` fetches the bulk UCSC files (~170 MB for ce11).
+No local bioinformatics binaries are required for the interactive app — Clustal Omega, BLAST,
+Genewise, and InterPro all run via the EBI REST API.
 
 ### ⚠️ Version pinning — read before adding any dependency
 
@@ -234,6 +266,10 @@ evidence behind this tradeoff.
 ./deploy.sh --manifest   # dry run: list what would be bundled, upload nothing
 ```
 
+`deploy.sh` is gitignored (it holds the shinyapps.io account and app id); create it with
+`cp deploy-blank.sh deploy.sh` and fill in the values its header lists. Keep the `-x`
+exclusions of the two files in sync.
+
 **Always deploy via `deploy.sh`, never a bare `rsconnect deploy`.** `.rscignore` is an
 R-only feature that rsconnect-python does not read, so every exclusion lives as a
 `-x` flag in that script. A bare deploy bundles ~10 GB (`data/` is 9.7 GB and
@@ -247,6 +283,9 @@ Note rsconnect only ignores `__pycache__/` at the top level, so nested ones need
 
 - **NCBI BLAST** (via EBI REST API) — `scripts/site_selection_util.py:ncbiblast_call()`
 - **EBI InterPro API** — `scripts/call_interpro.py`
+- **Genomic auto-fetch** — NCBI Datasets + efetch, then UCSC REST, then Ensembl REST — `scripts/fetch_genomic_sequence.py`
+- **UCSC REST + hgdownload** (gene model by UniProt accession, chromAlias, phastCons bigWig) — `scripts/ucsc_gene_model.py`, `scripts/phastcons_track.py`
+- **NCBI Datasets + efetch** (every RefSeq transcript's exons/CDS for the gene model) — `scripts/ncbi_gene_model.py`, `scripts/ncbi_rest.py`
 - **AlphaFold DB** — `scripts/existing_AF_model.py`
 - **UniProt REST** (entry fetch + checksum lookup) — `scripts/uniprot_api.py`, used by `scripts/uniprot_features.py` and `scripts/existing_AF_model.py`
 - **UniProt taxonomy** — `uniprot_species.flat.txt` (local flat file, ~1.7MB)

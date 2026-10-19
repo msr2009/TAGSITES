@@ -204,44 +204,32 @@ def run_scores(args, report=None, job_id_cb=None, resume_job_ids=None):
 def run_reagents(args, report=None, job_id_cb=None, resume_job_ids=None):
     """Run design_tag_reagents.main() from a JSON args dict.
 
-    Runs the Genewise pre-step if needed (empty 'genewise' arg).
+    Builds the gene model first if needed (empty 'genewise' arg) via gene_model.ensure_model:
+    GenBank exons > UCSC UniProt alignment > NCBI RefSeq (or local GFF3) transcripts >
+    closest passing candidate > Genewise.
     """
     import cds_check
     import design_tag_reagents
-    import genbank_input
-    import providers
-    import run_genewise
+    import gene_model
 
     genewise_path = _str(args.get("genewise"))
     genomic_fa    = _str(args.get("genomic_fasta"))
 
     protein_fa = _str(args.get("input_file") or args.get("fasta"))
 
-    # bulk mode needs no genomic file: the region is cut from the local genome
-    if not genewise_path and (genomic_fa or providers.region_from_annotation()):
-        email       = _str(args.get("email"))
+    if not genewise_path:
         working_dir = _str(args.get("working_dir"))
         run_name    = _str(args.get("run_name"))
         outprefix   = os.path.join(working_dir, run_name + "_genewise")
-        if genbank_input.is_genbank(genomic_fa) and genbank_input.has_gene_model(genomic_fa):
-            # user-supplied exons replace Genewise; raises if the model does not match the protein
-            genbank_input.genbank_to_genewise(genomic_fa, protein_fa, outprefix, report=report)
-        else:
-            if genbank_input.is_genbank(genomic_fa):
-                # sequence-only GenBank: Genewise needs a FASTA
-                genomic_fa = genbank_input.genbank_to_fasta(genomic_fa, outprefix + ".genomic.fa")
-            # run both-strand Genewise and pick the winner
-            genewise_result = run_genewise.main(protein_fa, genomic_fa, email, outprefix,
-                                                report=report, job_id_cb=job_id_cb,
-                                                resume_job_ids=resume_job_ids)
-            # only genewise's own {"ebi_status": "pending"|"expired"} sentinel means
-            # "not done yet" — its success return (select_orientation's score dict)
-            # is also a dict, so it must not be mistaken for that sentinel here.
-            if isinstance(genewise_result, dict) and "ebi_status" in genewise_result:
-                return genewise_result
-        genewise_path = outprefix + ".genewise.out.txt"
-        args = dict(args, genewise=genewise_path,
-                    genomic_fasta=outprefix + ".genewise_genomic.fa")
+        model = gene_model.ensure_model(
+            protein_fa, genomic_fa, _str(args.get("taxid")), outprefix,
+            email=_str(args.get("email")), accession=_str(args.get("uniprot_accession")),
+            report=report, job_id_cb=job_id_cb, resume_job_ids=resume_job_ids)
+        # only genewise's own {"ebi_status": "pending"|"expired"} sentinel means "not done yet"
+        if "ebi_status" in model:
+            return model
+        genewise_path = model["out_txt"]
+        args = dict(args, genewise=genewise_path, genomic_fasta=model["genomic_fa"])
 
     # the gene model must translate to this protein (see cds_check.py)
     protein_seq = cds_check.read_protein(protein_fa)
@@ -267,6 +255,10 @@ def run_reagents(args, report=None, job_id_cb=None, resume_job_ids=None):
         rs3_tracr           = _str(args.get("rs3_tracr"), "Hsu2013"),
         offtarget           = _bool(args.get("offtarget"), True),
         offtarget_spacer    = _bool(args.get("offtarget_spacer"), True),
+        phastcons           = _bool(args.get("phastcons"), True),
+        phastcons_track     = _str(args.get("phastcons_track")),
+        uniprot_accession   = _str(args.get("uniprot_accession")),
+        protein_fasta       = protein_fa,
         # taxid comes from the run JSON's global block (see setup_logic.build_global_block);
         # email is likewise global and required by EBI
         taxid               = _str(args.get("taxid")),

@@ -19,9 +19,7 @@ sys.path.insert(0, str(_SCRIPTS))
 sys.path.insert(0, str(_ROOT))
 import run_status
 import progress
-import providers
 from task_registry import task_script
-from genbank_input import GENBANK_EXTENSIONS
 
 
 def _stderr_reader(proc, task_id, working_dir, run_name):
@@ -43,18 +41,6 @@ def genewise_required(tasks):
         if v["type"] == "reagents" and v["args"].get("genewise", "") == "":
             return key
     return None
-
-
-def _genbank_model(interpreter, scripts_folder, genbank, protein_fa, outprefix):
-    """Run genbank_input.py; True if it wrote a gene model (False: sequence-only, run Genewise)."""
-    call = (f"{interpreter} {scripts_folder}genbank_input.py --genbank {genbank} "
-            f"--protein_fasta {protein_fa} --outprefix {outprefix}")
-    print("USING GENBANK GENE MODEL\n\n" + call)
-    ret = subprocess.call(call, shell=True)
-    if ret != 0:
-        # a model that does not match the protein: reagents cannot be designed from it
-        print("ERROR: genbank_input.py exited %d; reagents task will fail." % ret, file=sys.stderr)
-    return ret == 0 and os.path.exists(outprefix + ".genewise.out.txt")
 
 
 def searchAFDB_required(tasks, global_args):
@@ -112,8 +98,10 @@ def main(json_input_file, force=False):
     status = run_status.load_status(working_dir, run_name)
 
     ###############################################
-    # PRE-STEP: Genewise (for reagents tasks)
+    # PRE-STEP: gene model (for reagents tasks)
     ###############################################
+    # gene_model.py picks GenBank exons > UCSC UniProt alignment > NCBI RefSeq (or local GFF3)
+    # transcripts > Genewise, the same code the app runs in-process (task_runners.run_reagents)
     reagents_task_key = genewise_required(tasks)
     if reagents_task_key is not None:
         task_args   = tasks[reagents_task_key]["args"]
@@ -121,41 +109,28 @@ def main(json_input_file, force=False):
         gw_out_prefix = os.path.join(working_dir, run_name + "_genewise")
         gw_out_file   = gw_out_prefix + ".genewise.out.txt"
 
-        # skip genewise pre-step if output already exists
+        # skip the pre-step if a model already exists
         if not force and os.path.exists(gw_out_file):
-            print(f"Skipping Genewise pre-step: {gw_out_file} already exists")
-            tasks[reagents_task_key]["args"]["genewise"]      = gw_out_file
-            tasks[reagents_task_key]["args"]["genomic_fasta"] = gw_out_prefix + ".genewise_genomic.fa"
-        elif not genomic_fa and not providers.region_from_annotation():
-            print("ERROR: reagents task has empty 'genewise' and 'genomic_fasta' — cannot run Genewise.",
-                  file=sys.stderr)
-        elif genomic_fa.lower().endswith(GENBANK_EXTENSIONS) and _genbank_model(
-                interpreter, scripts_folder, genomic_fa, global_args.get("input_file", ""),
-                gw_out_prefix):
-            # user-supplied GenBank exons replaced Genewise (and were checked against the protein)
+            print(f"Skipping gene-model pre-step: {gw_out_file} already exists")
+            ret = 0
+        else:
+            accession = task_args.get("uniprot_accession", global_args.get("uniprot_accession", ""))
+            gm_call = (
+                f"{interpreter} {scripts_folder}gene_model.py "
+                f"--protein_fasta {global_args.get('input_file', '')} "
+                f"--genomic_fasta '{genomic_fa}' --outprefix {gw_out_prefix} "
+                f"--taxid '{task_args.get('taxid', global_args.get('taxid', ''))}' "
+                f"--accession '{accession}' --email {global_args.get('email', '')}"
+            )
+            print("BUILDING GENE MODEL (GenBank > UCSC > NCBI/GFF3 > Genewise)\n\n" + gm_call)
+            ret = subprocess.call(gm_call, shell=True)
+        if ret == 0 and os.path.exists(gw_out_file):
             tasks[reagents_task_key]["args"]["genewise"]      = gw_out_file
             tasks[reagents_task_key]["args"]["genomic_fasta"] = gw_out_prefix + ".genewise_genomic.fa"
             _write_json(json_input_file, global_args, tasks)
         else:
-            if genomic_fa.lower().endswith(GENBANK_EXTENSIONS):
-                # sequence-only GenBank: genbank_input.py wrote a FASTA for Genewise
-                genomic_fa = gw_out_prefix + ".genomic.fa"
-            protein_fa  = global_args.get("input_file", "")
-            email       = global_args.get("email", "")
-            gw_call = (
-                f"{interpreter} {scripts_folder}run_genewise.py "
-                f"--protein_fasta {protein_fa} --genomic_fasta '{genomic_fa}' "
-                f"--email {email} --outprefix {gw_out_prefix}"
-            )
-            print("RUNNING GENEWISE (both orientations)\n\n" + gw_call)
-            ret = subprocess.call(gw_call, shell=True)
-            if ret == 0:
-                tasks[reagents_task_key]["args"]["genewise"]      = gw_out_file
-                tasks[reagents_task_key]["args"]["genomic_fasta"] = gw_out_prefix + ".genewise_genomic.fa"
-                _write_json(json_input_file, global_args, tasks)
-            else:
-                print(f"WARNING: run_genewise.py exited {ret}; reagents task may fail.",
-                      file=sys.stderr)
+            print(f"WARNING: gene_model.py exited {ret}; reagents task will fail.",
+                  file=sys.stderr)
 
     ###############################################
     # PRE-STEP: AFDB search (for plddt tasks)

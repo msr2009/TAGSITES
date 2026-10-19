@@ -14,6 +14,7 @@ checksum-lookup / BLAST-fallback / dbfetch-download sequence below.
 Matt Rich, 4/2024 / updated 2026 — EBI REST calls via ebi_rest.py; backend-split 2026
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -59,6 +60,21 @@ def fetch_afdb_pdb(accession, reporter):
     return pdb_text
 
 
+def _record_accession(workingdir, name, accession):
+    """Write {name}.uniprot_accession.txt so later steps (UCSC gene model) can find the match.
+
+    The AFDB step replaces the run's FASTA with a run-named copy, so this sidecar is how
+    uniprot_api.resolve_accession() recovers an accession found here.
+    """
+    from uniprot_api import ACCESSION_SIDECAR
+
+    try:
+        with open(os.path.join(workingdir, ACCESSION_SIDECAR.format(run=name)), "w") as fh:
+            fh.write(accession + "\n")
+    except OSError:
+        pass
+
+
 def main(fasta_in, email, workingdir, name, taxid, evalue, percentid,
          clients_folder, report=None):
     """Checksum lookup → BLAST fallback → AFDB download → write PDB + FASTA.
@@ -88,6 +104,7 @@ def main(fasta_in, email, workingdir, name, taxid, evalue, percentid,
         if acc:
             _report(reporter, f"Exact UniProt match: {acc} — skipping BLAST", stage="afdb_checksum")
             candidates.append((acc, 100.0, 1e-200))
+            _record_accession(workingdir, name, acc)
         else:
             # fallback: BLAST against UniProt to find closest homolog
             _report(reporter, "No exact match; submitting NCBI BLAST job for AFDB lookup…",
@@ -136,6 +153,8 @@ def main(fasta_in, email, workingdir, name, taxid, evalue, percentid,
         pdb_path = f"{outfile_prefix}.pdb"
         with open(pdb_path, "w") as f:
             f.write(pdb_text)
+        # a BLAST hit may be a homolog: the UCSC gene-model gate (exact translation) rejects it
+        _record_accession(workingdir, name, match_accession)
         _report(reporter, f"saved {match_accession} PDB to {pdb_path}", stage="afdb_save")
 
         fasta_path = f"{outfile_prefix}.fa"

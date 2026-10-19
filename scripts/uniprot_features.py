@@ -15,9 +15,10 @@ Matt Rich, 2026
 
 import sys
 
-from site_selection_util import get_sequence, read_fasta, uniprot_accession_regex
-from uniprot_api import checksum_lookup, fetch_entry
+from uniprot_api import fetch_entry, resolve_accession
 from progress import report as _report, resolve_reporter
+
+MAX_DELETION = 10  # deletions longer than this (aa) are not reported
 
 
 def load_feature_config(path):
@@ -71,6 +72,17 @@ def _feature_detail(feature, ftype):
     return detail
 
 
+def _is_large_deletion(feature, start, stop):
+    """True for a mutagenesis/variant feature that deletes more than MAX_DELETION residues."""
+    if feature.get("type") not in ("Mutagenesis", "Natural variant"):
+        return False
+    alt = feature.get("alternativeSequence") or {}
+    changes = alt.get("alternativeSequences") or []
+    # no replacement residues (or "missing") means the span is deleted outright
+    is_deletion = not changes or all(c.lower() == "missing" for c in changes)
+    return is_deletion and stop - start + 1 > MAX_DELETION
+
+
 def _evidence_suffix(feature):
     """' (PubMed:id1, id2)' for experimentally-cited features, ' (predicted)' for
     rule-based/inferred ones (ECO codes with no PubMed source), '' if unevidenced.
@@ -104,6 +116,8 @@ def entry_to_feature_rows(entry_json, feature_config):
         if span is None:
             continue
         start, stop = span
+        if _is_large_deletion(feature, start, stop):
+            continue
         severity, label = feature_config[ftype]
         source = "UniProt" if severity == "blocking" else "UniProt_site"
         detail = _feature_detail(feature, ftype) + _evidence_suffix(feature)
@@ -114,37 +128,22 @@ def entry_to_feature_rows(entry_json, feature_config):
 def main(fasta_in, output, features_file, accession="", taxid="", report=None):
     """Fetch UniProt features for a protein and write them as a range TSV.
 
-    Resolves an accession (explicit arg > accession-shaped FASTA header > checksum
-    lookup), fetches the entry, and writes matching features. If no accession can
-    be resolved, writes an empty file rather than raising -- an empty range file
-    is handled fine by the rest of the pipeline.
+    Resolves an accession with uniprot_api.resolve_accession (explicit arg > FASTA
+    header > the original FASTA's header > checksum lookup > AFDB-match sidecar), fetches
+    the entry, and writes matching features. If no accession can be resolved, writes an
+    empty file rather than raising -- an empty range file is handled fine by the rest of
+    the pipeline.
     """
     reporter = resolve_reporter(report)
     feature_config = load_feature_config(features_file)
 
-    acc = accession.strip() if accession else ""
-    if not acc:
-        name, _ = read_fasta(fasta_in)
-        m = uniprot_accession_regex(name)
-        if m is not None:
-            acc = m.group(0)
-    if not acc:
-        _report(reporter, "No accession given; looking up UniProt by sequence checksum…", stage="uniprot")
-        seq = get_sequence(fasta_in)
-        try:
-            acc = checksum_lookup(seq, taxid) or ""
-        except Exception as e:
-            _report(reporter, f"checksum lookup failed ({e})", stage="uniprot", level="warning")
-            acc = ""
-    else:
-        # re.match() only anchors the start, so an isoform-suffixed accession
-        # (e.g. "G5EE56-1") matches on its base prefix but was previously used
-        # whole -- the UniProt entry endpoint accepts isoform accessions but
-        # silently returns an incomplete/empty feature list for them, so we
-        # always resolve to the canonical (base) accession.
-        m = uniprot_accession_regex(acc)
-        if m is not None:
-            acc = m.group(0)
+    # shared resolution (explicit > FASTA header > original header > CRC64 > AFDB match)
+    acc, how = resolve_accession(fasta_in, accession, taxid)
+    if acc:
+        _report(reporter, f"UniProt accession {acc} ({how})", stage="uniprot")
+    # the UniProt entry endpoint accepts isoform accessions (e.g. "G5EE56-1") but silently
+    # returns an incomplete/empty feature list for them, so always use the canonical entry
+    acc = acc.split("-")[0]
 
     if not acc:
         _report(reporter, "No UniProt accession found; writing empty feature table.", stage="uniprot", level="warning")

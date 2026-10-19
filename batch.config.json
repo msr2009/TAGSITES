@@ -21,7 +21,10 @@
     "ensembl_assembly": "WBcel235",
     "interpro_release": "110.0",
     "rhabditida_taxid": 6236,
-    "protein_fasta": "data/reference/c_elegans.canonical_bioproject.current.protein.fa.gz"
+    "protein_fasta": "data/reference/c_elegans.canonical_bioproject.current.protein.fa.gz",
+    "ucsc_genome": "ce11",
+    "ucsc_phastcons_track": "phastCons26way",
+    "ucsc_chrom_alias": {"chrM": "MtDNA"}
   },
 
   "conservation_local": {

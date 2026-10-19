@@ -331,6 +331,11 @@ def design_reagents(
     offtarget_sidecar='',
     protein_seq='',
     model_check_sidecar='',
+    phastcons=True,
+    phastcons_track='',
+    phastcons_sidecar='',
+    protein_fasta='',
+    uniprot_accession='',
     report=None,
     job_id_cb=None,
     resume_job_ids=None,
@@ -347,7 +352,13 @@ def design_reagents(
     protein_seq    : str  query protein sequence; when given, the translated gene model must
                      match it in length (else ValueError) and substitutions are reported
                      as a warning.  Replaces the coverage/score heuristics.
-    model_check_sidecar : str  path for the JSON result of that check (read by the UI)
+    model_check_sidecar : str  path for the JSON result of that check (read by the UI); it
+                     also records which gene-model source won (gene_model.py)
+    phastcons      : bool  write the per-residue phastCons track to phastcons_sidecar
+                     (phastcons_track.py; fails soft, never affects the reagents)
+    phastcons_track : str  UCSC phastCons track; '' = the assembly's narrow-clade default
+    protein_fasta, uniprot_accession : str  used by the phastCons step to place a Genewise
+                     region on the assembly (header, accession, gene name)
     n_guides       : int  max guides to report per insertion site
     arm_length     : int  homology arm length (bp) on each side
     pam            : str  IUPAC PAM (default 'NGG')
@@ -399,16 +410,27 @@ def design_reagents(
     if protein_length and protein_length > 0:
         coverage = cds_coverage(cds_df, protein_length)
 
-    # Translate the model and compare it to the query: a length difference raises here, so
-    # residue numbers are never reported from a shifted model; substitutions only warn.
+    # Translate the model and compare it to the query: a wrong exon (clustered substitutions,
+    # a long gap, a gap beside substitutions) raises here, so residue numbers are never
+    # reported from a wrong model; isolated substitutions and short gaps only warn.
     if protein_seq:
-        check = check_model(cds_df, dna, protein_seq)
+        # which gene-model source won (GenBank / UCSC / NCBI / GFF3 / Genewise) labels the report
+        from gene_model import read_source
+
+        source = read_source(genewise_out.replace('.genewise.out.txt', ''))
+        try:
+            check = check_model(cds_df, dna, protein_seq,
+                                label=(source or {}).get('note', ''))
+        except ValueError as e:
+            # the located report goes to the log as plain text, not only in the traceback
+            _report(reporter, str(e), stage='model_check', level='error')
+            raise
         if check['status'] == 'warn':
             _report(reporter, check['message'], stage='model_check', level='warning')
         else:
             _report(reporter, 'gene model matches the input protein', stage='model_check')
         if model_check_sidecar:
-            write_sidecar(model_check_sidecar, check)
+            write_sidecar(model_check_sidecar, dict(check, source=source))
         score = coverage = None  # exact translation supersedes the score/coverage heuristics
 
     bad_score    = score    is not None and score    < 50.0
@@ -432,7 +454,27 @@ def design_reagents(
 
     # 3. Enumerate insertion sites
     sites = enumerate_insertion_sites(cds_df, dna)
+    if protein_seq and check.get('residue_map'):
+        # renumber through the alignment; model-only residues are not in the input protein
+        rmap = {int(k): v for k, v in check['residue_map'].items()}
+        new_idx = sites['residue_index'].map(lambda i: rmap.get(int(i), int(i)))
+        n_extra = int(new_idx.isna().sum())
+        sites = sites[new_idx.notna()].copy()
+        sites['residue_index'] = new_idx[new_idx.notna()].astype(int)
+        _report(reporter, 'residues renumbered to the input protein; {} model-only residue(s) '
+                'skipped, {} protein residue(s) absent from the model have no site'.format(
+                    n_extra, sum(d['stop'] - d['start'] + 1 for d in check['deletions'])),
+                stage='sites', level='warning')
     _report(reporter, '{} residues / insertion sites'.format(len(sites)), stage='sites')
+
+    # 3b. per-residue phastCons through this same gene model (no second model is built;
+    # phastcons_track refuses to write when the assembly's codons disagree with the model)
+    if phastcons and phastcons_sidecar:
+        from phastcons_track import main as phastcons_main
+
+        phastcons_main(genewise_out, genomic_fasta, protein_fasta, phastcons_sidecar,
+                       taxid=taxid, track=phastcons_track, accession=uniprot_accession,
+                       report=reporter)
 
     # 4. Build per-position frame lookup for synonymous mutation
     frame_lookup = build_frame_lookup(cds_df, dna)
@@ -665,7 +707,8 @@ def design_reagents(
                  errors='ignore')
 
     # Short-arm check: only runs when protein_length is provided (same gate as
-    # the coverage check above).  If any reagent has an arm shorter than half
+    # the coverage check above).  When the model was verified against the protein it
+    # only warns.  Otherwise, if any reagent has an arm shorter than half
     # the configured arm_length, the genomic sequence lacks enough flanking
     # sequence for HDR — typically because the user supplied a short isoform
     # transcript instead of a proper genomic region.
@@ -673,7 +716,15 @@ def design_reagents(
         min_arm   = arm_length // 2
         min_left  = df['left_arm'].str.len().min()
         min_right = df['right_arm'].str.len().min()
-        if min_left < min_arm or min_right < min_arm:
+        short = ((df['left_arm'].str.len() < min_arm) | (df['right_arm'].str.len() < min_arm))
+        if protein_seq and short.any():
+            # the model translates to the input protein, so short arms only mean sites near
+            # the edge of the region: keep them and warn instead of withholding reagents
+            _report(reporter, '{} of {} reagent rows have an arm shorter than {} nt (shortest: '
+                    'left={}, right={}); extend the genomic region for full-length arms'.format(
+                        int(short.sum()), len(df), min_arm, min_left, min_right),
+                    stage='arms', level='warning')
+        elif min_left < min_arm or min_right < min_arm:
             raise ValueError(
                 'Mismatch between DNA and protein sequences '
                 '(shortest arm: left={} nt, right={} nt).\n'
@@ -707,12 +758,18 @@ def design_reagents(
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
+def _is_false(value):
+    """True for an explicit false-like CLI value ('0', 'false', 'no'); '' means not given."""
+    return str(value).strip().lower() in ('0', 'false', 'no')
+
+
 def main(genewise, genomic_fasta, output, protein_length=None, n_guides=5,
          arm_length=1000, pam='NGG', guide_length=20, cut_offset=3,
          insert_sequence='', internal_threshold=500, primer_opt_tm=60.0,
          product_opt_size=200, flank_min=50, flank_max=150, rs3=True,
          rs3_tracr='Hsu2013', offtarget=True, offtarget_spacer=True, taxid='', email='',
-         report=None, job_id_cb=None, resume_job_ids=None, protein_seq=''):
+         report=None, job_id_cb=None, resume_job_ids=None, protein_seq='', phastcons=True,
+         phastcons_track='', protein_fasta='', uniprot_accession=''):
     """Entry point for in-process calls from task_runners."""
     result = design_reagents(
         genewise_out       = genewise,
@@ -741,6 +798,11 @@ def main(genewise, genomic_fasta, output, protein_length=None, n_guides=5,
         # sidecar sits beside the reagents TSV so the UI can screen its own
         # on-demand primers without resubmitting a BLAST
         offtarget_sidecar  = str(Path(output).with_suffix('')) + '.offtarget.json',
+        phastcons          = phastcons,
+        phastcons_track    = phastcons_track,
+        phastcons_sidecar  = str(Path(output).with_suffix('')) + '.phastcons.tsv',
+        protein_fasta      = protein_fasta,
+        uniprot_accession  = uniprot_accession,
         report             = report,
         job_id_cb          = job_id_cb,
         resume_job_ids     = resume_job_ids,
@@ -775,7 +837,8 @@ if __name__ == '__main__':
     # --input_file is the name run_tag_sites_from_json.py passes for the run's protein
     parser.add_argument('--protein_fasta', '--input_file', dest='protein_fasta',
                         help='Protein FASTA (or PDB); the gene model must translate to this '
-                             'sequence (length mismatch fails, substitutions warn)')
+                             'sequence (clustered substitutions or long gaps fail; '
+                             'isolated substitutions and short gaps warn)')
     # Optional guide / arm parameters
     parser.add_argument('--n_guides', type=int, default=5,
                         help='Max guide RNAs to report per insertion site (default: 5)')
@@ -827,6 +890,21 @@ if __name__ == '__main__':
     parser.add_argument('--email', type=str, default='',
                         help='E-mail address for EBI job submission, required by their REST '
                              'API; needed only when the off-target screens run')
+    # value forms of the task params run_tag_sites_from_json.py passes (--rs3 True etc.):
+    # without them argparse abbreviates --rs3 to --rs3_tracr and drops --offtarget False
+    parser.add_argument('--rs3', default='', help='True/False form of --no_rs3')
+    parser.add_argument('--offtarget', default='', help='True/False form of --no_offtarget')
+    parser.add_argument('--offtarget_spacer', default='',
+                        help='True/False form of --no_spacer_screen')
+    parser.add_argument('--phastcons', default='1',
+                        help='Write the per-residue phastCons track (<output>.phastcons.tsv) '
+                             'through this gene model; 0/false to skip (default: 1)')
+    parser.add_argument('--phastcons_track', default='',
+                        help="UCSC phastCons track (default: the assembly's narrow-clade one, "
+                             'e.g. phastCons26way on ce11)')
+    parser.add_argument('--uniprot_accession', default='',
+                        help='UniProt accession of the protein; helps place a Genewise region '
+                             'on the assembly for the phastCons track')
     args, unknowns = parser.parse_known_args()
 
     protein_seq = read_protein(args.protein_fasta) if args.protein_fasta else ''
@@ -857,13 +935,18 @@ if __name__ == '__main__':
         product_opt_size    = args.product_opt_size,
         flank_min           = args.flank_min,
         flank_max           = args.flank_max,
-        rs3                 = not args.no_rs3,
+        rs3                 = not args.no_rs3 and not _is_false(args.rs3),
         rs3_tracr           = args.rs3_tracr,
-        offtarget           = not args.no_offtarget,
-        offtarget_spacer    = not args.no_spacer_screen,
+        offtarget           = not args.no_offtarget and not _is_false(args.offtarget),
+        offtarget_spacer    = not args.no_spacer_screen and not _is_false(args.offtarget_spacer),
         taxid               = args.taxid,
         email               = args.email,
         offtarget_sidecar   = str(Path(args.output).with_suffix('')) + '.offtarget.json',
+        phastcons           = not _is_false(args.phastcons),
+        phastcons_track     = args.phastcons_track,
+        phastcons_sidecar   = str(Path(args.output).with_suffix('')) + '.phastcons.tsv',
+        protein_fasta       = args.protein_fasta or '',
+        uniprot_accession   = args.uniprot_accession,
     )
 
     # standalone CLI has no resume machinery, so a queued EBI job is just an exit

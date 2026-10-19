@@ -472,6 +472,21 @@ def find_transcripts_by_sequence(seq, conn=None, cfg=None):
             conn.close()
 
 
+def transcripts_overlapping(chrom, start, stop, strand, conn=None):
+    """GFF3 transcript_ids whose span overlaps chrom:start-stop (1-based) on one strand."""
+    own_conn = conn is None
+    conn = conn or open_index()
+    try:
+        return [r[0] for r in conn.execute(
+            "SELECT transcript_id FROM transcript_spans WHERE chrom = ? AND strand = ? "
+            "AND start <= ? AND stop >= ? ORDER BY (stop - start) DESC",
+            (chrom, strand, int(stop), int(start)),
+        ).fetchall()]
+    finally:
+        if own_conn:
+            conn.close()
+
+
 def resolve_transcript_for_accession(accession, wormbase_gene, expected_sequence, conn=None, cfg=None):
     """Find the GFF3 transcript_id whose CDS translates to `expected_sequence`
     (a UniProt protein sequence), starting from candidates whose transcript_id

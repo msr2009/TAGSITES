@@ -84,7 +84,8 @@
   border-radius: 4px;
   pointer-events: none;
   z-index: 20;
-  white-space: pre;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   line-height: 1.55;
   box-shadow: 0 2px 6px rgba(0,0,0,0.25);
 }

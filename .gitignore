@@ -75,3 +75,9 @@ yeast_tag_rescue_analysis/
 
 # local exploration tables
 WORMPRO/
+
+# shinyapps.io deploy script: carries the account name and app id
+deploy.sh
+
+# shelved design notes
+LINES-TO-HEATMAPS.md

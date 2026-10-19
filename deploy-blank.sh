@@ -1,5 +1,33 @@
 #!/usr/bin/env bash
-# deploy.sh — push TAGSITES to shinyapps.io (https://mattrich.shinyapps.io/tagsites/)
+# deploy-blank.sh — template for pushing TAGSITES to shinyapps.io
+#
+# This is the tracked, account-free copy of the deploy script. The working copy, deploy.sh,
+# is gitignored because it carries your account name and app id. To set one up:
+#
+#   1. Copy it:            cp deploy-blank.sh deploy.sh && chmod +x deploy.sh
+#
+#   2. Install the client in the Python 3.10 environment you deploy from (shinyapps.io
+#      provisions the interpreter version it sees, and rs3 caps Python at 3.10 — see
+#      CLAUDE.md "Version pinning"):
+#          pip install rsconnect-python
+#
+#   3. Register your shinyapps.io account once per machine. On shinyapps.io go to
+#      Account -> Tokens -> Show, then:
+#          rsconnect add --account <ACCOUNT> --name <ACCOUNT> --token <TOKEN> --secret <SECRET>
+#      The token and secret stay in rsconnect's own config, never in this script.
+#
+#   4. Fill in the two values below (or export them as environment variables):
+#        RSCONNECT_NAME    the server nickname given to --name in step 3 (usually the
+#                          account name, the <ACCOUNT> in https://<ACCOUNT>.shinyapps.io/)
+#        RSCONNECT_APP_ID  the numeric id of an existing app, to update it in place. Leave
+#                          it empty for the first deploy: a new app is created and its id
+#                          is printed (also visible in the app's URL on the shinyapps.io
+#                          dashboard). Put that id here so later deploys update the same
+#                          app instead of creating another one.
+#
+#   5. Optional: a UCSC BLAT API key in ucsc.local.json (gitignored) enables the fast
+#      off-target region screen; without it the app falls back to EBI. See the NOTE in
+#      EXCLUDES below: that file must ship inside the bundle.
 #
 # Run from the repo root:   ./deploy.sh
 # Dry run (writes manifest.json, uploads nothing):   ./deploy.sh --manifest
@@ -16,9 +44,13 @@
 # (bundle.py:69-80). Everything else below has to be named explicitly.
 #
 # Without these flags the bundle is ~10 GB, nearly all of it data/. With them it
-# is about 6 MB.
+# is a few MB.
 
 set -euo pipefail
+
+# ── fill these in (see step 4 above), or export them before running ──────────
+RSCONNECT_NAME="${RSCONNECT_NAME:-}"        # e.g. myaccount
+RSCONNECT_APP_ID="${RSCONNECT_APP_ID:-}"    # e.g. 12345678; empty = create a new app
 
 ENTRYPOINT="app_modular:app"
 
@@ -49,6 +81,7 @@ EXCLUDES=(
   -x '.claude/'
   -x 'docs/'
   -x 'deploy.sh'
+  -x 'deploy-blank.sh'
   -x 'PLAN.md'
 
   # ── Caches and editor leftovers ─────────────────────────────────────────
@@ -104,6 +137,17 @@ PY
   exit 0
 fi
 
-# app_id comes from rsconnect-python/TAGSITES.json, so this updates the existing
-# app in place rather than creating a second one
-rsconnect deploy shiny . --entrypoint "$ENTRYPOINT" "${EXCLUDES[@]}"
+if [[ -z "$RSCONNECT_NAME" ]]; then
+  echo "Set RSCONNECT_NAME (the server nickname from 'rsconnect add'); see the header." >&2
+  exit 1
+fi
+
+# with an app id the existing app is updated in place; without one a new app is created
+APP_ARGS=()
+if [[ -n "$RSCONNECT_APP_ID" ]]; then
+  APP_ARGS=(-a "$RSCONNECT_APP_ID")
+else
+  echo "RSCONNECT_APP_ID is empty: deploying as a NEW app. Record the id it prints." >&2
+fi
+rsconnect deploy shiny . -n "$RSCONNECT_NAME" ${APP_ARGS[@]+"${APP_ARGS[@]}"} --entrypoint "$ENTRYPOINT" \
+  "${EXCLUDES[@]}"

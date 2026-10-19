@@ -17,7 +17,8 @@ def make_task(task_type, label, params_cfg, tooltips_cfg, choices_cfg=None):
 
 
 def build_global_block(email, run_name, working_dir, input_file,
-                       pdb="", genomic_file="", scripts_folder="./scripts/", taxid=""):
+                       pdb="", genomic_file="", scripts_folder="./scripts/", taxid="",
+                       uniprot_accession=""):
     """Assemble the 'global' block that goes into the run JSON."""
     g = {
         "email":       email,
@@ -36,6 +37,10 @@ def build_global_block(email, run_name, working_dir, input_file,
     # off-target screen scopes its blastn by it). A task-level taxid still wins.
     if taxid:
         g["taxid"] = str(taxid)
+    # the selected UniProt entry; the reagents gene model is looked up by it at UCSC
+    # (gene_model.py), since the AFDB pre-search may later rewrite the FASTA header
+    if uniprot_accession:
+        g["uniprot_accession"] = str(uniprot_accession)
     return g
 
 

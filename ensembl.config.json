@@ -1,5 +1,16 @@
 {
-	"_comment": "Knobs for the Ensembl REST genomic-sequence auto-fetch (scripts/ensembl_rest.py, scripts/fetch_genomic_sequence.py, wired into the Setup tab by modules/setup_server.py). See issue #64: the fetch used to run on the Shiny event loop with only per-socket timeouts, so a slow-dribbling response could block every session indefinitely.",
+	"_comment": "Knobs for the genomic-sequence auto-fetch (scripts/fetch_genomic_sequence.py, which tries scripts/ncbi_rest.py, scripts/ucsc_rest.py and scripts/ensembl_rest.py in sources.order); timeouts and retries apply to all three. Originally Ensembl-only, hence the file name. Wired into the Setup tab by modules/setup_server.py. See issue #64: the fetch used to run on the Shiny event loop with only per-socket timeouts, so a slow-dribbling response could block every session indefinitely.",
+
+	"sources": {
+		"_comment": "Fallback chain for the auto-fetch, first success wins. NCBI is first because it was measured fastest (0.3-0.8 s vs 4-8 s for UCSC's three paced calls and 9-40 s or timeouts for Ensembl, Oct 2026) and covers every organism; its spans are gene-level, as Ensembl's are, where UCSC's are the union of its transcripts. Ensembl is last because it is frequently slow or down. UCSC covers the taxids in offtarget.config.json's blat.assemblies; NCBI covers any annotated NCBI genome. per_source_budget_s caps every source except the last, inside the shared total_timeout_s, so one stalled source cannot starve the rest.",
+		"order":               ["ncbi", "ucsc", "ensembl"],
+		"per_source_budget_s": 15
+	},
+
+	"ncbi": {
+		"_comment": "NCBI Datasets rejects taxa above species (E. coli 562), so those are mapped to a reference strain here. Set NCBI_API_KEY in the environment to raise the E-utilities rate limit; never store it in this file.",
+		"taxid_aliases": {"562": "511145"}
+	},
 
 	"timeouts": {
 		"_comment": "total_timeout_s is a real wall-clock budget for the whole symbol->FASTA operation, enforced by clamping each request's read timeout against the time remaining (http_retry.clamp_timeout). requests' own timeout= is per-socket, not per-operation: a server sending one byte every few seconds resets the read timer forever and never trips it, which is exactly the hang in #64. Worst case before this budget existed was 6*60 + 30 + N*30 + 60 seconds, none of it technically a timeout. connect_timeout_s is short so a dead host fails fast rather than burning the budget on a connect. outer_grace_s is the slack asyncio.wait_for allows over the budget before it stops waiting on the worker thread; the thread may outlive it, but its result is discarded.",

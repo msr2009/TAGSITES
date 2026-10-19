@@ -1,6 +1,8 @@
 """utility functions for loading and visualizing analysis results"""
 
 import os
+import textwrap
+from pathlib import Path
 import pandas as pd
 import json
 import plotly.graph_objs as go
@@ -10,6 +12,7 @@ import numpy as np
 from numpy import linspace
 
 from config import ANALYSIS_COLORS, DOMAIN_SOURCE_COLORS, ISOFORM_CLASS_COLORS, GLOBAL_KEYS, TOPOLOGY_SOURCES
+from config import PLOT_LINE_COLORS
 from scripts.task_registry import companion_path
 
 
@@ -135,8 +138,20 @@ def load_data_from_json(json_in, type_dict):
         analysis    = v.get("type", "")
         output_path = v.get("args", {}).get("output", "")
 
-        # reagents tasks feed the Reagents tab, not the Results plots — skip quietly
+        # reagents tasks feed the Reagents tab, not the Results plots; their phastCons
+        # sidecar (phastcons_track.py, one row per residue) is the one exception
         if analysis == "reagents":
+            phast_path = str(Path(output_path).with_suffix("")) + ".phastcons.tsv" \
+                if output_path else ""
+            if phast_path and os.path.exists(phast_path):
+                try:
+                    read_df = pd.read_csv(phast_path, sep="\t", header=None, comment="#",
+                                          na_values=[-1000])
+                    tmp_df = pd.DataFrame({"pos": range(1, read_df.shape[0] + 1),
+                                           "PHASTCONS_phastcons": read_df.iloc[:, 1]})
+                    df = pd.merge(df, tmp_df, how="outer", on="pos")
+                except Exception as e:
+                    print(f"Error loading phastCons track {phast_path}: {e}")
             continue
 
         # skip tasks whose output files haven't been written yet
@@ -369,16 +384,14 @@ def load_reagents_df(json_in):
 ###FOR PLOTTING RESULTS DATA
 
 def assign_task_colors(aa_df):
-    """Assign a stable hex color to each task column, cycling through the palette per analysis type."""
-    colors = {}
-    counters = {}
-    for col_name in aa_df.columns[1:]:
-        analysis = _guess_analysis_type(col_name)
-        palette = ANALYSIS_COLORS.get(analysis, ["#888888", "#aaaaaa", "#666666"])
-        idx = counters.get(analysis, 0)
-        colors[col_name] = palette[idx % len(palette)]
-        counters[analysis] = idx + 1
-    return colors
+    """Assign each track column its own color from PLOT_LINE_COLORS, in column order.
+
+    One palette across all analysis types, so tracks never share a color until there are
+    more tracks than colors (then the cycle repeats). Column order follows the run JSON's
+    task order, so colors are stable for a run.
+    """
+    return {col: PLOT_LINE_COLORS[i % len(PLOT_LINE_COLORS)]
+            for i, col in enumerate(aa_df.columns[1:])}
 
 
 def _guess_analysis_type(task_name):
@@ -393,6 +406,11 @@ def _guess_analysis_type(task_name):
         if analysis in t:
             return analysis
     return "unknown"
+
+
+def _wrap_hover(text, width=40):
+    """Wrap hover text with <br> so long tooltips stay inside the plot area."""
+    return "<br>".join(textwrap.wrap(str(text), width=width, break_long_words=True)) or str(text)
 
 
 def plot_results(aa_df, range_df, title="Results Plot"):
@@ -479,7 +497,7 @@ def plot_results(aa_df, range_df, title="Results Plot"):
                 name=display_name,
                 legendgroup=f"{source}|{desc}",
                 showlegend=first_of_label,
-                hovertemplate=f"{display_name} ({start}-{stop})<extra></extra>",
+                hovertemplate=_wrap_hover(f"{display_name} ({start}-{stop})") + "<extra></extra>",
             ),
             row=2, col=1
         )
@@ -496,6 +514,7 @@ def plot_results(aa_df, range_df, title="Results Plot"):
         showlegend=True,
         xaxis=dict(fixedrange=False),
         hovermode="closest",
+        hoverlabel=dict(align="left", namelength=-1),
         height=500,
         margin=dict(l=60, r=20, t=40, b=40),
     )
@@ -543,6 +562,12 @@ _BWR = [
     (1.0, (178, 24,  43)),
 ]
 
+# white → black, as the UCSC browser draws phastCons (black = most conserved)
+_GRAYS = [
+    (0.0, (255, 255, 255)),
+    (1.0, (0,   0,   0)),
+]
+
 # pLDDT gradient: band boundary values are used as t stops so the colour
 # transitions coincide with the categorical 4-band cutoffs (stored 0–1)
 _PLDDT_GRADIENT = [
@@ -584,6 +609,8 @@ def _pick_gradient_cmap(task_name):
         return _PLDDT_GRADIENT
     if analysis == "blast":
         return _VIRIDIS
+    if analysis == "phastcons":
+        return _GRAYS
     return _PLASMA
 
 

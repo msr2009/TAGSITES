@@ -1,13 +1,20 @@
 """uniprot_api.py — shared UniProt REST helpers, usable without the Shiny app.
 
 Extracted from existing_AF_model.py so uniprot_features.py can reuse the same
-checksum-lookup logic without importing AFDB-specific code.
+checksum-lookup logic without importing AFDB-specific code. resolve_accession() is the one
+place a run's protein is mapped to a UniProt accession (uniprot_features.py,
+ucsc_gene_model.py, phastcons_track.py).
 
 Matt Rich, 2026
 """
 
+import os
+import re
+
 import requests
 from Bio.SeqUtils.CheckSum import crc64
+
+ACCESSION_SIDECAR = "{run}.uniprot_accession.txt"  # written by structure_remote on a match
 
 
 def checksum_lookup_response_to_accession(resp_json):
@@ -34,6 +41,79 @@ def checksum_lookup(seq, taxid=None):
     )
     resp.raise_for_status()
     return checksum_lookup_response_to_accession(resp.json())
+
+
+def parse_accession(text):
+    """UniProt accession (isoform suffix kept, e.g. 'Q26261-2') at the start of text, or ''.
+
+    Accepts a bare accession or a UniProt FASTA id ('sp|Q26261|UNC5_CAEEL').
+    """
+    from site_selection_util import uniprot_accession_regex
+
+    text = (text or "").strip().split()[0] if (text or "").strip() else ""
+    parts = text.split("|")
+    # sp|ACC|NAME / tr|ACC|NAME: the accession is the middle field
+    if len(parts) >= 2 and parts[0] in ("sp", "tr"):
+        text = parts[1]
+    m = uniprot_accession_regex(text)
+    if m is None:
+        return ""
+    iso = re.match(r"-\d+", text[m.end():])
+    return m.group(0) + (iso.group(0) if iso else "")
+
+
+def _fasta_header(path):
+    """First FASTA header (without '>') of a file, or '' if unreadable."""
+    try:
+        with open(path) as fh:
+            for line in fh:
+                if line.startswith(">"):
+                    return line[1:].strip()
+    except OSError:
+        pass
+    return ""
+
+
+def resolve_accession(protein_fa, accession="", taxid="", run_dir=None, run_name=None,
+                      use_checksum=True):
+    """Best UniProt accession for a run's protein; returns (accession, how) or ('', reason).
+
+    Order: explicit accession > the FASTA header > user_{name}.fa's header (the AFDB
+    pre-search replaces {run}.fa with a run-named copy) > CRC64 checksum lookup >
+    the {run}.uniprot_accession.txt sidecar structure_remote writes on a BLAST/CRC match.
+    """
+    acc = parse_accession(accession)
+    if acc:
+        return acc, "given"
+    acc = parse_accession(_fasta_header(protein_fa)) if protein_fa else ""
+    if acc:
+        return acc, "FASTA header"
+    folder = run_dir or (os.path.dirname(protein_fa) if protein_fa else "")
+    stem = os.path.splitext(os.path.basename(protein_fa or ""))[0]
+    stem = stem.removeprefix("user_")
+    name = run_name or stem
+    user_fa = os.path.join(folder, f"user_{stem}.fa")
+    if os.path.exists(user_fa):
+        acc = parse_accession(_fasta_header(user_fa))
+        if acc:
+            return acc, "original FASTA header"
+    if use_checksum and protein_fa and os.path.exists(protein_fa):
+        from cds_check import read_protein
+
+        seq = read_protein(protein_fa)
+        try:
+            acc = checksum_lookup(seq.rstrip("*"), taxid) if seq else None
+        except Exception:
+            acc = None
+        if acc:
+            return acc, "CRC64 checksum"
+    sidecar = os.path.join(folder, ACCESSION_SIDECAR.format(run=name)) if name else ""
+    if sidecar and os.path.exists(sidecar):
+        with open(sidecar) as fh:
+            acc = parse_accession(fh.read())
+        if acc:
+            return acc, "AFDB search match"
+    return "", "no UniProt accession found (header, checksum or BLAST match)"
 
 
 def fetch_entry(accession):

@@ -2,13 +2,21 @@
 test_fetch_genomic_sequence.py — offline unit tests for scripts/fetch_genomic_sequence.py
 
 Mocks ensembl_rest's functions directly (no network) to drive the
-organism-not-found / gene-not-found / success paths.
+organism-not-found / gene-not-found / success paths. The source chain is pinned
+to Ensembl alone, so UCSC and NCBI are never contacted.
 """
 
 import pytest
 
 import ensembl_rest
+import fetch_genomic_sequence as fgs
 from fetch_genomic_sequence import fetch_genomic_sequence
+
+
+@pytest.fixture(autouse=True)
+def _ensembl_only(monkeypatch):
+    """Restrict the fallback chain to Ensembl, the only source these tests mock."""
+    monkeypatch.setattr(fgs, "source_settings", lambda: (["ensembl"], None))
 
 
 def test_raises_when_organism_not_on_ensembl(monkeypatch):
@@ -54,6 +62,8 @@ def test_success_path_returns_fasta_and_meta(monkeypatch):
         "region": "X:7682896-7686037:1",
         "ambiguous": False,
         "candidates": [],
+        "source": "ensembl",
+        "fallbacks": [],
     }
     assert captured["expand_5prime"] == 1000
     assert captured["expand_3prime"] == 1000

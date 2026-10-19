@@ -701,14 +701,28 @@ def reagents_server(input, output, session, shared_json, shared_sites):
             class_="run-header",
         )
         check = model_check.get()
+        # which gene-model source won (gene_model.py): GenBank / UCSC / Genewise / GFF3
+        source = (check or {}).get("source") or {}
+        if source.get("note"):
+            header = ui.div(header, ui.p("Gene model: " + source["note"], class_="ts-filter-hint"))
         if check and check.get("status") == "warn":
-            # same length, so numbering is right, but the genome codons differ from the protein
+            notes = []
+            if check.get("mismatches"):
+                # numbering is right, but the genome codons differ from the protein
+                notes.append(
+                    "differs at {} residue(s) ({}); reagents are designed on the genomic codons, "
+                    "site labels show your protein's residue".format(
+                        len(check["mismatches"]), format_mismatches(check["mismatches"])))
+            for d in check.get("deletions") or []:
+                span = d["start"] if d["start"] == d["stop"] else "{}-{}".format(d["start"], d["stop"])
+                notes.append("lacks your protein's residue(s) {}, so no reagents exist there".format(span))
+            for i in check.get("insertions") or []:
+                notes.append("has {} extra residue(s) after your residue {} (no sites listed for "
+                             "them)".format(i["length"], i["after"]))
             return ui.div(header, ui.p(
-                "⚠ Gene model differs from your protein at {} residue(s) ({}). Reagents are "
-                "designed on the genomic codons; site labels show your protein's residue. "
-                "If this is unexpected, check the genomic region or upload a GenBank file "
-                "with the correct CDS.".format(
-                    len(check["mismatches"]), format_mismatches(check["mismatches"])),
+                "⚠ Gene model {}. Residue numbers follow your protein. If this is unexpected, "
+                "check the genomic region or upload a GenBank file with the correct "
+                "CDS.".format("; ".join(notes)),
                 class_="ts-warn"))
         return header
 
@@ -957,12 +971,12 @@ def reagents_server(input, output, session, shared_json, shared_sites):
 
     # ── download handlers ─────────────────────────────────────────────────────
 
-    @render.download_button(filename=lambda: "{}_reagents.zip".format(run_name.get() or "reagents"))
+    @render.download(filename=lambda: "{}_reagents.zip".format(run_name.get() or "reagents"))
     def download_sequences_top():
         """Download ZIP of all reagent files (top button)."""
         yield _build_zip()
 
-    @render.download_button(filename=lambda: "{}_reagents.zip".format(run_name.get() or "reagents"))
+    @render.download(filename=lambda: "{}_reagents.zip".format(run_name.get() or "reagents"))
     def download_sequences_bot():
         """Download ZIP of all reagent files (bottom button)."""
         yield _build_zip()
