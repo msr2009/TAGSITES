@@ -78,3 +78,6 @@ WORMPRO/
 
 # shinyapps.io deploy script: carries the account name and app id
 deploy.sh
+
+# shelved design notes
+LINES-TO-HEATMAPS.md
