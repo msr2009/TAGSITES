@@ -455,8 +455,9 @@ def pair_amplicons(fwd_sites, rev_sites, self_spans, max_product):
     """Predicted products between any two facing sites of one primer pair, intended one excluded.
 
     fwd_sites/rev_sites are the sites of the forward and reverse primer. The intended
-    amplicon is the perfect forward/perfect reverse pair inside the query's own locus;
-    everything else, including fwd/fwd and rev/rev products, is reported.
+    amplicon is the perfect forward/perfect reverse pair inside the query's own locus, in
+    either strand orientation; everything else, including fwd/fwd and rev/rev products,
+    is reported.
     """
     tagged = [("fwd", s) for s in fwd_sites] + [("rev", s) for s in rev_sites]
     plus = [t for t in tagged if t[1]["strand"] == "+"]
@@ -470,7 +471,8 @@ def pair_amplicons(fwd_sites, rev_sites, self_spans, max_product):
             size = b["end"] - a["start"] + 1
             if size > max_product:
                 continue
-            intended = (which_a == "fwd" and which_b == "rev" and a["mismatches"] == 0
+            # either orientation: on a minus-strand gene the reverse primer is the plus site
+            intended = ({which_a, which_b} == {"fwd", "rev"} and a["mismatches"] == 0
                         and b["mismatches"] == 0 and _in_self(a, self_spans)
                         and _in_self(b, self_spans))
             key = (a["chrom"], a["start"], b["end"])
