@@ -1282,14 +1282,20 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
         """Collapse a gene/file name into a safe analysis-name token."""
         return re.sub(r"[^A-Za-z0-9_-]+", "_", name.strip()).strip("_")
 
+    _auto_name = [""]   # the last name filled in here; a different current value was typed
+
     def _autofill_run_name(source_name):
-        """Fill run_name with '{source_name}_{YYYYMMDD}' unless the user already typed one."""
-        if input.run_name().strip() or not source_name:
+        """Fill run_name with '{source_name}_{YYYYMMDD}', replacing a previous auto-fill."""
+        current = input.run_name().strip()
+        # a name the user typed or edited is never overwritten
+        if (current and current != _auto_name[0]) or not source_name:
             return
         token = _safe_name_token(source_name)
         if not token:
             return
-        ui.update_text("run_name", value=f"{token}_{date.today():%Y%m%d}")
+        name = f"{token}_{date.today():%Y%m%d}"
+        _auto_name[0] = name
+        ui.update_text("run_name", value=name)
 
     @reactive.effect
     def _autofill_run_name_from_hit():
