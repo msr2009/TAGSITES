@@ -12,6 +12,7 @@ import requests
 import shutil
 import sys
 import tempfile
+import traceback
 from datetime import date
 from pathlib import Path
 
@@ -701,6 +702,17 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
                "reason": "", "verdict": None, "force": force}
         cfg = ensembl_rest.timeouts()
         try:
+            # a sequence in the proteome database already has its analyses and reagents:
+            # skip the genomic lookup and isoform check (the Fetch button still forces them)
+            if _db_on and not force:
+                try:
+                    hits = await _off_loop(proteome_db.match_sequence, protein["seq"],
+                                           budget=20)
+                except Exception:
+                    hits = None
+                if hits is not None and not hits.empty:
+                    res["skipped"] = True
+                    return res
             accession = protein.get("accession", "")
             # a pasted/uploaded sequence: its UniProt entry gives the accession and gene name
             if "header" in protein:
@@ -773,6 +785,13 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
             if res is None:
                 res = {"ok": False, "symbol": "", "reason": "unexpected error", "verdict": None,
                        "force": False}
+            # the sequence is in the proteome database: no lookup was run
+            if res.get("skipped"):
+                _genomic_fetch_status.set({
+                    "level": "plain", "text": "",
+                    "region": "Precomputed results found in the proteome database; genomic "
+                              "lookup skipped. Click Fetch to look up the region anyway."})
+                return
             # the user filled the region meanwhile: theirs wins, unless they clicked Fetch
             if not res["force"] and not _genomic_target_free():
                 return
@@ -1354,6 +1373,7 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
         try:
             found = await _off_loop(proteome_db.match_sequence, seq, budget=20)
         except Exception:
+            traceback.print_exc()   # a failed lookup hides the card; leave a trace
             found = None
         _db_matches.set(found if found is not None and not found.empty else None)
 
@@ -1376,13 +1396,18 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
         else:
             pick = ui.input_select("proteome_pick", "",
                                    choices={str(r.pid): label(r) for r in rows})
+        orange = "#e8710a"
         return ui.div(
-            ui.tags.p("Precomputed results available in the proteome database:",
-                      style="font-size:0.8rem; margin:0.4rem 0 0.2rem;"),
+            ui.tags.p("Precomputed results available in the local database:",
+                      style=f"font-size:0.85rem; font-weight:600; color:{orange}; "
+                            "margin:0 0 0.3rem;"),
             pick,
-            ui.input_action_button("load_proteome", "Load precomputed results",
-                                   class_="btn-sm btn-outline-primary"),
-            class_="section-hint",
+            ui.input_action_button(
+                "load_proteome", "Load precomputed results", class_="btn-sm",
+                style=f"display:block; margin-top:0.4rem; color:#fff; background:{orange}; "
+                      f"border-color:{orange};"),
+            style=f"margin:0.6rem 0; padding:0.6rem 0.8rem; border:2px solid {orange}; "
+                  "border-radius:6px; background:#fff4e8;",
         )
 
     def _export_rest(pid, out_dir, rn):
