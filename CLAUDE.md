@@ -222,6 +222,11 @@ accession comes from `uniprot_api.resolve_accession` (global `uniprot_accession`
 `user_{run}.fa`, CRC64, or the `{run}.uniprot_accession.txt` sidecar `structure_remote.py` writes
 on an AFDB match).
 
+**Shiny API deprecations**: use `@render.download_button` (paired with `ui.download_button`,
+function name == id) and never `@render.download`, which Shiny 1.7 deprecates and warns about
+at startup. When adding code, run the app and check the startup log for
+`ShinyDeprecationWarning` before committing.
+
 **Alignment rendering**: sequence alignments are pre-rendered as matplotlib SVGs (stored in a dict keyed by alignment name) and displayed statically — this replaced an earlier real-time Plotly approach that was too slow.
 
 ## Environment

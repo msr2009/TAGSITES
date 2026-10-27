@@ -121,25 +121,29 @@ def app_server(input, output, session):
                    shared_results_trigger=shared_results_trigger)
     reagents_server("reagents", shared_json=shared_values, shared_sites=shared_sites)
 
-    @render.download(filename="tagsites-app.zip", media_type="application/zip")
-    async def download_app():
-        """Bundle app source files into a zip for local deployment."""
-        buf = io.BytesIO()
-        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+    @render.download_button(filename="tagsites-app.zip", media_type="application/zip")
+    def download_app():
+        """Bundle app source files into a zip on disk and return its path (sends Content-Length)."""
+        # strict_timestamps=False: deployed files have pre-1980 mtimes, which zipfile rejects
+        zip_path = os.path.join(_get_session_dir(), "tagsites-app.zip")
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, strict_timestamps=False) as zf:
             for arcname, filepath in _collect_app_files(_ROOT):
                 zf.write(filepath, arcname)
-        yield buf.getvalue()
+        return zip_path
 
 
 def _collect_app_files(root):
     """Yield (arcname, filepath) pairs for app source files to include in the download zip."""
     for pattern in ("*.py", "*.json", "*.yml", "*.yaml", "*.txt"):
         for f in sorted(root.glob(pattern)):
+            # *.local.json holds secrets (UCSC BLAT API key) and machine-specific overrides
+            if f.name.endswith(".local.json"):
+                continue
             yield f.name, f
     readme = root / "README.md"
     if readme.exists():
         yield "README.md", readme
-    for subdir in ("modules", "scripts", "utils", "tables", "www", "params"):
+    for subdir in ("modules", "scripts", "utils", "tables", "taxid_lists", "docs", "www", "params"):
         d = root / subdir
         if not d.is_dir():
             continue
