@@ -1391,10 +1391,11 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
             return None
 
         def label(r):
-            """One match as 'id · gene · length · reagents status'."""
+            """One match as 'id · gene · length · reagents status · structure status'."""
             reagents = "reagents ok" if r.reagent_status == "success" else "no reagents"
+            structure = "" if r.has_structure else "no structure"
             return " · ".join(str(x) for x in (r.id, r.gene_name or "", f"{r.seq_length} aa",
-                                               reagents) if x != "")
+                                               reagents, structure) if x != "")
 
         rows = list(found.itertuples())
         if len(rows) == 1:
