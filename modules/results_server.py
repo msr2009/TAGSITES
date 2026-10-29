@@ -680,12 +680,17 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
             )
             for val, label in choices.items()
         ]
+        reset_btn = ui.tags.button(
+            "↻ Reset", onclick="tsResetStructureView()",
+            title="Reset the structure to its default orientation and zoom",
+            class_="btn btn-sm ts-mode-btn",
+        )
         png_btn = ui.tags.button(
             "⬇ PNG", onclick="tsDownloadStructurePng()",
             title="Download the current structure view as PNG",
             class_="btn btn-sm ts-colorby-btn",
         )
-        return ui.div(*buttons, ui.span("|", class_="ts-divider"), png_btn,
+        return ui.div(*buttons, ui.span("|", class_="ts-divider"), reset_btn, png_btn,
                       class_="ts-colorby-row")
 
     @render.ui

@@ -1430,6 +1430,13 @@
     img.src = uri;
   }
 
+  // Reset the structure camera to the default whole-protein view
+  window.tsResetStructureView = function () {
+    if (!viewer) return;
+    viewer.zoomTo();
+    viewer.render();
+  };
+
   // Structure PNG: the current view at PNG_DPI, cropped to the molecule, with the DPI
   // written into the file's metadata.
   var PNG_DPI = 600;
@@ -1511,25 +1518,36 @@
   Shiny.addCustomMessageHandler("tagsites_init_struct", function (msg) {
     inputNames = msg.inputs;
     var pane = document.getElementById("ts-struct-pane");
-    if (pane) pane.style.display = "flex";
+    if (pane) {
+      pane.style.display = "flex";
+      pane.classList.remove("ts-no-struct");
+    }
     initViewer(msg.pdb);
   });
 
   Shiny.addCustomMessageHandler("tagsites_clear_struct", function (msg) {
+    if (viewerObserver) {
+      viewerObserver.disconnect();
+      viewerObserver = null;
+    }
     if (viewer) {
       viewer.clear();
       viewer = null;
     }
     var container = document.getElementById("ts-viewer-container");
-    if (container) container.innerHTML = "";
+    if (container) {
+      container.innerHTML = '<div class="ts-no-struct-msg">No structure</div>';
+    }
+    var legend = document.getElementById("ts-struct-legend");
+    if (legend) legend.innerHTML = "";
+    // keep the pane visible with its buttons inactive so the layout does not jump
     var pane = document.getElementById("ts-struct-pane");
-    if (pane) pane.style.display = "none";
+    if (pane) {
+      pane.style.display = "flex";
+      pane.classList.add("ts-no-struct");
+    }
   });
 
-    if (viewerObserver) {
-      viewerObserver.disconnect();
-      viewerObserver = null;
-    }
   Shiny.addCustomMessageHandler("tagsites_set_states", function (msg) {
     committedSet = new Set(msg.committed);
     render();

@@ -101,7 +101,7 @@
 }
 
 #ts-struct-pane {
-  display: none; /* shown via JS when PDB is available */
+  display: none; /* shown via JS once a run loads (structure or "No structure") */
   flex-direction: column;
   flex: 1;        /* fill .ts-struct-col */
 }
@@ -115,6 +115,21 @@
   border: 1px solid #ddd;
   border-radius: 4px;
   overflow: hidden;
+}
+
+/* run with no structure: panel stays, message shown, buttons inactive */
+.ts-no-struct-msg {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  color: #888;
+  font-size: 14px;
+}
+
+#ts-struct-pane.ts-no-struct .ts-colorby-row {
+  opacity: 0.45;
+  pointer-events: none;
 }
 
 /* structure color legend — floats over the bottom-left of the viewer */
