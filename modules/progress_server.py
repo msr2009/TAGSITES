@@ -508,9 +508,13 @@ def progress_server(input, output, session, shared_json, shared_results_trigger,
             _completion_count[0] += 1
             shared_results_trigger.set(_completion_count[0])
 
-    # ids that have already caused a results-refresh bump — avoids re-bumping
-    # on every 2 s poll once a task's completion has already been reflected
+    # (run, task, start time) keys that have already caused a results-refresh bump — avoids
+    # re-bumping on every 2 s poll. The start time keeps a re-exported precomputed run (whose
+    # task ids never change) from being mistaken for one already shown.
     _refreshed_success_ids = set()
+    # precomputed-run tasks seen unfinished in this session: only these advance to Results,
+    # so opening an already-finished run does not jump tabs
+    _db_seen_unfinished = set()
 
     @reactive.effect
     def _bump_results_on_task_success():
@@ -520,17 +524,27 @@ def progress_server(input, output, session, shared_json, shared_results_trigger,
         them has finished, so a long-running task would otherwise hold back the
         Results view for everything else that already completed. Piggyback on the
         2 s status poll instead and bump shared_results_trigger the moment any
-        individual task's on-disk status flips to success/failed.
+        individual task's on-disk status flips to success/failed. A precomputed run's
+        Analyses task also opens the Results tab, since no runner is there to do it.
         """
         status = _current_status()
+        run = (working_dir.get(), run_name.get())
+        keyed = {tid: (run, tid, entry.get("started_at")) for tid, entry in status.items()}
+        for tid, entry in status.items():
+            if entry.get("status") not in ("success", "failed"):
+                _db_seen_unfinished.add(keyed[tid])
         newly_done = {tid for tid, entry in status.items()
-                     if entry.get("status") in ("success", "failed")
-                     and tid not in _refreshed_success_ids}
+                      if entry.get("status") in ("success", "failed")
+                      and keyed[tid] not in _refreshed_success_ids}
         if not newly_done:
             return
-        _refreshed_success_ids.update(newly_done)
+        _refreshed_success_ids.update(keyed[tid] for tid in newly_done)
         _completion_count[0] += 1
         shared_results_trigger.set(_completion_count[0])
+        if (db_mode.get() and "Analyses_db" in newly_done
+                and status["Analyses_db"].get("status") == "success"
+                and any(k[1] == "Analyses_db" and k[0] == run for k in _db_seen_unfinished)):
+            ui.update_navs("main_tabs", selected="results", session=session.root_scope())
 
     # task ids already warned about running long — avoids renotifying every 2 s poll
     _long_running_warned = set()
