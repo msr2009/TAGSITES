@@ -24,6 +24,7 @@
   /* ── Module state ──────────────────────────────────────────────────────────── */
 
   var viewer = null;
+  var viewerObserver = null;   // keeps the WebGL canvas sized to its container
   var seqArray = [];
   var inputNames = {};
   var committedSet = new Set();
@@ -1172,6 +1173,10 @@
     if (!container) return;
 
     // Clear any existing viewer so stale canvases don't stack on re-init
+    if (viewerObserver) {
+      viewerObserver.disconnect();
+      viewerObserver = null;
+    }
     if (viewer) {
       viewer.clear();
       viewer = null;
@@ -1196,7 +1201,7 @@
         if (atom._label) return;
         atom._label = viewer.addLabel(
           atom.resn + " " + atom.resi + (atom.chain ? " " + atom.chain : ""),
-          { position: atom, backgroundColor: "rgba(0,0,0,0.75)",
+          { position: atom, backgroundColor: "black", backgroundOpacity: 0.75,
             fontColor: "white", fontSize: 12, borderThickness: 0 }
         );
         viewer.render();
@@ -1213,6 +1218,20 @@
     viewer.resize();
     viewer.zoomTo();
     viewer.render();
+
+    // A container that collapses to zero size (layout shift after a click-added site, tab
+    // switch) leaves a zero-size framebuffer and a blank canvas; resize again once it has
+    // area so the next draw works.
+    if (window.ResizeObserver) {
+      viewerObserver = new ResizeObserver(function (entries) {
+        var r = entries[0].contentRect;
+        if (viewer && r.width > 0 && r.height > 0) {
+          viewer.resize();
+          viewer.render();
+        }
+      });
+      viewerObserver.observe(container);
+    }
   }
 
   function setViewerBackground(bg) {
@@ -1507,6 +1526,10 @@
     if (pane) pane.style.display = "none";
   });
 
+    if (viewerObserver) {
+      viewerObserver.disconnect();
+      viewerObserver = null;
+    }
   Shiny.addCustomMessageHandler("tagsites_set_states", function (msg) {
     committedSet = new Set(msg.committed);
     render();
