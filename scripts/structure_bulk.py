@@ -11,6 +11,11 @@ already looks like a UniProt accession, else a raw accession string, else a
 CRC64 checksum lookup against local_store.py's proteins table (the same key
 uniprot_api.checksum_lookup() uses over the network).
 
+When the tarball lacks an accession (it holds one model per gene, about 19.7k for C. elegans,
+while AFDB also models the other UniProt entries), the model is fetched from AFDB through
+structure_remote.fetch_afdb_pdb and cached next to the tarball's files, so the next lookup is
+local. A failed fetch is the same "no model" outcome as before.
+
 AFDB only has predictions for canonical UniProt entries — a non-canonical
 isoform's accession won't have its own AF-*.pdb.gz member. That's a known,
 documented limitation (see the plan's Phase B), not something this backend
@@ -57,6 +62,26 @@ def _resolve_accession(fasta_in):
     return matches[0]["accession"] if matches else None
 
 
+def _fetch_missing_model(accession, pdb_gz_path, reporter):
+    """Fetch a model absent from the tarball and cache it as gzip; return True on success."""
+    from structure_remote import fetch_afdb_pdb
+
+    # AFDB models canonical entries only, so an isoform accession cannot be fetched
+    if "-" in accession:
+        return False
+    pdb_text = fetch_afdb_pdb(accession, reporter)
+    if pdb_text is None:
+        return False
+    # write through a temp file so an interrupted run never leaves a truncated cache entry
+    tmp = Path(str(pdb_gz_path) + ".tmp")
+    with gzip.open(tmp, "wt") as f_out:
+        f_out.write(pdb_text)
+    os.replace(tmp, pdb_gz_path)
+    _report(reporter, f"fetched AFDB structure for {accession} (not in the local tarball)",
+            stage="afdb_bulk")
+    return True
+
+
 def main(fasta_in, email, workingdir, name, taxid, evalue, percentid,
          clients_folder, report=None):
     """Look up a local AFDB structure for fasta_in's protein and write the
@@ -81,7 +106,7 @@ def main(fasta_in, email, workingdir, name, taxid, evalue, percentid,
 
     ref_dir, _ = _reference_dir()
     pdb_gz_path = ref_dir / "afdb_pdbs" / f"AF-{accession}-F1-model_v6.pdb.gz"
-    if not pdb_gz_path.exists():
+    if not pdb_gz_path.exists() and not _fetch_missing_model(accession, pdb_gz_path, reporter):
         _report(reporter, f"no local AFDB structure for {accession}",
                 stage="afdb_bulk", level="warning")
         return 1
