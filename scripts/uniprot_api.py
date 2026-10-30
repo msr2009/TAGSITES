@@ -27,10 +27,12 @@ def checksum_lookup_response_to_accession(resp_json):
     return None
 
 
-def checksum_lookup(seq, taxid=None):
-    """Query UniProt REST API for an exact sequence match by CRC64 checksum.
+def checksum_lookup_all(seq, taxid=None, size=25):
+    """Every UniProt accession whose sequence has seq's CRC64, in UniProt's order.
 
-    Returns the first matching UniProt accession, or None.
+    Entries with one sequence are common (a reference-proteome entry plus older standalone
+    submissions), and only some of them have an AlphaFold model, so callers that need a
+    specific property try them all.
     """
     checksum = crc64(seq).replace("CRC-", "")  # Biopython adds "CRC-" prefix; UniProt expects bare hex
     query = f"checksum:{checksum}"
@@ -39,10 +41,19 @@ def checksum_lookup(seq, taxid=None):
     # batch-scale traffic sees transient 5xx/429 here; retrying avoids a needless BLAST fallback
     resp = request_with_retries(
         "get", "https://rest.uniprot.org/uniprotkb/search",
-        params={"query": query, "format": "json", "fields": "accession", "size": 1},
+        params={"query": query, "format": "json", "fields": "accession", "size": size},
         timeout=15,
     )
-    return checksum_lookup_response_to_accession(resp.json())
+    return [r["primaryAccession"] for r in resp.json().get("results", [])]
+
+
+def checksum_lookup(seq, taxid=None):
+    """Query UniProt REST API for an exact sequence match by CRC64 checksum.
+
+    Returns the first matching UniProt accession, or None.
+    """
+    found = checksum_lookup_all(seq, taxid, size=1)
+    return found[0] if found else None
 
 
 def parse_accession(text):

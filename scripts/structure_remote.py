@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 
 from site_selection_util import get_sequence, uniprot_accession_regex, save_fasta
-from uniprot_api import checksum_lookup as _uniprot_checksum_lookup
+from uniprot_api import checksum_lookup_all as _uniprot_checksum_lookup_all, parse_accession
 
 sys.path.insert(0, str(Path(__file__).parent))
 import ebi_rest
@@ -94,6 +94,16 @@ def fetch_afdb_pdb(accession, reporter):
     return pdb_text
 
 
+def _own_accession(fasta_in):
+    """The UniProt accession in a FASTA record's id (sp|ACC|NAME or a bare ACC), or ''."""
+    from site_selection_util import read_fasta
+
+    try:
+        return parse_accession(read_fasta(fasta_in)[0])
+    except Exception:
+        return ""
+
+
 def _record_accession(workingdir, name, accession):
     """Write {name}.uniprot_accession.txt so later steps (UCSC gene model) can find the match.
 
@@ -117,6 +127,7 @@ def main(fasta_in, email, workingdir, name, taxid, evalue, percentid,
     """
     reporter = resolve_reporter(report)
     candidates = []  # (accession, percent_id, evalue), best BLAST hit first
+    verify = set()   # accessions whose model must match the input sequence exactly
 
     outfile_prefix = f"{workingdir}/{name}.AF"
 
@@ -126,20 +137,29 @@ def main(fasta_in, email, workingdir, name, taxid, evalue, percentid,
     else:
         seq = clean_sequence(get_sequence(fasta_in))
 
+        # the FASTA's own id, when it is a UniProt accession, is tried first; its model is
+        # kept only if the sequence is identical (the id is the user's claim, not a checksum)
+        own = _own_accession(fasta_in)
+        if own:
+            candidates.append((own, 100.0, 1e-200))
+            verify.add(own)
+
         # fast path: exact sequence match via CRC64 checksum (no queue, milliseconds)
         _report(reporter, "Checking UniProt for exact sequence match…", stage="afdb_checksum")
         try:
-            acc = _uniprot_checksum_lookup(seq, taxid)
+            matches = _uniprot_checksum_lookup_all(seq, taxid)
         except Exception as e:
             _report(reporter, f"checksum lookup failed ({e}); falling back to BLAST",
                     stage="afdb_checksum", level="warning")
-            acc = None
+            matches = []
 
-        if acc:
-            _report(reporter, f"Exact UniProt match: {acc} — skipping BLAST", stage="afdb_checksum")
-            candidates.append((acc, 100.0, 1e-200))
-            _record_accession(workingdir, name, acc)
-        else:
+        # entries sharing one sequence often differ in having an AFDB model, so keep them all
+        if matches:
+            _report(reporter, f"Exact UniProt match: {', '.join(matches[:3])} — skipping BLAST",
+                    stage="afdb_checksum")
+            candidates.extend((m, 100.0, 1e-200) for m in matches if m != own)
+            _record_accession(workingdir, name, own or matches[0])
+        elif not own:
             # fallback: BLAST against UniProt to find closest homolog
             _report(reporter, "No exact match; submitting NCBI BLAST job for AFDB lookup…",
                     stage="afdb_submit")
@@ -187,6 +207,13 @@ def main(fasta_in, email, workingdir, name, taxid, evalue, percentid,
         pdb_path = f"{outfile_prefix}.pdb"
         with open(pdb_path, "w") as f:
             f.write(pdb_text)
+        # selenocysteine is a CYS in the PDB, so compare U as C
+        if (match_accession in verify
+                and str(get_sequence(pdb_path)).replace("U", "C") != seq.replace("U", "C")):
+            _report(reporter, f"AFDB model for {match_accession} is a different sequence; "
+                              "trying the next candidate", stage="afdb_fetch", level="warning")
+            os.remove(pdb_path)
+            continue
         # a BLAST hit may be a homolog: the UCSC gene-model gate (exact translation) rejects it
         _record_accession(workingdir, name, match_accession)
         _report(reporter, f"saved {match_accession} PDB to {pdb_path}", stage="afdb_save")
