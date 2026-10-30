@@ -16,6 +16,7 @@ Matt Rich, 4/2024 / updated 2026 — EBI REST calls via ebi_rest.py; backend-spl
 
 import os
 import sys
+import time
 from pathlib import Path
 
 from site_selection_util import get_sequence, uniprot_accession_regex, save_fasta
@@ -37,23 +38,56 @@ def is_afdb_not_found(pdb_text):
     return "ERROR" in pdb_text[:50]
 
 
+def is_afdb_transient(pdb_text):
+    """dbfetch answers HTTP 200 with 'ERROR 11 Unable to connect to database' when it is overloaded."""
+    head = pdb_text[:100]
+    return "ERROR 11" in head or "Unable to connect" in head
+
+
 def clean_sequence(seq):
     """Strip stop-codon asterisks and whitespace so checksum and BLAST see the bare protein."""
     return "".join(seq.replace("*", "").split())
 
 
-def fetch_afdb_pdb(accession, reporter):
-    """Download the AFDB PDB text for an accession, or None if unavailable."""
+def fetch_afdb_pdb_direct(accession, reporter):
+    """Download the model file named by the AFDB prediction API, or None if unavailable."""
+    import requests
+    from http_retry import request_with_retries
+
     try:
-        pdb_bytes = ebi_rest.dbfetch("afdb", accession, "pdb", "raw")
-        pdb_text = pdb_bytes.decode("utf-8", errors="replace")
-    except Exception as e:
-        _report(reporter, f"dbfetch failed for {accession}: {e}",
-                stage="afdb_fetch", level="error")
+        info = request_with_retries(
+            "get", f"https://alphafold.ebi.ac.uk/api/prediction/{accession}", timeout=30).json()
+        return request_with_retries("get", info[0]["pdbUrl"], timeout=60).text
+    except (requests.exceptions.RequestException, ValueError, KeyError, IndexError) as e:
+        _report(reporter, f"direct AFDB download failed for {accession}: {e}",
+                stage="afdb_fetch", level="warning")
         return None
 
-    # the EBI dbfetch returns an error message as plain text when not found
-    if is_afdb_not_found(pdb_text):
+
+def fetch_afdb_pdb(accession, reporter):
+    """Download the AFDB PDB text for an accession, or None if unavailable.
+
+    dbfetch is tried first, retrying its transient 'unable to connect' answer; a model it
+    cannot serve is then fetched straight from AFDB, so an overloaded dbfetch never reads
+    as "no model".
+    """
+    for attempt in range(4):
+        try:
+            pdb_bytes = ebi_rest.dbfetch("afdb", accession, "pdb", "raw")
+            pdb_text = pdb_bytes.decode("utf-8", errors="replace")
+        except Exception as e:
+            _report(reporter, f"dbfetch failed for {accession}: {e}",
+                    stage="afdb_fetch", level="error")
+            break
+        # dbfetch also returns an error message as plain text when not found
+        if not is_afdb_not_found(pdb_text):
+            return pdb_text
+        if not is_afdb_transient(pdb_text):
+            break
+        time.sleep(2 * (attempt + 1))
+
+    pdb_text = fetch_afdb_pdb_direct(accession, reporter)
+    if pdb_text is None or is_afdb_not_found(pdb_text):
         _report(reporter, f"PDB not found in AFDB for {accession}",
                 stage="afdb_fetch", level="warning")
         return None

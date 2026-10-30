@@ -14,6 +14,8 @@ import re
 import requests
 from Bio.SeqUtils.CheckSum import crc64
 
+from http_retry import request_with_retries
+
 ACCESSION_SIDECAR = "{run}.uniprot_accession.txt"  # written by structure_remote on a match
 
 
@@ -34,12 +36,12 @@ def checksum_lookup(seq, taxid=None):
     query = f"checksum:{checksum}"
     if str(taxid) not in ("", "1", "1.0", "None", None):
         query += f" AND taxonomy_id:{taxid}"
-    resp = requests.get(
-        "https://rest.uniprot.org/uniprotkb/search",
+    # batch-scale traffic sees transient 5xx/429 here; retrying avoids a needless BLAST fallback
+    resp = request_with_retries(
+        "get", "https://rest.uniprot.org/uniprotkb/search",
         params={"query": query, "format": "json", "fields": "accession", "size": 1},
         timeout=15,
     )
-    resp.raise_for_status()
     return checksum_lookup_response_to_accession(resp.json())
 
 
