@@ -199,7 +199,9 @@ recomputes reagents, ~9 s; the batch app re-exports the TSV from the database). 
 Batch reagent names are `{gene}_{uniprot}_{aa}{res}_{tag}` (`reagent_bundle.batch_names`; the
 product id alone when there is no gene); the single app's names are unchanged
 (`single_names`). Statuses: pending -> ready -> in_progress (opened) -> accepted; editing an
-accepted protein returns it to in_progress.
+accepted protein returns it to in_progress. Review recomputes the suggested sites every time a protein that is not
+accepted is opened (saved `selected_sites` are ignored); only accepted proteins keep their sites
+(`results_server(kept_sites=...)`).
 
 ## Dual-use constraint: Shiny app + standalone CLI
 

@@ -1,3 +1,5 @@
+import os
+
 from shiny import reactive
 
 from modules.batch_nav_server import batch_nav_server
@@ -28,10 +30,19 @@ def app_server(input, output, session):
         data = bstate["data"] or {}
         site_filters.set(dict(data.get("settings", {}).get("site_filters") or {}))
 
+    def _kept_sites(run_json):
+        """Accepted sites of the batch protein at run_json; None (recompute) for any other."""
+        real = os.path.realpath(run_json)
+        for p in (bstate["data"] or {}).get("proteins", []):
+            if p.get("run_json") and os.path.realpath(p["run_json"]) == real:
+                return list(p.get("sites") or []) if p.get("status") == "accepted" else None
+        return None
+
     batch_setup_server("setup", bstate=bstate)
     batch_progress_server("progress", bstate=bstate)
     results_server("results", shared_json=shared_json, shared_sites=shared_sites,
                    shared_results_trigger=shared_results_trigger, auto_suggest=True,
-                   loaded_path=loaded_path, site_filters=site_filters)
+                   loaded_path=loaded_path, site_filters=site_filters,
+                   kept_sites=_kept_sites)
     batch_nav_server("nav", bstate=bstate, shared_json=shared_json, shared_sites=shared_sites,
                      loaded_path=loaded_path)

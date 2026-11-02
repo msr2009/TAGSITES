@@ -128,9 +128,11 @@ _ANNOTATION_SCHEMES = {
 
 @module.server
 def results_server(input, output, session, shared_json, shared_sites, shared_results_trigger=None,
-                   auto_suggest=False, loaded_path=None, site_filters=None):
-    """Results tab. auto_suggest selects the suggested sites on a run with none saved (batch
-    app); loaded_path, when given, is set to the run JSON path once its sites are restored.
+                   auto_suggest=False, loaded_path=None, site_filters=None, kept_sites=None):
+    """Results tab. auto_suggest (batch app) ignores the run's saved selected_sites and selects
+    freshly computed suggestions on every load, except where kept_sites(run_json_path) returns
+    a list (the batch's accepted sites). loaded_path, when given, is set to the run JSON path
+    once its sites are set.
 
     site_filters (batch app): reactive.Value of {"n_suggested", "no_nterm", "no_cterm",
     "guide_within", "constitutive_only"}: how many sites to suggest, and the defaults of the
@@ -391,10 +393,14 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
         canon = os.path.join(wd, rn_str + ".run.json") if wd and rn_str else None
         json_path.set(canon)
 
-        # restore previously saved site selection (or start fresh)
-        saved = json_content["global"].get("selected_sites", [])
+        # restore the saved site selection; the batch app instead recomputes suggestions
+        # (see _auto_suggest) unless the batch keeps this protein's sites (accepted)
+        if auto_suggest:
+            kept = kept_sites(canon) if kept_sites is not None and canon else None
+            saved = list(kept or [])
+        else:
+            saved = json_content["global"].get("selected_sites", [])
         shared_sites.set(sorted(int(s) for s in saved))
-        # batch app: a run with nothing saved gets the suggested sites (see _auto_suggest)
         _suggest_pending.set(bool(auto_suggest and not saved))
         if loaded_path is not None:
             loaded_path.set(canon)
@@ -489,23 +495,21 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
     async def _send_plot(aa_df, range_df, meta, title, iso_result=None):
         """Build and send all plot data to the native canvas renderer.
 
-        Called from _do_load, so this computes scores directly with score_tag_sites()
-        rather than through the site_scores() calc — site_scores() depends (via
-        user_filter_spec) on the Advanced/Rescoring checkboxes, and _do_load is what
-        (re)renders those checkboxes each load; calling site_scores() from here would
-        make the load effect a listener of its own dynamically-recreated inputs and
-        loop forever. No user restriction has been set yet at load time anyway (the
-        panel is session-only and starts unrestricted), so this matches site_scores()'s
-        unfiltered case exactly. See _push_rescore for the filtered incremental path.
+        Called from _do_load, so site_scores() is read under reactive.isolate(): it depends
+        (via user_filter_spec) on the Advanced/Rescoring checkboxes that _do_load
+        (re)renders, and a plain read would make the load effect a listener of its own
+        dynamically-recreated inputs and loop forever. Using site_scores() rather than the
+        bare config keeps the plot's suggestions identical to the auto-selected sites when
+        restrictions apply from the start (the batch app's Setup site filters). See
+        _push_rescore for the incremental path on later edits.
         """
         payload = build_plot_payload(aa_df, range_df, iso_result=iso_result, title=title)
         payload["seq"] = meta.get("query_seq", "")
         payload["inputs"] = _input_names()
 
         # tag-site score heatmap row (see utils/scoring.py, issue #32)
-        cfg = load_scoring_config()
-        scores = score_tag_sites(aa_df, range_df, meta.get("query_seq", ""),
-                                 reagents_data.get(), cfg)
+        with reactive.isolate():
+            scores, cfg = site_scores()
         payload.update(_score_payload(scores, cfg, meta.get("seq_len", 0)))
 
         await session.send_custom_message("tagsites_set_plot", payload)

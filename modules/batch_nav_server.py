@@ -8,6 +8,8 @@ Output Reagents builds the ZIP of every accepted protein (scripts/batch_output.p
 
 Statuses: opening a ready protein marks it in_progress; editing an accepted protein's sites
 returns it to in_progress until it is accepted again.
+Opening a protein that is not accepted always selects freshly computed suggestions; only
+accepted proteins keep their stored sites (server_batch._kept_sites).
 """
 
 import asyncio
