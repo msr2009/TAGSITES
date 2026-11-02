@@ -18,6 +18,7 @@ Results are visualized as interactive Plotly plots. Users can then design CRISPR
 ```bash
 conda activate tagsites
 python app_modular.py
+python app_batch.py      # batch review app (local only, port 8001; see below)
 ```
 
 ## Project layout
@@ -25,6 +26,7 @@ python app_modular.py
 ```
 app_modular.py          # main Shiny entry point
 server.py / ui.py       # top-level Shiny orchestrators
+app_batch.py            # batch review app entry point (server_batch.py / ui_batch.py)
 config.py               # species taxonomy, result type config, JSON defaults
 task_definitions.json   # task registry: script-to-task mappings, params, and the
                          # auto-applied default_tasks set (see below)
@@ -34,6 +36,8 @@ modules/                # Shiny UI + server components
   progress_ui.py / progress_server.py # job progress display
   results_ui.py / results_server.py   # plot rendering, alignment visualization
   reagents_ui.py / reagents_server.py # CRISPR reagent design
+  batch_setup_* / batch_progress_* / batch_nav_*  # batch app tabs (the batch app reuses
+                                      # results_ui/results_server for review)
 
 scripts/                # core analysis executables
   run_tag_sites_from_json.py  # async pipeline orchestrator (main workhorse)
@@ -98,6 +102,18 @@ scripts/                # core analysis executables
                               # unchanged. Build the database with
                               # `python scripts/reference_data.py --only blastdb`
 
+  reagent_bundle.py           # the reagent download (HA / guide / oligo / SapTrap / genotyping
+                              # TSVs + GenBank) for chosen sites, no Shiny; used by the Reagents
+                              # tab and the batch app. CLI --run_json --sites --insert
+  batch_state.py              # batch app: {batch}.batch.json (settings, per-protein status,
+                              # sites, guides); atomic saves, checkpoints
+  batch_inputs.py             # batch app: protein list -> database products (gene, accession,
+                              # WB id, FASTA), default product per gene, duplicates
+  batch_prepare.py            # batch app: export run folders (no arms), EBI runs for misses,
+                              # preload the Results cache, alignment PDFs in a subprocess
+  batch_output.py             # batch app: reagent ZIP of accepted proteins + combined TSVs
+  batch_bundle.py             # batch app: the whole batch as one ZIP (batch JSON + one
+                              # single-app run bundle per protein); pack / unpack
   proteome_run.py             # batch driver: runs the analysis tasks for every protein of
                               # the proteome (one folder per protein, _status.jsonl)
   build_proteome_db.py        # consolidates a proteome_run into ONE SQLite file (proteins,
@@ -161,6 +177,29 @@ database, so a track the batch never ingested (e.g. modifications whose task was
 absent. Site scores are recomputed by the app with the reagent rows, so they can differ
 slightly from the stored `site_scores` (stored without reagents: `near_guide` / `not_near_splice`
 missing). The deployed app has no database file, so the card never appears there.
+
+**Batch review app** (`app_batch.py`, local only): Setup resolves a pasted/uploaded protein list
+against the proteome database (a gene with several products gets a dropdown; default: id equal to
+the term, else kind uniprot, then reagents designed, then structure, then longest), Prepare exports
+each protein to `{batch_app.batch_dir}/{batch}/{key}/` (an ordinary run folder) and fills the
+in-memory Results cache (`utils.results.enable_load_cache`, off in the single app), Review is the
+single-protein Results module with `auto_suggest=True` plus `batch_nav` (prev/next, status-coloured
+list, per-site guide picker defaulting to the nearest guide, Accept -> Next, Save, Output). Runs with
+`batch.config.worm_local.json` (local DB and reference copies; knobs in its `batch_app` block).
+Exports skip arms (`export_reagents(with_arms=False)`) and alignment PDFs (rendered afterwards in a
+niced subprocess: in-process they hold the GIL and slowed protein switches ~5x); `batch_output`
+regenerates arms only for accepted sites (`proteome_export.rows_with_arms`). Measured on 10 worm
+proteins: Prepare ~10 s (mostly one-time imports + 2 s genome load), protein switch 25-500 ms.
+Setup's site filters (suggested sites per protein, default 2; no N-term, no C-term, guide cut
+within N bp, constitutive only) are batch defaults of switches in Review's Rescoring panel (`results_server(site_filters=...)`); they mask
+suggestions only. A batch saves/loads as one ZIP (`batch_bundle`): each protein is an ordinary
+single-app bundle, minus the arm-less reagents TSV for database proteins (the single app then
+recomputes reagents, ~9 s; the batch app re-exports the TSV from the database). The manifest is
+`BATCH_MANIFEST.json` so the single app never takes the batch ZIP for a run bundle.
+Batch reagent names are `{gene}_{uniprot}_{aa}{res}_{tag}` (`reagent_bundle.batch_names`; the
+product id alone when there is no gene); the single app's names are unchanged
+(`single_names`). Statuses: pending -> ready -> in_progress (opened) -> accepted; editing an
+accepted protein returns it to in_progress.
 
 ## Dual-use constraint: Shiny app + standalone CLI
 

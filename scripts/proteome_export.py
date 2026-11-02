@@ -12,7 +12,8 @@ tasks "Analyses" and "Reagents" (status ids Analyses_db / Reagents_db in {rn}.st
 
     prepare_run     instant   {rn}.fa, {rn}.run.json, status seeded as pending
     export_analysis <0.5 s    track files, isoforms, alignment, structure
-    export_reagents 3-10 s    reagents TSV with regenerated arms, genotyping, gene model
+    export_reagents 1-7 s     reagents TSV with regenerated arms, genotyping, gene model
+                              (with_arms=False: ~0.1 s, arm columns blank; batch app)
 
     python scripts/proteome_db.py export trxr-1 /path/to/out_dir
 
@@ -213,7 +214,7 @@ def _batch_status(pid, conn):
                     row)) if row else {}
 
 
-def export_analysis(pid, out_dir, run_name=None, conn=None):
+def export_analysis(pid, out_dir, run_name=None, conn=None, render_alignment=True):
     """Write the track files, isoforms, alignment and structure; log each to the Analyses task."""
     own = conn is None
     conn = conn or P.open_db()
@@ -246,7 +247,7 @@ def export_analysis(pid, out_dir, run_name=None, conn=None):
                 _write(companion_path(out, "blast", "isoforms"), json.dumps(iso))
             note("conservation", "{} positions, {} isoforms".format(
                 n_cons, len(iso["isoforms"]) if iso else 0), "blast")
-            note("alignment", _copy_alignment(pid, prot, out, conn))
+            note("alignment", _copy_alignment(pid, prot, out, conn, render_alignment))
         elif batch.get("blast") not in (None, "ok"):
             note("conservation", "no data in database", "blast")
         if "plddt" in have:
@@ -286,8 +287,12 @@ def export_analysis(pid, out_dir, run_name=None, conn=None):
     return log
 
 
-def _copy_alignment(pid, prot, out, conn):
-    """Copy the batch's .aln beside the jsd and render its PDF; return a log phrase."""
+def _copy_alignment(pid, prot, out, conn, render=True):
+    """Copy the batch's .aln beside the jsd and render its PDF; return a log phrase.
+
+    render=False skips the PDF (seconds to a minute for long proteins; the batch app renders
+    it later with render_alignment_pdf, off the export path).
+    """
     row = conn.execute("SELECT aln_path FROM conservation_summary WHERE pid = ?",
                        (pid,)).fetchone()
     src = db_config()["run_dir"] / row[0] if row and row[0] else None
@@ -295,9 +300,16 @@ def _copy_alignment(pid, prot, out, conn):
         return "not in the batch folder"
     dest = companion_path(out, "blast", "alignment")
     shutil.copyfile(src, dest)
+    if not render:
+        return "copied; PDF deferred"
+    return render_alignment_pdf(dest)
+
+
+def render_alignment_pdf(aln_path):
+    """Render an alignment's PDF beside it; return a log phrase (never raises)."""
     try:
         from build_heatmap_reportlab import plot_alignment_reportlab
-        plot_alignment_reportlab(dest)
+        plot_alignment_reportlab(aln_path)
     except Exception as e:   # the alignment image is optional; the Results tab says so
         return "copied; PDF failed ({}: {})".format(type(e).__name__, e)
     return "copied and rendered"
@@ -334,8 +346,40 @@ def _reagent_frame(df, arms):
     return df[REAGENT_COLUMNS]
 
 
-def export_reagents(pid, out_dir, run_name=None, conn=None):
-    """Write the reagents TSV (arms regenerated), genotyping TSV and gene-model files."""
+def rows_with_arms(pid, keys, conn=None):
+    """TSV-shaped reagent rows with arms for only the (residue_index, guide_id) pairs in keys.
+
+    guide_id is "{strand}_{pam_fwd_start}_{spacer}", as the Reagents tab builds it. Used by the
+    batch app, whose run folders hold arm-less TSVs (export_reagents with_arms=False).
+    """
+    own = conn is None
+    conn = conn or P.open_db()
+    try:
+        df = P.get_reagents(pid, conn=conn)
+        gid = (df["guide_strand"].astype(str) + "_" + df["pam_fwd_start"].astype(str) + "_"
+               + df["spacer"].astype(str))
+        want = {(int(r), str(g)) for r, g in keys}
+        mask = [(int(r), g) in want for r, g in zip(df["residue_index"], gid)]
+        df = df[mask].reset_index(drop=True)
+        if df.empty:
+            return _reagent_frame(df, pd.DataFrame(columns=ARM_COLUMNS))
+        arms = P.regenerate_all_arms(pid, df, conn=conn)
+    finally:
+        if own:
+            conn.close()
+    return _reagent_frame(df, arms)
+
+
+ARM_COLUMNS = ["left_arm", "right_arm", "left_arm_wt", "right_arm_wt"]
+
+
+def export_reagents(pid, out_dir, run_name=None, conn=None, with_arms=True):
+    """Write the reagents TSV (arms regenerated), genotyping TSV and gene-model files.
+
+    with_arms=False leaves the four arm columns blank, skipping the per-residue regeneration
+    (median ~1 s, up to ~7 s per protein); the batch app regenerates arms only for accepted
+    sites (rows_with_arms).
+    """
     from cds_check import compare_to_query, translate_model, write_sidecar
     from parse_genewise import write_genewise_gff
     from site_selection_util import save_fasta
@@ -357,9 +401,14 @@ def export_reagents(pid, out_dir, run_name=None, conn=None):
         t0 = time.time()
         region = P.load_region(pid, conn)
         df = P.get_reagents(pid, conn=conn)
-        arms = P.regenerate_all_arms(pid, df, region, conn)
-        log.append("{} residue x guide rows, {} guides, arms regenerated in {:.1f} s".format(
-            len(df), df["gid"].nunique(), time.time() - t0))
+        # arms are the slow part; a blank frame keeps the TSV's columns when they are skipped
+        if with_arms:
+            arms = P.regenerate_all_arms(pid, df, region, conn)
+        else:
+            arms = pd.DataFrame("", index=df.index, columns=ARM_COLUMNS)
+        log.append("{} residue x guide rows, {} guides, arms {} in {:.1f} s".format(
+            len(df), df["gid"].nunique(), "regenerated" if with_arms else "skipped",
+            time.time() - t0))
         _status(wd, rn, TASK_REAGENTS, log="\n".join(log))
         # gene model first (the GenBank export reads it), reagents TSV last: the Reagents tab
         # loads the TSV the moment it appears, so everything it needs must already exist

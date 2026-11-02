@@ -1477,10 +1477,11 @@
     if (runTitleEl) runTitleEl.textContent = plotTitle;
     plotYMax      = 1.0;
     lineTracks    = msg.lineTracks    || [];
-    // sasa and hydrophobicity lines clutter the default view — start them hidden
+    // sliding-window property scores and hydrophobicity lines clutter the default view —
+    // start them hidden (SASA stays on); a click on the legend brings any back
     var defaultHidden = lineTracks
       .map(function (tr) { return tr.name; })
-      .filter(function (n) { return /_sasa$/.test(n) || /_hydro$/.test(n); });
+      .filter(function (n) { return /_scores$/.test(n) || /_hydro$/.test(n); });
     rangeFeatures = msg.rangeFeatures || [];
     seqArray      = (msg.seq || "").split("");
     scoreTrack    = msg.scoreTrack    || [];

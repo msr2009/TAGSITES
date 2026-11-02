@@ -21,6 +21,7 @@ prefix for a config-authored criterion key.
 """
 
 import json
+import os
 from pathlib import Path
 
 import pandas as pd
@@ -35,11 +36,24 @@ SCORING_CONFIG_PATH = Path(__file__).parent.parent / "scores.config.json"
 # the "exclude_descriptions" param on a range_absent criterion
 
 
+_CONFIG_CACHE = {}   # path -> (mtime, parsed config)
+
+
 def load_scoring_config(path=None):
-    """Load scores.config.json (or a given path), returning its parsed criteria list."""
-    path = path or SCORING_CONFIG_PATH
-    with open(path) as f:
-        return json.load(f)
+    """Load scores.config.json (or a given path), returning its parsed criteria list.
+
+    Parsed once per file version (keyed on mtime, so edits still take effect without a
+    restart); each caller gets its own deep copy, since callers extend the criteria.
+    """
+    import copy
+    path = str(path or SCORING_CONFIG_PATH)
+    mtime = os.path.getmtime(path)
+    hit = _CONFIG_CACHE.get(path)
+    if hit is None or hit[0] != mtime:
+        with open(path) as f:
+            hit = (mtime, json.load(f))
+        _CONFIG_CACHE[path] = hit
+    return copy.deepcopy(hit[1])
 
 
 def failed_flags(scores_df, config=None):

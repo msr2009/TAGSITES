@@ -18,7 +18,9 @@ def _asset_version(filename):
 
 
 @module.ui
-def results_ui():
+def results_ui(between=None):
+    """Results tab. `between` is placed below the site chips, above Advanced / Rescoring
+    (the batch app puts its per-site guide picker there)."""
     return ui.page_fluid(
         # tagsites assets (3Dmol must load before tagsites.js)
         ui.tags.script(src="3Dmol-min.js"),
@@ -98,6 +100,7 @@ def results_ui():
             class_="ts-sites-row",
         ),
         ui.br(),
+        between if between is not None else ui.div(),
 
         # ── Advanced / Rescoring: isoform + topology tag restrictions ─────────
         ui.output_ui("advanced_panel"),

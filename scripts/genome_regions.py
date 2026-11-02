@@ -34,6 +34,7 @@ Usage
 
 import gzip
 import re
+import threading
 import sqlite3
 import sys
 from pathlib import Path
@@ -153,7 +154,9 @@ def build_index(cfg=None, force=False):
             chrom, source, ftype, start, stop, score, strand, phase, attrs = parts
             if ftype == "CDS":
                 attr = _parse_attributes(attrs)
-                transcript_id = attr.get("protein_id") or attr.get("Parent", "").split(":")[-1]
+                # key on the parent transcript, since that is what transcript_spans holds:
+                # Ensembl yeast names the CDS YOL143C but its mRNA YOL143C_mRNA
+                transcript_id = attr.get("Parent", "").split(":")[-1] or attr.get("protein_id")
                 if not transcript_id:
                     continue
                 row_order += 1
@@ -316,9 +319,19 @@ def get_transcript_span(transcript_id, conn=None):
 # ── Genome FASTA -> in-memory sequence lookup ─────────────────────────────────
 
 _genome_cache = None  # lazy singleton: {chrom: sequence str}
+_genome_lock = threading.Lock()  # one load even when worker threads ask at once
 
 
 def _load_genome(cfg=None):
+    """The whole genome as {chrom: sequence}, loaded once per process."""
+    if _genome_cache is not None:
+        return _genome_cache
+    with _genome_lock:
+        return _load_genome_locked(cfg)
+
+
+def _load_genome_locked(cfg=None):
+    """Body of _load_genome, run under its lock (a waiting thread finds the cache filled)."""
     global _genome_cache
     if _genome_cache is not None:
         return _genome_cache

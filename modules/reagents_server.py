@@ -5,7 +5,6 @@ presents one accordion card per chosen tag site (shared_sites) with ASCII
 diagrams, guide-RNA selection checkboxes, and output downloads.
 """
 
-import io
 import json
 import os
 import re
@@ -20,23 +19,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 from reagent_sequences import (
     annotate_region_spans,
     ascii_diagram,
-    build_ssodn,
-    calc_tm,
     check_recut_risk,
     design_genotyping_primers,
     design_pcr_primers,
-    load_tags,
-    reconstruct_wt_arms,
     truncate_arms,
     truncate_arms_with_tolerance,
-)
-from genbank_export import (
-    PRIMER_TYPES as GENBANK_PRIMER_TYPES,
-    build_gdna_record,
-    build_knockin_record,
-    load_cds_strand,
-    load_exons,
-    load_region,
 )
 from cds_check import format_mismatches, read_sidecar as read_model_check
 from offtarget_remote import load_sidecar as load_offtarget_sidecar
@@ -46,22 +33,21 @@ from plasmid_assembly import (
     SAPI_SITE,
     SAPI_RC,
     SAPTRAP_OVERHANGS,
-    build_saptrap_site,
     find_internal_sapi,
     sapi_amplification_primers,
 )
 
+import reagent_bundle as RB
 from modules.json_card import json_upload_card as _json_upload_card
 from modules.setup_server import _off_loop
 from modules.setup_ui import label_with_tip
 from utils.results import load_isoforms_from_json, load_run_metadata
 from utils.tag_filters import position_isoform_labels, describe_position_isoforms
 
-_TAGS_PATH = Path(__file__).parent.parent / "tables" / "tags.tsv"
-_TAGS = load_tags(_TAGS_PATH) if _TAGS_PATH.exists() else {}
+_TAGS = RB.load_tag_table()
 
 # Arm-length defaults by repair type
-_ARM_DEFAULTS = {"ha": 1000, "ssodn": 45, "amplicon": 45, "plasmid": 57}
+_ARM_DEFAULTS = RB.ARM_DEFAULTS
 
 # Genotyping-primer design window: how far off the insert primers must sit
 _GENOTYPING_FLANK_MIN = 50
@@ -347,26 +333,8 @@ def reagents_server(input, output, session, shared_json, shared_sites):
             return False
 
     def _wt_arms_for_row(row):
-        """Return (wt_left, wt_right, wt_is_true) for a reagents row.
-
-        Prefers the genuine left_arm_wt/right_arm_wt TSV columns; falls back to
-        reconstructing WT arms from the recorded mutation for older TSVs. These
-        feed truncate_arms/truncate_arms_with_tolerance so a recut-blocking
-        mutation farther than arm_length from the junction still gets included
-        rather than truncated away. wt_is_true is False when reconstruction
-        failed and only the mutated arms are available.
-        """
-        if "left_arm_wt" in row and "right_arm_wt" in row:
-            return str(row["left_arm_wt"]), str(row["right_arm_wt"]), True
-        recon = reconstruct_wt_arms(
-            str(row["left_arm"]), str(row["right_arm"]),
-            int(row["insert_pos"]),
-            str(row.get("recut_block_method", "") or ""),
-            str(row.get("mutation_desc", "") or ""),
-        )
-        if recon is not None:
-            return recon[0], recon[1], True
-        return str(row["left_arm"]), str(row["right_arm"]), False
+        """Return (wt_left, wt_right, wt_is_true) for a reagents row (reagent_bundle)."""
+        return RB.wt_arms_for_row(row)
 
     @reactive.calc
     def _offtarget_sidecar():
@@ -1272,64 +1240,21 @@ def reagents_server(input, output, session, shared_json, shared_sites):
         )
 
     def _selected_rows():
-        """Yield (row, left_arm, right_arm) for each selected guide.
-
-        For the SapTrap long-arm (PCR-primer) path, arms are widened on the
-        far/outer side per saptrap_arm_tolerance so sapi_amplification_primers
-        has room to search — the insertion-adjacent boundary is unaffected.
-        All other repair types (and short SapTrap arms) get the plain exact
-        truncation, unchanged.
-        """
-        df  = reagents_df.get()
-        sel = selected_guides.get()
-        if df is None or not sel:
-            return
+        """(row, left_arm, right_arm) for each selected guide, truncated to the arm length."""
         try:
             arm_len = int(input.arm_length())
         except Exception:
-            return
+            return []
         try:
             repair = input.repair_type()
         except Exception:
             repair = ""
-        use_widened = repair == "plasmid" and arm_len > OLIGO_MAX
-        if use_widened:
-            try:
-                tolerance = float(input.saptrap_arm_tolerance()) / 100.0
-            except Exception:
-                tolerance = 0.2
-        for rid, gid_set in sel.items():
-            for gid in gid_set:
-                matches = df[(df["residue_index"] == rid) & (df["guide_id"] == gid)]
-                if matches.empty:
-                    continue
-                row = matches.iloc[0]
-                wt_left_src, wt_right_src, wt_is_true = _wt_arms_for_row(row)
-                wt_kwargs = dict(
-                    left_arm_wt=wt_left_src if wt_is_true else None,
-                    right_arm_wt=wt_right_src if wt_is_true else None,
-                )
-                try:
-                    if use_widened:
-                        left, right = truncate_arms_with_tolerance(
-                            str(row["left_arm"]), str(row["right_arm"]), arm_len, tolerance,
-                            **wt_kwargs,
-                        )
-                    else:
-                        left, right = truncate_arms(
-                            str(row["left_arm"]), str(row["right_arm"]), arm_len,
-                            **wt_kwargs,
-                        )
-                except ValueError:
-                    continue
-                yield row, left, right
+        return RB.select_rows(reagents_df.get(), selected_guides.get(), arm_len, repair,
+                              _bundle_opts()["saptrap_tolerance"])
 
     def _guide_label(row):
         """Compact guide label: {site}{strand}{distance} e.g. K45+3."""
-        return '{}{}{}{}'.format(
-            row['amino_acid'], int(row['residue_index']),
-            str(row['guide_strand']), int(row['distance']),
-        )
+        return RB.guide_label(row)
 
     def _insert_tag_name():
         """Tag name for use in oligo filenames; falls back to 'custom'."""
@@ -1337,217 +1262,40 @@ def reagents_server(input, output, session, shared_json, shared_sites):
             name = input.tag_name()
         except Exception:
             name = 'Custom'
-        return 'custom' if name == 'Custom' else name.replace(' ', '-')
+        return RB.tag_label(name)
 
-    def _assemble_ha_tsv():
-        """[runname]_homology-arms.tsv: name, 5p_HA, 3p_HA, guide."""
-        rn = run_name.get() or 'run'
-        lines = ["name\t5p_HA\t3p_HA\tguide"]
-        for row, left, right in _selected_rows():
-            site = '{}{}'.format(row['amino_acid'], int(row['residue_index']))
-            lines.append('{}_{}\t{}\t{}\t{}'.format(
-                rn, site, left, right, str(row['spacer'])))
-        return '\n'.join(lines) + '\n'
+    def _bundle_opts():
+        """The repair-specific inputs as reagent_bundle options (defaults where unset)."""
+        opts = dict(RB.OPTION_DEFAULTS)
+        readers = {
+            "pcr_tm": lambda: float(input.pcr_tm()),
+            "pcr_phos": lambda: input.pcr_phos(),
+            "pcr_fwd_ext": lambda: input.pcr_fwd_ext().strip().upper(),
+            "pcr_rev_ext": lambda: input.pcr_rev_ext().strip().upper(),
+            "saptrap_tm": lambda: float(input.saptrap_tm()),
+            "saptrap_tolerance": lambda: float(input.saptrap_arm_tolerance()) / 100.0,
+            "saptrap_genbank": lambda: bool(input.saptrap_genbank()),
+        }
+        # an input absent from the current repair panel keeps its default
+        for key, read in readers.items():
+            try:
+                opts[key] = read()
+            except Exception:
+                pass
+        return opts
 
-    def _assemble_guides_tsv():
-        """[runname]_guides.tsv: name (run+site+strand+dist), guide sequence."""
-        rn = run_name.get() or 'run'
-        lines = ["name\tsequence"]
-        for row, left, right in _selected_rows():
-            lines.append('{}_{}\t{}'.format(rn, _guide_label(row), str(row['spacer'])))
-        return '\n'.join(lines) + '\n'
-
-    def _assemble_oligos_tsv():
-        """[runname]_oligos.tsv for ssodn/amplicon; None when not applicable."""
+    def _build_zip():
+        """Produce ZIP bytes: always HA + guides TSVs; oligos when applicable."""
         repair = input.repair_type()
-        if repair not in ('ssodn', 'amplicon'):
-            return None
-        rn     = run_name.get() or 'run'
-        insert = _insert_seq()
-        tag    = _insert_tag_name()
-        lines  = ["name\tsequence\tnotes"]
-        for row, left, right in _selected_rows():
-            base = '{}_{}_{}'.format(rn, _guide_label(row), tag)
-            cut  = int(row['cut_pos'])
-            ins  = int(row['insert_pos'])
-            if repair == 'ssodn':
-                seq, _, _ = build_ssodn(left, right, insert, cut, ins, True)
-                lines.append('{}_repair\t{}\t'.format(base, seq))
-            elif repair == 'amplicon':
-                template = insert
-                tm = 60.0
-                try:
-                    tm = float(input.pcr_tm())
-                except Exception:
-                    pass
-                phos = False
-                try:
-                    phos = input.pcr_phos()
-                except Exception:
-                    pass
-                if template:
-                    (_, fwd), (_, rev), meta = design_pcr_primers(
-                        left, right, template, tm, phos, cut, ins
-                    )
-                    fwd_ext = ''
-                    rev_ext = ''
-                    try:
-                        fwd_ext = input.pcr_fwd_ext().strip().upper()
-                    except Exception:
-                        pass
-                    try:
-                        rev_ext = input.pcr_rev_ext().strip().upper()
-                    except Exception:
-                        pass
-                    if fwd_ext:
-                        fwd = fwd_ext + fwd
-                    if rev_ext:
-                        rev = rev_ext + rev
-                    notes = 'fallback=True' if meta['used_fallback'] else ''
-                    lines.append('{}_F\t{}\t{}'.format(base, fwd, notes))
-                    lines.append('{}_R\t{}\t{}'.format(base, rev, notes))
-        return '\n'.join(lines) + '\n' if len(lines) > 1 else None
-
-    def _assemble_saptrap_tsv():
-        """[runname]_saptrap-oligos.tsv: sgRNA oligos + 5'HA + 3'HA oligos/primers.
-
-        Returns (tsv_text, genbank_records) where genbank_records is a list of
-        (filename, SeqRecord) pairs (empty list when GenBank option is off).
-        """
         rn = run_name.get() or 'run'
-        tm = 60.0
-        try:
-            tm = float(input.saptrap_tm())
-        except Exception:
-            pass
-        tolerance = 0.2
-        try:
-            tolerance = float(input.saptrap_arm_tolerance()) / 100.0
-        except Exception:
-            pass
-        do_gb = False
-        try:
-            do_gb = bool(input.saptrap_genbank())
-        except Exception:
-            pass
+        tag = _insert_tag_name()
         try:
             arm_len = int(input.arm_length())
         except Exception:
             arm_len = None
-
-        lines = ["name\tsequence\tkind\tnotes"]
-        gb_pairs = []   # list of (filename, SeqRecord)
-        for row, left, right in _selected_rows():
-            oligo_rows, records = build_saptrap_site(
-                row, left, right, tm_target=tm, genbank=do_gb,
-                arm_length=arm_len, tolerance=tolerance,
-            )
-            for orow in oligo_rows:
-                lines.append("{}\t{}\t{}\t{}".format(
-                    orow["name"], orow["sequence"],
-                    orow.get("kind", ""), orow.get("notes", "")))
-            for rec in records:
-                gb_pairs.append((
-                    "{}_{}_saptrap.gb".format(rn, rec.id), rec
-                ))
-
-        tsv_text = '\n'.join(lines) + '\n' if len(lines) > 1 else None
-        return tsv_text, gb_pairs
-
-    def _assemble_genotyping_tsv():
-        """[runname]_genotyping-primers.tsv, or None if nothing has been designed."""
-        results = genotyping_results.get()
-        if not results:
-            return None
-        df = reagents_df.get()
-        lines = ["residue_index\tamino_acid\tamplicon_type\tfwd_seq\tfwd_tm\trev_seq\trev_tm\tproduct_size"]
-        for rid in sorted(results):
-            primers = results[rid]
-            if not primers:
-                continue
-            aa = ""
-            if df is not None:
-                match = df[df["residue_index"] == rid]
-                if not match.empty:
-                    aa = str(match.iloc[0]["amino_acid"])
-            for amplicon_type, p in primers.items():
-                lines.append("{}\t{}\t{}\t{}\t{:.2f}\t{}\t{:.2f}\t{}".format(
-                    rid, aa, amplicon_type,
-                    p["fwd_seq"], p["fwd_tm"], p["rev_seq"], p["rev_tm"],
-                    int(p["product_size"]),
-                ))
-        return '\n'.join(lines) + '\n' if len(lines) > 1 else None
-
-    def _assemble_genbank():
-        """GenBank records for every selected guide: (filename, SeqRecord) pairs.
-
-        Two records per selected guide — the WT genomic region and the same
-        region carrying the knock-in. Both are named by site+strand+distance, so
-        a guide's pair sits together in the ZIP. The knock-in record is per-guide
-        rather than per-site because the recut-blocking edits it annotates are
-        guide-specific. Returns [] when the region FASTA is unavailable.
-        """
-        region = load_region(genomic_path.get())
-        if region is None:
-            return []
-        exons   = load_exons(genewise_path.get())
-        strand  = load_cds_strand(genewise_path.get())
-        rn      = run_name.get() or 'run'
-        insert  = _insert_seq()
-        tag     = _insert_tag_name()
-        results = genotyping_results.get() or {}
-        pairs = []
-        for row, left, right in _selected_rows():
-            label   = _guide_label(row)
-            primers = results.get(int(row['residue_index'])) or {}
-            wt_left, wt_right, wt_is_true = _wt_arms_for_row(row)
-            try:
-                gdna = build_gdna_record(
-                    row, region, wt_left, wt_right, exons, primers,
-                    GENBANK_PRIMER_TYPES, run_name=rn, cds_strand=strand,
-                )
-                knockin = build_knockin_record(
-                    row, region, left, right, insert,
-                    left_wt=wt_left if wt_is_true else None,
-                    right_wt=wt_right if wt_is_true else None,
-                    exons=exons, primers=primers, types=GENBANK_PRIMER_TYPES,
-                    insert_name=tag, run_name=rn, cds_strand=strand,
-                )
-            except Exception:
-                continue
-            pairs.append(('{}_{}_gDNA.gb'.format(rn, label), gdna))
-            pairs.append(('{}_{}_knockin.gb'.format(rn, label), knockin))
-        return pairs
-
-    def _build_zip():
-        """Produce ZIP bytes: always HA + guides TSVs; oligos when applicable."""
-        import zipfile as _zf
-        from Bio import SeqIO
-        repair = input.repair_type()
-        rn  = run_name.get() or 'run'
-        buf = io.BytesIO()
-        with _zf.ZipFile(buf, 'w', _zf.ZIP_DEFLATED) as zf:
-            zf.writestr('{}_homology-arms.tsv'.format(rn), _assemble_ha_tsv())
-            zf.writestr('{}_guides.tsv'.format(rn),        _assemble_guides_tsv())
-            genotyping_tsv = _assemble_genotyping_tsv()
-            if genotyping_tsv:
-                zf.writestr('{}_genotyping-primers.tsv'.format(rn), genotyping_tsv)
-            if repair == 'plasmid':
-                tsv_text, gb_pairs = _assemble_saptrap_tsv()
-                if tsv_text:
-                    zf.writestr('{}_saptrap-oligos.tsv'.format(rn), tsv_text)
-                for fname, rec in gb_pairs:
-                    gb_buf = io.StringIO()
-                    SeqIO.write(rec, gb_buf, "genbank")
-                    zf.writestr(fname, gb_buf.getvalue())
-            else:
-                oligos = _assemble_oligos_tsv()
-                if oligos:
-                    zf.writestr('{}_oligos.tsv'.format(rn), oligos)
-            # annotated GenBank records always ride along with the TSVs
-            for fname, rec in _assemble_genbank():
-                gb_buf = io.StringIO()
-                SeqIO.write(rec, gb_buf, "genbank")
-                zf.writestr(fname, gb_buf.getvalue())
-        buf.seek(0)
-        return buf.read()
+        files = RB.build_files(
+            _selected_rows(), RB.single_names(rn, tag), repair, _insert_seq(), tag, arm_len,
+            _bundle_opts(), genotyping=genotyping_results.get(), df=reagents_df.get(),
+            region_fa=genomic_path.get(), genewise=genewise_path.get(),
+        )
+        return RB.write_zip(files)

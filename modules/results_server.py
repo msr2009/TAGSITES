@@ -3,6 +3,7 @@ import base64, json, os, re
 from modules.json_card import json_upload_card as _json_upload_card
 
 from utils.results import (
+    cached_load,
     load_data_from_json,
     load_run_metadata,
     load_reagents_df,
@@ -126,7 +127,16 @@ _ANNOTATION_SCHEMES = {
 
 
 @module.server
-def results_server(input, output, session, shared_json, shared_sites, shared_results_trigger=None):
+def results_server(input, output, session, shared_json, shared_sites, shared_results_trigger=None,
+                   auto_suggest=False, loaded_path=None, site_filters=None):
+    """Results tab. auto_suggest selects the suggested sites on a run with none saved (batch
+    app); loaded_path, when given, is set to the run JSON path once its sites are restored.
+
+    site_filters (batch app): reactive.Value of {"n_suggested", "no_nterm", "no_cterm",
+    "guide_within", "constitutive_only"}: how many sites to suggest, and the defaults of the
+    Site filters switches in Advanced / Rescoring. Like every restriction there, they mask suggestions and scoring only — any
+    site can still be added by hand and gets reagents.
+    """
 
     # ── Per-run data ────────────────────────────────────────────────────────────
     aa_data       = reactive.Value()     # continuous scores DataFrame
@@ -151,6 +161,9 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
 
     # canonical on-disk path (not the Shiny upload temp path) — used for saves
     json_path = reactive.Value(None)
+
+    # set by _do_load when auto_suggest is on and the run has no saved sites
+    _suggest_pending = reactive.Value(False)
 
     # ── Advanced / Rescoring: isoform + topology restrictions (session-only) ────
 
@@ -186,6 +199,38 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
         topology = _topology_rows()
         return sorted(set(topology["source"])) if topology is not None else []
 
+    def _filter_default(key):
+        """Batch default of one site filter (False/0 in the single-protein app)."""
+        if site_filters is None:
+            return False
+        return (site_filters.get() or {}).get(key) or False
+
+    def _suggest(scores):
+        """Suggested sites; the batch's n_suggested sets how many (scoring's default otherwise)."""
+        n = int(_filter_default("n_suggested") or 0)
+        return pick_suggested_sites(scores, max_sites=n) if n else pick_suggested_sites(scores)
+
+    def _site_filter_masks(seq_len):
+        """Extra mask criteria from the Site filters switches (batch app only)."""
+        if site_filters is None or not seq_len:
+            return []
+        out = []
+        if _checked("filt_no_nterm", bool(_filter_default("no_nterm"))):
+            out.append(position_mask_criterion({1}, "user_no_nterm", "N-terminus"))
+        if _checked("filt_no_cterm", bool(_filter_default("no_cterm"))):
+            out.append(position_mask_criterion({seq_len}, "user_no_cterm", "C-terminus"))
+        within = int(_filter_default("guide_within") or 0)
+        if within and _checked("filt_guide_within", True):
+            rg = reagents_data.get()
+            near = set()
+            if rg is not None and not rg.empty:
+                best = rg.groupby("residue_index")["distance"].min()
+                near = {int(r) for r, d in best.items() if d <= within}
+            out.append(position_mask_criterion(set(range(1, seq_len + 1)) - near,
+                                               "user_guide_within",
+                                               "no guide within {} bp".format(within)))
+        return out
+
     @reactive.calc
     def user_filter_spec():
         """(visible_keys, tagged_keys, constitutive, checked_topology) from the advanced controls."""
@@ -197,7 +242,7 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
                 visible_keys.add(k)
             if _checked(f"iso_tag_{_safe_id(k)}", True):
                 tagged_keys.add(k)
-        constitutive = _checked("iso_constitutive_only", False)
+        constitutive = _checked("iso_constitutive_only", _filter_default("constitutive_only"))
         checked_topology = {lbl for lbl in _topology_labels()
                             if _checked(f"topology_tag_{_safe_id(lbl)}", _topology_default(lbl))}
         return visible_keys, tagged_keys, constitutive, checked_topology
@@ -249,6 +294,7 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
                      else "outside " + ", ".join(sorted(checked_topology)))
             extra.append(position_mask_criterion(all_positions - topo_allowed,
                                                   "user_topology_mask", label))
+        extra += _site_filter_masks(seq_len)
         cfg = with_extra_criteria(cfg, extra)
 
         scores_df = score_tag_sites(aa_df, range_df, meta.get("query_seq", ""),
@@ -259,8 +305,10 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
 
     async def _do_load(json_content):
         """Parse a loaded JSON dict and push all results to the UI."""
-        aa_df, range_df, alns, iso_result = load_data_from_json(json_content, RESULTS_TYPE_DICT)
-        meta = load_run_metadata(json_content)
+        # cached_load is a pass-through unless the batch app enabled the load cache
+        aa_df, range_df, alns, iso_result = cached_load(
+            "data", json_content, load_data_from_json, RESULTS_TYPE_DICT)
+        meta = cached_load("meta", json_content, load_run_metadata)
         aa_data.set(aa_df)
         range_data.set(range_df)
         aln_meta.set(alns)
@@ -273,7 +321,7 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
         # data is optional and only present once the Reagents task has run; site_scores()
         # itself reloads scores.config.json each call so config edits take effect without
         # restarting the app
-        reagents_data.set(load_reagents_df(json_content))
+        reagents_data.set(cached_load("reagents", json_content, load_reagents_df))
 
         # build color-by button choices, grouped by analysis type (BLAST jobs together,
         # then pLDDT jobs together) rather than left in raw column order
@@ -346,6 +394,10 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
         # restore previously saved site selection (or start fresh)
         saved = json_content["global"].get("selected_sites", [])
         shared_sites.set(sorted(int(s) for s in saved))
+        # batch app: a run with nothing saved gets the suggested sites (see _auto_suggest)
+        _suggest_pending.set(bool(auto_suggest and not saved))
+        if loaded_path is not None:
+            loaded_path.set(canon)
 
     @reactive.effect
     @reactive.event(input.json_file_input)
@@ -431,7 +483,7 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
                            for p in range(1, seq_len + 1)],
             "scoreMaskReasons": [mask_reasons_by_pos.get(p, []) for p in range(1, seq_len + 1)],
             "scoreMax": max(1, int(score_max(cfg))),
-            "suggestedSites": pick_suggested_sites(scores),
+            "suggestedSites": _suggest(scores),
         }
 
     async def _send_plot(aa_df, range_df, meta, title, iso_result=None):
@@ -547,11 +599,27 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
     def on_add_suggested():
         """Add the top-scoring, well-spaced tag sites (see utils.scoring.score_tag_sites)."""
         scores, _ = site_scores()
-        picked = pick_suggested_sites(scores) if scores is not None and not scores.empty else []
+        picked = _suggest(scores) if scores is not None and not scores.empty else []
         if not picked:
             return
         sites = sorted(set(shared_sites.get()) | set(picked))
         shared_sites.set(sites)
+
+    @reactive.effect
+    def _auto_suggest():
+        """Select the suggested sites once per load of a run with none saved (batch app).
+
+        Runs as its own effect, not inside _do_load: site_scores() depends on the values
+        _do_load writes, so reading it there would loop (see the note in _do_load).
+        """
+        if not _suggest_pending.get():
+            return
+        scores, _ = site_scores()
+        with reactive.isolate():
+            _suggest_pending.set(False)
+            picked = _suggest(scores) if scores is not None and not scores.empty else []
+            if picked:
+                shared_sites.set(sorted(set(picked)))
 
     @reactive.effect
     @reactive.event(input.clear_highlights_button)
@@ -742,10 +810,31 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
                           reverse=True)
         topology_labels = _topology_labels()
         topology_sources_present = _topology_sources_present()
-        if len(isoforms) <= 1 and not topology_labels:
+        if len(isoforms) <= 1 and not topology_labels and site_filters is None:
             return ui.div()
 
         body = []
+        # batch app: the Setup site filters, switchable per protein
+        if site_filters is not None:
+            within = int(_filter_default("guide_within") or 0)
+            switches = [
+                ui.input_switch("filt_no_nterm", "Mask N-terminus (residue 1)",
+                                value=bool(_filter_default("no_nterm"))),
+                ui.input_switch("filt_no_cterm", "Mask C-terminus (last residue)",
+                                value=bool(_filter_default("no_cterm"))),
+            ]
+            if within:
+                switches.append(ui.input_switch(
+                    "filt_guide_within", "Mask sites with no guide cut within {} bp".format(within),
+                    value=True))
+            body.append(ui.div(
+                ui.span("Site filters (batch defaults)", class_="ts-matrix-name-label"),
+                *switches,
+                ui.span("Masks suggestions only; any site can still be added by hand.",
+                        class_="ts-filter-hint"),
+                class_="ts-site-filters"))
+            if len(isoforms) > 1 or topology_labels:
+                body.append(ui.tags.hr(class_="ts-filter-divider"))
 
         if len(isoforms) > 1:
             # Show before Tag so Tag ends up the rightmost column in both matrices —
@@ -786,7 +875,8 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
                 class_="ts-matrix",
             ))
             body.append(ui.div(
-                ui.input_switch("iso_constitutive_only", "Constitutive only", value=False),
+                ui.input_switch("iso_constitutive_only", "Constitutive only",
+                                value=bool(_filter_default("constitutive_only"))),
                 ui.span("— overrides the Tag column above (disables those checkboxes); "
                         "restricts tagging to sequence present in every shown isoform.",
                         class_="ts-filter-hint"),
@@ -858,13 +948,23 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
         available = int((~scores["masked"]).sum())
         return f"{available} / {seq_len} positions available"
 
+    _aln_refresh = reactive.Value(0)   # bumped when a closed pane is opened
+    _aln_embedded = [set()]            # panes whose PDF is in the last render
+
     @render.ui
     def alignments_container():
         """Render blast alignment PDFs as collapsible accordion panes."""
         alns = aln_meta.get()
+        _aln_refresh.get()
         if not alns:
             return ui.div()
 
+        # PDFs (up to ~1.5 MB each) are embedded only for open panes, so a load sends none
+        try:
+            with reactive.isolate():
+                open_panes = set(input.ts_aln_accordion() or [])
+        except Exception:
+            open_panes = set()
         panels = []
         for aln_path, task_name, params in alns:
             pdf_path = aln_path.removesuffix(".aln") + ".pdf"
@@ -878,7 +978,9 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
                 class_="ts-aln-params",
             ) if param_rows else ui.div()
 
-            if os.path.exists(pdf_path):
+            if os.path.exists(pdf_path) and task_name not in open_panes:
+                body = ui.div(param_table, ui.p("Loading alignment…", class_="text-muted"))
+            elif os.path.exists(pdf_path):
                 with open(pdf_path, "rb") as f:
                     b64 = base64.b64encode(f.read()).decode("ascii")
                 embed = ui.tags.iframe(
@@ -902,5 +1004,16 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
             return ui.div()
         return ui.div(
             ui.h4("Alignments"),
-            ui.accordion(*panels, id="ts_aln_accordion", open=False),
+            ui.accordion(*panels, id="ts_aln_accordion", open=sorted(open_panes) or False),
         )
+
+    @reactive.effect
+    @reactive.event(input.ts_aln_accordion)
+    def _aln_pane_opened():
+        """Re-render the alignments when a pane opens so its PDF gets embedded."""
+        opened = set(input.ts_aln_accordion() or [])
+        if opened - _aln_embedded[0]:
+            _aln_embedded[0] = opened
+            _aln_refresh.set(_aln_refresh.get() + 1)
+        else:
+            _aln_embedded[0] = opened

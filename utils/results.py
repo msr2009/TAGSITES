@@ -105,6 +105,52 @@ def _select_isoform_candidate(candidates):
     return best
 
 
+# ── optional in-memory load cache (batch app) ─────────────────────────────────
+# Off by default, so the single-protein app always re-reads files. The batch app turns it on
+# and fills it in a background thread, making a protein switch in Results a dict lookup.
+# Keys include every task output's mtime, so a re-run task is re-read.
+_LOAD_CACHE = {"on": False, "max": 0, "data": None, "lock": None}
+
+
+def enable_load_cache(max_entries=500):
+    """Turn on the results load cache (LRU of max_entries runs x loader)."""
+    import threading
+    from collections import OrderedDict
+    _LOAD_CACHE.update(on=True, max=max_entries, data=OrderedDict(), lock=threading.Lock())
+
+
+def _load_cache_key(kind, json_in):
+    """Cache key: loader kind, run identity, task definitions and output-file mtimes."""
+    gb = json_in.get("global", {})
+    tasks = json_in.get("tasks", {})
+    mtimes = []
+    # mtimes of the files the loaders read, so a re-run task invalidates its entry
+    for t in sorted(tasks):
+        out = (tasks[t].get("args") or {}).get("output", "")
+        mtimes.append((out, os.path.getmtime(out) if out and os.path.exists(out) else None))
+    return (kind, gb.get("working_dir", ""), gb.get("run_name", ""), gb.get("pdb", ""),
+            json.dumps(tasks, sort_keys=True, default=str), tuple(mtimes))
+
+
+def cached_load(kind, json_in, fn, *args):
+    """fn(json_in, *args), memoized when the load cache is on."""
+    if not _LOAD_CACHE["on"]:
+        return fn(json_in, *args)
+    key = _load_cache_key(kind, json_in)
+    with _LOAD_CACHE["lock"]:
+        data = _LOAD_CACHE["data"]
+        if key in data:
+            data.move_to_end(key)
+            return data[key]
+    value = fn(json_in, *args)
+    with _LOAD_CACHE["lock"]:
+        data[key] = value
+        # evict least recently used runs past the cap
+        while len(data) > _LOAD_CACHE["max"]:
+            data.popitem(last=False)
+    return value
+
+
 def load_data_from_json(json_in, type_dict):
     """Load per-task result TSVs referenced in the run JSON.
 
@@ -431,9 +477,9 @@ def plot_results(aa_df, range_df, title="Results Plot"):
     # row 1: continuous per-position scores — one line per task column
     for col_name in aa_df.columns[1:]:
         color = task_colors.get(col_name, "#888888")
-        # sasa and hydrophobicity lines clutter the default view; start hidden,
-        # user can still click them on in the legend
-        off_by_default = col_name.endswith("_sasa") or col_name.endswith("_hydro")
+        # property-score and hydrophobicity lines clutter the default view; start hidden
+        # (SASA stays on), user can still click them on in the legend
+        off_by_default = col_name.endswith("_scores") or col_name.endswith("_hydro")
         fig.add_trace(
             go.Scatter(
                 x=aa_df["pos"], y=aa_df[col_name],
