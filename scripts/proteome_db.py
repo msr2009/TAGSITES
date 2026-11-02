@@ -86,6 +86,8 @@ def find_protein(term, conn=None):
                 OR p.gene_name = :t COLLATE NOCASE OR p.wormbase_gene = :t COLLATE NOCASE
                 OR p.wormbase_transcript = :t COLLATE NOCASE OR p.wb_transcript = :t COLLATE NOCASE
                 OR p.wb_gene = :t COLLATE NOCASE OR w.locus = :t COLLATE NOCASE
+                OR p.wormbase_transcript = 'CELE_' || :t COLLATE NOCASE
+                OR lower(w.transcript) GLOB lower(:t) || '[a-z]'
              ORDER BY p.pid"""
     own = conn is None
     conn = conn or open_db()
