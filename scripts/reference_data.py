@@ -53,7 +53,9 @@ Usage
 """
 
 import gzip
+import os
 import subprocess
+import sys
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).parent.parent
@@ -69,8 +71,10 @@ DEFAULTS = {
     "ensembl_species": "caenorhabditis_elegans",
     "ensembl_assembly": "WBcel235",
     "interpro_release": "110.0",
-    # Rhabditida order taxid, for the rhabditida_trembl ortholog reference database
-    "rhabditida_taxid": 6236,
+    # clade taxid and database name of the TrEMBL ortholog reference database (--only trembl);
+    # the name must match the conservation_local.search_databases entry
+    "trembl_taxid": 6236,
+    "trembl_name": "rhabditida_trembl",
     # Source protein FASTA for scripts/build_pfam_cache.py's bulk Pfam scan —
     # organism-agnostic key so switching organisms only means pointing this
     # (and out_dir) at a different config, no code changes.
@@ -389,7 +393,7 @@ def _record_pfam_version(base_url, out_dir, force=False):
 
 # ── Local ortholog reference DBs (conservation_local.py's DIAMOND search targets) ──
 
-def _build_diamond_db(fasta_gz_path, db_path, force=False):
+def _build_diamond_db(fasta_gz_path, db_path, force=False, threads=None):
     """Run `diamond makedb` directly against a gzipped FASTA (DIAMOND reads
     gzip input natively — verified against the installed diamond v2.2.6 — so
     there's no need to decompress to disk first).
@@ -397,9 +401,15 @@ def _build_diamond_db(fasta_gz_path, db_path, force=False):
     if db_path.exists() and not force:
         print(f"[skip] {db_path} already present")
         return
+    if not threads:
+        # honour the batch config's DIAMOND thread cap, else use every core
+        sys.path.insert(0, str(Path(__file__).parent))
+        from providers import _load_config
+        threads = _load_config().get("conservation_local", {}).get("threads")
     print(f"[makedb] building DIAMOND database from {fasta_gz_path} -> {db_path}")
     subprocess.run(
-        ["diamond", "makedb", "--in", str(fasta_gz_path), "-d", str(db_path.with_suffix(""))],
+        ["diamond", "makedb", "--in", str(fasta_gz_path), "-d", str(db_path.with_suffix("")),
+         "--threads", str(threads or os.cpu_count() or 1)],
         check=True,
     )
     print(f"[makedb] done -> {db_path}")
@@ -420,18 +430,19 @@ def fetch_swissprot(cfg, force=False):
     _build_diamond_db(fasta_path, db_path, force=force)
 
 
-def fetch_rhabditida_trembl(cfg, force=False):
-    """Download all unreviewed UniProt entries under the Rhabditida order
-    (taxid 6236, ~2.08M sequences — a large one-time download, comparable in
-    scale to the interpro step) and build a DIAMOND database from it — the
-    other local search target for scripts/conservation_local.py. Restricted
-    to reviewed:false so there's no overlap with fetch_swissprot()'s output
-    (a reviewed nematode entry lives in Swiss-Prot, not TrEMBL).
+def fetch_trembl(cfg, force=False):
+    """Download unreviewed UniProt entries of one clade and build a DIAMOND database from them.
+
+    Clade and file name come from reference_data.trembl_taxid / trembl_name (legacy key
+    rhabditida_taxid still read). This is the other local search target for
+    scripts/conservation_local.py. Restricted to reviewed:false so there is no overlap with
+    fetch_swissprot()'s output (a reviewed entry lives in Swiss-Prot, not TrEMBL).
     """
     out = _out_dir(cfg)
-    taxid = cfg["rhabditida_taxid"]
-    fasta_path = out / "rhabditida_trembl.fasta.gz"
-    db_path = out / "rhabditida_trembl.dmnd"
+    taxid = cfg.get("trembl_taxid") or cfg.get("rhabditida_taxid")
+    name = cfg["trembl_name"]
+    fasta_path = out / f"{name}.fasta.gz"
+    db_path = out / f"{name}.dmnd"
     url = (
         "https://rest.uniprot.org/uniprotkb/stream"
         f"?query=taxonomy_id:{taxid}+AND+reviewed:false&format=fasta&compressed=true"
@@ -477,7 +488,8 @@ STEPS = {
     "gff3":              fetch_gff3,
     "interpro":          fetch_interpro,   # depends on "uniprot" having run first
     "swissprot":         fetch_swissprot,
-    "rhabditida_trembl": fetch_rhabditida_trembl,
+    "trembl":            fetch_trembl,
+    "rhabditida_trembl": fetch_trembl,   # legacy alias
     "pfam":              fetch_pfam,
     "blastdb":           build_blastdb,    # depends on "genome" having run first
     "ucsc":              fetch_ucsc,       # validation needs "genome" (local translation)

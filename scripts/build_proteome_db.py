@@ -359,7 +359,8 @@ def _conservation_summary(hits_path, mean_jsd, aln_rel, hits_rel):
     for h in hits:
         species.add(h.get("hit_os"))
         n_sp += h.get("source_db") == "swissprot"
-        n_tr += h.get("source_db") == "rhabditida_trembl"
+        # any non-Swiss-Prot source is the clade TrEMBL database (name varies by organism)
+        n_tr += h.get("source_db") not in (None, "swissprot")
         for hsp in h.get("hit_hsps", []):
             try:
                 e = float(hsp.get("hsp_expect"))

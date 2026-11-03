@@ -82,7 +82,7 @@ python scripts/genome_regions.py --build
 python scripts/reference_data.py --only pfam
 
 # Conservation (largest download: Rhabditida TrEMBL is ~2 million sequences)
-python scripts/reference_data.py --only swissprot,rhabditida_trembl
+python scripts/reference_data.py --only swissprot,trembl
 
 # Off-target / primer screens (needs the genome step above)
 python scripts/reference_data.py --only blastdb
@@ -94,7 +94,7 @@ python scripts/reference_data.py --only blastdb
 | `afdb` | ~3.7 GB (2.6 GB tar + extracted PDBs) | `structure: bulk` |
 | `genome`, `gff3` + `genome_regions.py --build` | ~55 MB | `genewise: bulk` (gene model and region; needs nothing else) |
 | `pfam` | ~2.5 GB | `domains: scan` |
-| `swissprot`, `rhabditida_trembl` | ~1.8 GB | `conservation: local` |
+| `swissprot`, `trembl` | ~1.8 GB | `conservation: local` |
 | `blastdb` | ~25 MB | local off-target screens |
 
 `--stats` on `local_store.py` and `genome_regions.py` prints row counts and confirms that an
@@ -223,7 +223,7 @@ Organism-agnostic backends work with any sequence:
 - `domains: scan` (Pfam covers all organisms).
 - `conservation: local`, with Swiss-Prot as the universal target. The second target,
   `rhabditida_trembl`, is the nematode clade; swap it for a relevant TrEMBL clade by changing
-  `reference_data.rhabditida_taxid` and the `search_databases` entries.
+  `reference_data.trembl_taxid`, `reference_data.trembl_name` and the matching `search_databases` entry.
 
 Worm-specific backends need per-organism data:
 
