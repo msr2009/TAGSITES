@@ -33,6 +33,10 @@ Shared reference: [docs/INSTALL.md](docs/INSTALL.md) (full install) and
 [docs/CONFIG.md](docs/CONFIG.md) (the config files and `TAGSITES_BATCH_CONFIG`).
 
 ---
+## Quickest start (shinyapps hosted app)
+
+A version of the single-protein, web-served analysis app is hosted on shinyapps.
+[https://mattrich.shinyapps.io/tagsites/](https://mattrich.shinyapps.io/tagsites/)
 
 ## Quick start (web services)
 
