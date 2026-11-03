@@ -81,3 +81,7 @@ deploy.sh
 
 # shelved design notes
 LINES-TO-HEATMAPS.md
+
+# Recipient-specific setup note (not shipped)
+docs/LOCAL_DATABASE_JORGENSEN.md
+docs/drive/

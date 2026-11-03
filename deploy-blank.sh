@@ -83,6 +83,8 @@ EXCLUDES=(
   -x 'deploy.sh'
   -x 'deploy-blank.sh'
   -x 'PLAN.md'
+  -x 'docs/LOCAL_DATABASE_JORGENSEN.md'
+  -x 'docs/drive/'
 
   # ── Caches and editor leftovers ─────────────────────────────────────────
   -x '.pytest_cache/'

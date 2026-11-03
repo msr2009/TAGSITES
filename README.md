@@ -84,6 +84,10 @@ python app_modular.py
 The app starts at **http://127.0.0.1:8000** — open that URL in a browser. Use the Setup page
 to upload a sequence, configure analyses, and submit a run.
 
+To use a precomputed proteome database (instant results and reagents for C. elegans or yeast
+proteins) or the batch review app (`python app_batch.py`), see
+[docs/LOCAL_DATABASE.md](docs/LOCAL_DATABASE.md).
+
 ---
 
 ## Run from the command line
