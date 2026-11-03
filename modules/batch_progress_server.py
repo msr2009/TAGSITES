@@ -19,6 +19,7 @@ import batch_prepare as BP  # noqa: E402
 import batch_state as BS  # noqa: E402
 
 _STATUS_CLASS = {"accepted": "text-success", "ready": "", "in_progress": "text-primary",
+                 "skipped": "text-danger fst-italic",
                  "failed": "text-danger", "missing": "text-muted", "running": "text-warning",
                  "pending": "text-muted"}
 
@@ -119,7 +120,7 @@ def batch_progress_server(input, output, session, bstate):
         phase = job["phase"] or "idle"
         if job["t0"] and not phase.startswith(("done", "failed", "idle")):
             phase += " · {:.0f} s".format(time.time() - job["t0"])
-        reviewable = c["ready"] + c["in_progress"] + c["accepted"]
+        reviewable = c["ready"] + c["in_progress"] + c["accepted"] + c["skipped"]
         return ui.card(
             ui.h4(data["name"]),
             ui.p(" · ".join(parts)),

@@ -158,7 +158,7 @@ def todo(batch):
         if p.get("source") == "missing" and not settings.get("ebi_for_missing"):
             continue
         # a folder that finished is kept as is, whatever the entry says (resume)
-        if p.get("status") in ("ready", "in_progress", "accepted", "failed") \
+        if p.get("status") in ("ready", "in_progress", "accepted", "skipped", "failed") \
                 and run_is_complete(p.get("run_json")):
             continue
         out.append(p)

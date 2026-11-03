@@ -8,7 +8,8 @@ written atomically (temp file then replace, as run_status does), so a crash lose
 last click; checkpoint() also keeps timestamped copies.
 
 Per-protein status: pending -> ready (exported) -> in_progress (sites edited) -> accepted;
-failed carries the error. Each protein's run folder is {batch_dir}/{name}/{key}/, an ordinary
+failed carries the error; skipped (set from Review, any reviewable status) is listed, one
+protein per line, in {name}.skipped.txt beside the batch file, rewritten on every save. Each protein's run folder is {batch_dir}/{name}/{key}/, an ordinary
 run folder every app loader reads unchanged.
 
     python scripts/batch_state.py list
@@ -30,7 +31,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from providers import _load_config as _load_batch_config  # noqa: E402
 
-STATUSES = ("pending", "running", "ready", "in_progress", "accepted", "failed", "missing")
+STATUSES = ("pending", "running", "ready", "in_progress", "accepted", "skipped", "failed",
+            "missing")
 CHECKPOINTS_KEPT = 5
 _DEFAULT_DIR = "~/tagsites_local/batches"
 _lock = threading.Lock()
@@ -103,13 +105,39 @@ def _plain(o):
     raise TypeError("not JSON serializable: {}".format(type(o).__name__))
 
 
+def skipped_file(path):
+    """{name}.skipped.txt beside a batch file."""
+    return Path(str(path)[:-len(".batch.json")] + ".skipped.txt")
+
+
+def _write_atomic(path, text):
+    """Write text to path through a temp file."""
+    tmp = str(path) + ".tmp"
+    with open(tmp, "w") as fh:
+        fh.write(text)
+    os.replace(tmp, path)
+
+
+def write_skipped(path, batch):
+    """Rewrite {name}.skipped.txt: one skipped protein per line (absent while none ever were)."""
+    out = skipped_file(path)
+    rows = [p for p in batch["proteins"] if p.get("status") == "skipped"]
+    # no file for a batch that never skipped anything; an emptied list keeps its header
+    if not rows and not out.exists():
+        return
+    lines = ["# key\tname\tinput\tskipped_at"]
+    lines += ["\t".join([p["key"], name_prefix(p), str(p.get("input") or ""),
+                         str(p.get("skipped_at") or "")]) for p in rows]
+    _write_atomic(out, "\n".join(lines) + "\n")
+
+
 def save_batch(path, batch):
-    """Write the batch atomically (tmp then replace)."""
+    """Write the batch atomically (tmp then replace), and its skipped list."""
     with _lock:
-        tmp = str(path) + ".tmp"
-        with open(tmp, "w") as fh:
-            json.dump(batch, fh, indent=1, default=_plain)
-        os.replace(tmp, path)
+        _write_atomic(path, json.dumps(batch, indent=1, default=_plain))
+        # checkpoint copies (.batch.<stamp>.json) have no skipped list of their own
+        if str(path).endswith(".batch.json"):
+            write_skipped(path, batch)
 
 
 def checkpoint(path, batch):

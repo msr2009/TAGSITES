@@ -27,6 +27,7 @@ _CSS = """
 .ts-batch-opt.ts-batch-in_progress { color:#0d6efd; }
 .ts-batch-opt.ts-batch-ready { color:#495057; }
 .ts-batch-opt.ts-batch-failed { color:#dc3545; }
+.ts-batch-opt.ts-batch-skipped { color:#dc3545; font-style:italic; }
 .ts-batch-opt.ts-batch-pending, .ts-batch-opt.ts-batch-running,
 .ts-batch-opt.ts-batch-missing { color:#adb5bd; }
 .ts-batch-count { font-weight:600; margin:0 6px; }
@@ -39,7 +40,7 @@ _CSS = """
 
 @module.ui
 def batch_nav_ui():
-    """Prev · protein list · Next · counter · Accept → Next · Save · Batch ZIP · Output."""
+    """Prev · protein list · Next · counter · Accept → Next · Skip · Save · Batch ZIP · Output."""
     return ui.div(
         ui.tags.style(_CSS),
         ui.div(
@@ -49,6 +50,7 @@ def batch_nav_ui():
             ui.input_action_button("next", "Next ▶", class_="btn-sm btn-outline-secondary"),
             ui.output_ui("counter", inline=True),
             ui.output_ui("accept_button", inline=True),
+            ui.output_ui("skip_button", inline=True),
             ui.input_action_button("save", "Save batch", class_="btn-sm btn-outline-primary"),
             ui.download_button("download_batch", "⬇ Batch (.zip)",
                                class_="btn-sm btn-outline-primary"),

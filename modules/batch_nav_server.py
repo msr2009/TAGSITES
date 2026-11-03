@@ -7,7 +7,9 @@ Accept stores the protein's sites and guides and moves to the next protein still
 Output Reagents builds the ZIP of every accepted protein (scripts/batch_output.py).
 
 Statuses: opening a ready protein marks it in_progress; editing an accepted protein's sites
-returns it to in_progress until it is accepted again.
+returns it to in_progress until it is accepted again. Skip marks a protein skipped (red, italic
+in the list; written to {batch}.skipped.txt) and moves on; Unskip restores its earlier status.
+Editing a skipped protein's sites leaves it skipped; accepting it un-skips it.
 Opening a protein that is not accepted always selects freshly computed suggestions; only
 accepted proteins keep their stored sites (server_batch._kept_sites).
 """
@@ -26,8 +28,8 @@ import batch_output as BO  # noqa: E402
 import batch_state as BS  # noqa: E402
 import reagent_bundle as RB  # noqa: E402
 
-_NAVIGABLE = ("ready", "in_progress", "accepted", "failed")
-_MARK = {"accepted": "✓", "in_progress": "●", "ready": "○", "failed": "✕"}
+_NAVIGABLE = ("ready", "in_progress", "accepted", "skipped", "failed")
+_MARK = {"accepted": "✓", "in_progress": "●", "ready": "○", "failed": "✕", "skipped": "⤼"}
 
 
 def _same(a, b):
@@ -256,8 +258,10 @@ def batch_nav_server(input, output, session, bstate, shared_json, shared_sites, 
         cur = current.get()
         pos = items.index(cur) + 1 if cur in items else 0
         c = BS.counts(data)
-        return ui.span("{} / {} · {} accepted".format(pos, len(items), c["accepted"]),
-                       class_="ts-batch-count")
+        text = "{} / {} · {} accepted".format(pos, len(items), c["accepted"])
+        if c["skipped"]:
+            text += " · {} skipped".format(c["skipped"])
+        return ui.span(text, class_="ts-batch-count")
 
     @render.ui
     def accept_button():
@@ -268,6 +272,17 @@ def batch_nav_server(input, output, session, bstate, shared_json, shared_sites, 
         label = "No reagents" if no_reagents and p is not None else "Accept sites → Next"
         return ui.input_action_button("accept", label, class_="btn-sm btn-success",
                                       disabled=no_reagents)
+
+    @render.ui
+    def skip_button():
+        """Skip → Next (red); Unskip on a protein already skipped."""
+        bstate["rev"].get()
+        p = _protein(current.get())
+        skipped = p is not None and p.get("status") == "skipped"
+        return ui.input_action_button("skip", "Unskip" if skipped else "Skip → Next",
+                                      class_="btn-sm " + ("btn-outline-danger" if skipped
+                                                          else "btn-danger"),
+                                      disabled=p is None)
 
     @render.ui
     def protein_note():
@@ -297,15 +312,40 @@ def batch_nav_server(input, output, session, bstate, shared_json, shared_sites, 
                                  "site.".format(", ".join(map(str, missing))), type="warning",
                                  duration=8)
             return
+        p.pop("skipped_from", None)
         p.update(status="accepted", accepted_at=time.strftime("%Y-%m-%d %H:%M:%S"))
         _save()
         bstate["rev"].set(bstate["rev"].get() + 1)
-        nxt = BS.next_unaccepted(_data(), after=p["key"])
+        _go_next(p["key"])
+
+    def _go_next(after):
+        """Move to the next protein still to review, or say there is none."""
+        nxt = BS.next_unaccepted(_data(), after=after)
         if nxt is None:
-            ui.notification_show("Every protein is accepted. Output reagents when ready.",
-                                 type="message", duration=6)
+            ui.notification_show("Every protein is accepted or skipped. Output reagents when "
+                                 "ready.", type="message", duration=6)
             return
         current.set(nxt)
+
+    @reactive.effect
+    @reactive.event(input.skip)
+    def _skip():
+        """Skip the protein and go to the next one; on a skipped protein, restore its status."""
+        p = _protein(current.get())
+        if p is None:
+            return
+        # Unskip: back to whatever it was before the skip
+        if p.get("status") == "skipped":
+            p["status"] = p.pop("skipped_from", None) or "in_progress"
+            p["skipped_at"] = None
+            _save()
+            bstate["rev"].set(bstate["rev"].get() + 1)
+            return
+        p.update(skipped_from=p.get("status"), status="skipped",
+                 skipped_at=time.strftime("%Y-%m-%d %H:%M:%S"))
+        _save()
+        bstate["rev"].set(bstate["rev"].get() + 1)
+        _go_next(p["key"])
 
     @reactive.effect
     @reactive.event(input.save)
