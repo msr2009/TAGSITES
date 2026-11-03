@@ -7,7 +7,7 @@ whichever config is active. The checked-in batch.config.json keeps the EBI-backe
 analyses (domains, structure, genewise, conservation) at "remote", with
 offtarget_region "local" (falling back to BLAT/EBI when BLAST+ or its database is
 absent). To run the app with local backends, start it with
-TAGSITES_BATCH_CONFIG pointing at a separate file (docs/LOCAL_SETUP.md).
+TAGSITES_BATCH_CONFIG pointing at a separate file (docs/CONFIG.md).
 
 Batch runs (scripts/proteome_run.py) that want local/bulk backends must NOT
 just edit batch.config.json in place: that file is read by this same fixed

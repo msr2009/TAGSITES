@@ -128,10 +128,18 @@ scripts/                # core analysis executables
                               # track files, reagents TSV with regenerated arms) so every app
                               # loader works unchanged; used by Setup's precomputed-results card
 
-docs/
-  LOCAL_SETUP.md  # step-by-step guide to running the app with all analyses local
-                  # (single-protein use; proteome-scale setup is not covered)
+docs/                       # README.md routes to one guide per task
+  INSTALL.md                # environment, version pins, keys, updating
+  CONFIG.md                 # TAGSITES_BATCH_CONFIG, config blocks, which file each caller reads
+  LOCAL_SETUP.md            # single-protein app with all analyses local
+  LOCAL_DATABASE.md         # obtain a proteome database; main app's precomputed-results card
+  BATCH_APP.md              # batch review app, step by step
+  BUILD_LOCAL_DATABASE.md   # build proteome.sqlite3 for an organism
+  CLI.md                    # running the pipeline without Shiny
+  DATA_MODEL.md             # developer: file types, adding a task
   GNOMAD_CONSTRAINT_SPEC.md  # feasibility spec: gnomAD constraint track via Alliance orthologs
+batch.config.example.json   # tracked template for a machine-local config (copy to
+                            # batch.config.local.json, fill @DATA_DIR@)
 
 utils/
   results.py    # load JSON output → DataFrames; Plotly + matplotlib visualization

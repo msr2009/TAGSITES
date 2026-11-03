@@ -1,9 +1,9 @@
 # Running TAGSITES locally (single-protein analysis)
 
-This guide sets up the Shiny app so that analyses run on the local machine instead of through
-EBI, UCSC and Ensembl web services. It covers one-protein-at-a-time use in the browser. The
-default install in `README.md` needs no local tools and sends every analysis to a web service;
-follow this guide only to move those calls onto local hardware.
+Use this when analyses for one protein at a time should run on the local machine instead of
+through EBI, UCSC and Ensembl web services. The default install ([README](../README.md)) sends
+every analysis to a web service; follow this guide only to move those calls onto local hardware.
+For many proteins, see [LOCAL_DATABASE.md](LOCAL_DATABASE.md) and [BATCH_APP.md](BATCH_APP.md).
 
 The walkthrough uses *C. elegans*. Notes for other organisms are in [step 9](#9-other-organisms).
 
@@ -32,38 +32,40 @@ Features that still call web services even in local mode are listed in [step 8](
 
 ## 1. Prerequisites
 
-- macOS or Linux, with [mamba](https://mamba.readthedocs.io/) (or conda).
-- About 9 GB of free disk for reference data. Put it on a local disk; SQLite indexes are
-  unreliable on network volumes.
-- Network access for the one-time downloads in step 3. Nothing else needs the network once the
-  remaining-remote features in step 8 are avoided.
+- The `tagsites` environment from [INSTALL.md](INSTALL.md), created from `environment.yml` (not
+  `requirements.txt`, which omits `diamond`, `mafft`, BLAST+ and `pyhmmer`).
+- About 9 GB of free disk for reference data, on a local disk (SQLite indexes are unreliable on
+  network volumes).
+- Network access for the one-time downloads in step 3.
 
-## 2. Create the environment
+Check the tools:
 
 ```bash
-git clone https://github.com/msr2009/TAGSITES.git
-cd TAGSITES
-mamba env create -f environment.yml
 mamba activate tagsites
-```
-
-Use `environment.yml`, not `requirements.txt`. The requirements file is the shinyapps.io
-manifest and omits the local tools (`diamond`, `mafft`, `blast`, `pyhmmer`). Python 3.10 and
-numpy 1.x are deliberate pins; see "Version pinning" in `CLAUDE.md`.
-
-Check that the tools are on the path:
-
-```bash
 which diamond mafft blastn makeblastdb blastdbcmd
 python -c "import pyhmmer; print(pyhmmer.__version__)"
 ```
 
-Every command should print a path or version. A missing `blastn` does not break the app (off-target
-screens fall back to BLAT/EBI), but the run is then no longer fully local.
+Every command should print a path or version. A missing `blastn` does not break the app
+(off-target screens fall back to BLAT/EBI), but the run is then no longer fully local.
+
+## 2. Create the config
+
+Local modes are selected by a config file, not by code changes. Copy the template and point the
+environment variable at it ([CONFIG.md](CONFIG.md) explains the rules):
+
+```bash
+cp batch.config.example.json batch.config.local.json
+sed -i.bak "s|@DATA_DIR@|$HOME/tagsites_local/worm|g" batch.config.local.json && rm batch.config.local.json.bak
+export TAGSITES_BATCH_CONFIG=batch.config.local.json
+```
+
+`reference_data.out_dir` is now `~/tagsites_local/worm/reference`; downloads in the next step go
+there.
 
 ## 3. Download reference data
 
-All downloads go to `data/reference/` (set by `reference_data.out_dir` in `batch.config.json`).
+All downloads go to `reference_data.out_dir` from the config in effect.
 They are resumable, and a step whose output already exists is skipped; add `--force` to redo one.
 
 Run the steps in this order. Each command can be run on its own, so large steps can be done
@@ -106,39 +108,27 @@ Not needed for single-protein use: the `interpro` step (a 13 GB stream, only for
 `domains: bulk` mode), the WormBase protein FASTA, the topology cache and DeepTMHMM. Those serve
 the proteome-scale pipeline.
 
-## 4. Create the backend config
+## 4. Choose the backends
 
-`batch.config.json` is the checked-in default. Do not edit it in place: it is read for every
-caller, so changes would silently alter other runs. Create a separate file instead.
-`batch.config.local.json` is gitignored, so each machine keeps its own.
+The template already sets every analysis to its local mode:
 
 ```json
-{
-  "backends": {
-    "domains": "scan",
-    "structure": "bulk",
-    "genewise": "bulk",
-    "conservation": "local",
-    "offtarget_region": "local"
-  },
-  "conservation_local": {
-    "search_databases": [
-      { "name": "swissprot", "evalue": 1e-10, "max_target_seqs": 50 },
-      { "name": "rhabditida_trembl", "evalue": 1e-5, "max_target_seqs": 100 }
-    ],
-    "threads": 8,
-    "render_alignment_pdf": true
-  }
+"backends": {
+  "domains": "scan",
+  "structure": "bulk",
+  "genewise": "bulk",
+  "conservation": "local",
+  "offtarget_region": "local"
 }
 ```
 
-Notes on the file:
+Edit `batch.config.local.json` to adjust:
 
-- Keys missing here take the `batch.config.json` defaults.
-- `threads` is the DIAMOND thread count. Set it to the number of cores to spare.
-- `render_alignment_pdf: true` produces the alignment view that the Results tab shows. The
-  batch-oriented local config turns it off; keep it on for the app.
-- `topology` is omitted on purpose. The app has no topology runner, so DeepTMHMM does not run
+- `conservation_local.threads`: DIAMOND thread count; set it to the cores that can be spared.
+- `conservation_local.search_databases`: Swiss-Prot plus the TrEMBL clade
+  (`rhabditida_trembl` for nematodes).
+- `conservation_local.render_alignment_pdf`: keep `true`; the Results tab shows that view.
+- `topology` is omitted on purpose: the app has no topology runner, so DeepTMHMM does not run
   from the UI.
 - Any single analysis can stay `"remote"`. Mixed setups are valid.
 
@@ -160,18 +150,18 @@ WormBase's portal blocks for scripted downloads. Download it in a browser and pl
 
 ```bash
 mamba activate tagsites
-TAGSITES_BATCH_CONFIG=batch.config.local.json python app_modular.py
+export TAGSITES_BATCH_CONFIG=batch.config.local.json    # once per shell
+python app_modular.py
 ```
 
 Open http://127.0.0.1:8000.
 
-`TAGSITES_BATCH_CONFIG` takes a path, relative to the repository root or absolute. The config is
-read once per process, so restart the app after any edit to it.
+The config is read once per process, so restart the app after any edit to it.
 
 To confirm that the local modes are active before opening the browser:
 
 ```bash
-TAGSITES_BATCH_CONFIG=batch.config.local.json python -c "
+python -c "
 import sys; sys.path.insert(0, 'scripts')
 import providers
 for a in ['domains', 'structure', 'genewise', 'conservation', 'offtarget_region']:
@@ -238,7 +228,7 @@ Worm-specific backends need per-organism data:
 For another organism, the safest route is to keep `domains` and `conservation` local, and leave
 `structure`, `genewise` and `offtarget_region` at `"remote"`.
 
-## 10. Failure modes and troubleshooting
+## Troubleshooting
 
 - **Backend change has no effect.** The config is cached per process. Restart the app.
 - **"no model" from the structure task.** The sequence is not a canonical proteome entry.

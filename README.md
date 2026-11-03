@@ -1,187 +1,130 @@
 # TAGSITES
 
-A Shiny-based web application for identifying functional sites in protein sequences to guide
-protein tagging and CRISPR reagent design.
+A Shiny app for finding functional sites in a protein sequence and designing CRISPR knock-in
+reagents to tag the protein at those sites.
 
-Given a protein sequence (FASTA or PDB), the app runs a configurable analysis pipeline:
-- **BLAST** — finds orthologs across selected organisms to compute conservation
-- **pLDDT** — extracts AlphaFold2 confidence scores and solvent-accessible surface area (SASA)
-- **Modifications** — identifies PTM sites (phosphorylation, ubiquitination, etc.)
-- **Domains** — calls the EBI InterPro API to annotate protein domains
-- **Scores** — computes sliding-window amino acid property scores (hydrophobicity, etc.)
-- **Reagents** — designs CRISPR knock-in reagents (guide RNAs + HDR homology arms) for every
-  potential tag-insertion site, using Genewise to map the protein onto a supplied genomic region
+Given a protein sequence (FASTA, UniProt hit, or AlphaFold PDB), TAGSITES runs a configurable
+analysis pipeline:
 
-Results are visualized as interactive Plotly plots. Users select a site and the reagents page
-provides guide spacers and mutated homology arms ready to order.
+- **Conservation**: orthologs from BLAST (web) or DIAMOND (local), aligned and scored
+- **Structure**: AlphaFold pLDDT and solvent-accessible surface area
+- **Modifications**: PTM sites from regex patterns
+- **Domains**: InterPro (web) or Pfam via `pyhmmer` (local)
+- **UniProt features**: curated lipidation, binding sites, modified residues, and more
+- **Scores**: sliding-window amino acid properties
+- **Reagents**: guides, homology arms, oligos, genotyping primers and annotated GenBank files
+  for every candidate insertion site. The gene model must translate to the input protein, or
+  the reagents are not designed (see [CLAUDE.md](CLAUDE.md), "Gene model must translate").
+
+Results are interactive Plotly plots. Select sites, then take the reagent tables to the bench.
+
+TAGSITES runs in four modes. Each has one guide:
+
+| Goal | Guide |
+|---|---|
+| Analyze one protein using web services only (no downloads) | this page |
+| Analyze one protein with every analysis on local hardware | [docs/LOCAL_SETUP.md](docs/LOCAL_SETUP.md) |
+| Open precomputed results for a whole proteome in the main app | [docs/LOCAL_DATABASE.md](docs/LOCAL_DATABASE.md) |
+| Review and design tags for many proteins at once (batch app) | [docs/BATCH_APP.md](docs/BATCH_APP.md) |
+| Build the precomputed database for an organism | [docs/BUILD_LOCAL_DATABASE.md](docs/BUILD_LOCAL_DATABASE.md) |
+| Drive the pipeline without the browser | [docs/CLI.md](docs/CLI.md) |
+
+Shared reference: [docs/INSTALL.md](docs/INSTALL.md) (full install) and
+[docs/CONFIG.md](docs/CONFIG.md) (the config files and `TAGSITES_BATCH_CONFIG`).
 
 ---
 
-## Install
+## Quick start (web services)
 
-**Prerequisites:** Python 3.10 and an internet connection. By default, all analyses (BLAST,
-Clustal Omega, InterPro, Genewise) run through the EBI and AlphaFold web services — no local
-bioinformatics binaries are required. To run the analyses on the local machine instead, see
-[docs/LOCAL_SETUP.md](docs/LOCAL_SETUP.md).
+Requires an internet connection. BLAST, Clustal Omega, InterPro and Genewise run through the EBI
+REST API, so no local bioinformatics tools are needed.
 
 ### 1. Get the code
 
-**Option A — Download from the app** *(no git required)*
-
-Click **⬇ Download App** in the top-right corner of the running app. Unzip the downloaded
-`tagsites-app.zip` and enter the folder:
-
-```bash
-unzip tagsites-app.zip
-cd tagsites-app
-```
-
-**Option B — Clone the repository**
+Clone the repository:
 
 ```bash
 git clone https://github.com/msr2009/TAGSITES.git
 cd TAGSITES
 ```
 
-### 2. Set up the Python environment
+Without git, click **⬇ Download App** in the top-right corner of the running app, then
+`unzip tagsites-app.zip && cd tagsites-app`.
 
-**Recommended: conda** ([Miniconda](https://docs.conda.io/en/latest/miniconda.html) or Anaconda)
+### 2. Create the environment
 
 ```bash
-conda env create -f environment.yml
-conda activate tagsites
+mamba env create -f environment.yml     # conda works the same way
+mamba activate tagsites
 ```
 
-> **Python 3.10 is required, not incidental.** `environment.yml` pins Python 3.10 with
-> numpy 1.x, scikit-learn 1.0.2 and lightgbm 3.3.5. These caps exist solely because the
-> `rs3` package (Rule Set 3 guide scoring) requires them. See the "Version pinning" section
-> of `CLAUDE.md` before changing them — and note that RS3 fails soft, so dropping it is the
-> correct way out if the pins ever block a needed dependency.
+Python 3.10 is required, not incidental: `environment.yml` pins numpy 1.x and old
+scikit-learn/lightgbm solely for the `rs3` guide-scoring package. A web-only install can use
+`python3.10 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt`
+instead; local backends and batch mode need the conda environment. Details and pitfalls are in
+[docs/INSTALL.md](docs/INSTALL.md).
 
-**Alternative: pip + venv** *(if you already have Python 3.10 and prefer not to use conda)*
-
-```bash
-python3.10 -m venv .venv
-source .venv/bin/activate    # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-```
-
-### 3. Register your EBI e-mail
-
-All network analyses (BLAST, InterPro, Genewise) are submitted via the EBI REST API and require
-a registered e-mail address. Set it in the `global.email` field of your run JSON, or in the
-app's Setup page.
-
----
-
-## Run the app
+### 3. Start the app
 
 ```bash
-conda activate tagsites   # or: source .venv/bin/activate
 python app_modular.py
 ```
 
-The app starts at **http://127.0.0.1:8000** — open that URL in a browser. Use the Setup page
-to upload a sequence, configure analyses, and submit a run.
+Open **http://127.0.0.1:8000**. The tabs run left to right:
 
-To use a precomputed proteome database (instant results and reagents for C. elegans or yeast
-proteins) or the batch review app (`python app_batch.py`), see
-[docs/LOCAL_DATABASE.md](docs/LOCAL_DATABASE.md).
+1. **Setup Analyses**: load a sequence, choose analyses, enter an e-mail address (EBI requires
+   one to accept jobs), and save.
+2. **Run Analyses**: submit and watch each task.
+3. **View Results**: plots, tracks and alignments.
+4. **Create Reagents**: pick insertion sites and download the reagent ZIP.
 
----
-
-## Run from the command line
-
-The pipeline can be driven entirely via a JSON config file.
+### 4. Check the install (optional)
 
 ```bash
-conda activate tagsites
-python scripts/run_tag_sites_from_json.py -i <run.json>
-```
-
-A minimal example JSON (using pre-computed Genewise output so no network is needed) is at
-`tests/data/example_run.json` in the cloned repository (not included in the downloaded zip).
-Outputs land in the directory specified by `global.working_dir`.
-
-### Running many proteins at once (batch)
-
-For many proteins, use `scripts/batch_run_tag_sites.py`. It takes a manifest (CSV/TSV, one row
-per protein: `run_name`, `input_file`, and optional `pdb`, `genomic_file`, `working_dir`, `email`
-columns) and a shared task-template JSON (same shape as `params/worm_default.json`, defining which
-analyses to run and their parameters for every protein), builds a run JSON per protein, and runs
-them with bounded concurrency so EBI's REST API isn't hit with too many simultaneous submissions.
-
-```bash
-conda activate tagsites
-python scripts/batch_run_tag_sites.py \
-    --manifest proteins.tsv \
-    --params params/worm_default.json \
-    --email you@example.edu \
-    --output-root ./batch_runs \
-    --max-concurrent 3
-```
-
-A minimal example manifest is at `tests/data/batch_manifest_example.tsv`. Re-running the same
-command skips proteins/tasks that already completed successfully; pass `--force` to re-run
-everything.
-
----
-
-## Run the tests
-
-The test suite is split into fast offline unit tests and network-dependent integration tests.
-
-```bash
-# Fast offline tests only (no network, no EBI account needed)
-conda activate tagsites
-pytest
-
-# Include network integration tests (requires internet + EBI e-mail)
-TAGSITES_EMAIL=your@email.com pytest -m network --run-network
+pytest                                                   # offline tests
+TAGSITES_EMAIL=you@example.edu pytest -m network --run-network   # adds EBI/network tests
 ```
 
 ---
 
-## EBI webservice clients
+## Going further
 
-The scripts `genewise.py`, `iprscan5.py`, `ncbiblast.py`, `dbfetch.py`, and `clustalo.py` in
-`scripts/` are EBI webservice clients vendored from
-[ebi-jdispatcher/webservice-clients](https://github.com/ebi-jdispatcher/webservice-clients).
-They are used as-is; no separate download is required. If they need refreshing (e.g. after an
-EBI API change), replace them with the latest versions from that repository.
+- **Faster or offline analysis** on one machine: [docs/LOCAL_SETUP.md](docs/LOCAL_SETUP.md).
+- **Precomputed proteome**: [docs/LOCAL_DATABASE.md](docs/LOCAL_DATABASE.md) covers getting a
+  database and the main app's *Load precomputed results* card;
+  [docs/BATCH_APP.md](docs/BATCH_APP.md) covers the batch review app (`python app_batch.py`,
+  port 8001).
+- **Another organism**: [docs/BUILD_LOCAL_DATABASE.md](docs/BUILD_LOCAL_DATABASE.md).
 
----
+The local workflows read a config file chosen with `TAGSITES_BATCH_CONFIG`; start from
+`batch.config.example.json` ([docs/CONFIG.md](docs/CONFIG.md)). With no variable set, every
+analysis uses web services, which is also how the hosted app behaves.
 
-## Project layout
+## Repository map
 
 ```
-app_modular.py              # main Shiny entry point
-config.py                   # species taxonomy, result type config, JSON defaults
-task_definitions.json       # task registry: script-to-task mappings, params, default_tasks
-
-modules/                    # Shiny UI + server components
-scripts/                    # core analysis executables + EBI REST clients
-  run_tag_sites_from_json.py    # async pipeline orchestrator
-  blast_orthologs.py            # NCBI BLAST homolog search
-  extract_from_pdb.py           # pLDDT + SASA from AlphaFold PDB
-  regex_sites.py                # PTM site identification
-  call_interpro.py              # EBI InterPro domain annotation
-  calculate_protein_scores.py   # sliding-window property scoring
-  crispr_util.py                # guide finding, codon table, PAM mutation logic
-  parse_genewise.py             # Genewise GFF parser → insertion-site table
-  run_genewise.py               # both-strand Genewise runner + orientation selection
-  design_tag_reagents.py        # reagent table: residue × guide + HDR arms
-  find_guides.py                # CLI: enumerate guide cut sites
-  site_selection_util.py        # shared FASTA/PDB I/O, BLAST API, sequence utils
-
-utils/
-  results.py                # load JSON output → DataFrames; Plotly + matplotlib viz
-
-tables/
-  modification_sites.txt              # regex patterns for PTM sites
-  hydrophobicity_kyle-doolittle.tsv   # amino acid property scores
-
-params/                     # saved parameter presets (JSON)
-tests/                      # pytest test suite
-  data/                     # committed test fixtures
+app_modular.py / server.py / ui.py     main app (port 8000)
+app_batch.py / server_batch.py / ui_batch.py   batch review app (port 8001, local only)
+task_definitions.json                  task registry and default analyses
+batch.config.json                      checked-in default config (do not edit for local work)
+batch.config.example.json              template for a machine-local config
+modules/                               Shiny UI and server modules (setup, progress, results, reagents, batch_*)
+scripts/                               analysis scripts; each is also a standalone CLI
+utils/                                 result loading and plotting
+tables/  params/  tests/               PTM patterns and property tables, saved presets, pytest suite
+docs/                                  guides listed above
 ```
+
+[CLAUDE.md](CLAUDE.md) holds the full per-script map and the design rules.
+
+Developer notes: [docs/DATA_MODEL.md](docs/DATA_MODEL.md) (file types, adding a task),
+[docs/GNOMAD_CONSTRAINT_SPEC.md](docs/GNOMAD_CONSTRAINT_SPEC.md),
+[docs/ANNOTATE_INTERNAL_TAGS.md](docs/ANNOTATE_INTERNAL_TAGS.md),
+[docs/SUGGESTED_SITES_REVISION.md](docs/SUGGESTED_SITES_REVISION.md).
+
+## Vendored clients
+
+`genewise.py`, `iprscan5.py`, `ncbiblast.py`, `dbfetch.py` and `clustalo.py` in `scripts/` are
+EBI web service clients from
+[ebi-jdispatcher/webservice-clients](https://github.com/ebi-jdispatcher/webservice-clients),
+used as-is. Replace them from that repository after an EBI API change.

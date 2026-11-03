@@ -1,0 +1,87 @@
+{
+  "_comment": "Template for a machine-local config. Copy to batch.config.local.json, replace @DATA_DIR@ with an absolute folder on local disk (see docs/CONFIG.md), then export TAGSITES_BATCH_CONFIG=batch.config.local.json. Values are for C. elegans; docs/BUILD_LOCAL_DATABASE.md lists what to change for another organism.",
+  "backends": {
+    "_comment": "analysis -> backend mode; providers.py imports scripts/<analysis>_<mode>.py. Omit an analysis (or set it to \"remote\") to keep today's EBI/Ensembl behavior.",
+    "domains": "scan",
+    "structure": "bulk",
+    "genewise": "bulk",
+    "conservation": "local",
+    "offtarget_region": "local"
+  },
+  "reference_data": {
+    "_comment": "paths/URLs for scripts/reference_data.py's bulk downloads (Phase A). out_dir should point at large external storage.",
+    "out_dir": "@DATA_DIR@/reference",
+    "uniprot_proteome_id": "UP000001940",
+    "afdb_tarball_url": "https://ftp.ebi.ac.uk/pub/databases/alphafold/latest/UP000001940_6239_CAEEL_v6.tar",
+    "ensembl_release": "114",
+    "ensembl_species": "caenorhabditis_elegans",
+    "ensembl_assembly": "WBcel235",
+    "interpro_release": "110.0",
+    "trembl_taxid": 6236,
+    "trembl_name": "rhabditida_trembl",
+    "protein_fasta": "@DATA_DIR@/reference/c_elegans.canonical_bioproject.current.protein.fa.gz",
+    "ucsc_genome": "ce11",
+    "ucsc_phastcons_track": "phastCons26way",
+    "ucsc_chrom_alias": {
+      "chrM": "MtDNA"
+    }
+  },
+  "conservation_local": {
+    "_comment": "scripts/conservation_local.py's DIAMOND search targets, each an independent database with its own search params (see scripts/reference_data.py's fetch_swissprot()/fetch_rhabditida_trembl()). Inert unless backends.conservation is set to \"local\". threads = DIAMOND --threads (also bounds batch_run.max_workers' MAFFT/JSD phase to 16 busy threads); chunk_size = queries per batched DIAMOND call in scripts/conservation_presearch.py; render_alignment_pdf = write the alignment PDF (true for the app; batch runs set false and can render it later from the .aln). Every search runs with --ultra-sensitive (DIAMOND's closest approximation to real BLASTP sensitivity) unless a database entry overrides \"sensitivity\".",
+    "search_databases": [
+      {
+        "name": "swissprot",
+        "evalue": 1e-10,
+        "max_target_seqs": 50
+      },
+      {
+        "name": "rhabditida_trembl",
+        "evalue": 1e-05,
+        "max_target_seqs": 100
+      }
+    ],
+    "threads": 4,
+    "chunk_size": 2000,
+    "render_alignment_pdf": true
+  },
+  "domains_scan": {
+    "_comment": "scripts/pfam_scan.py's local de novo Pfam-A scanning knobs (scripts/build_pfam_cache.py's bulk pass and scripts/domains_scan.py's on-demand fallback). Inert unless backends.domains is set to \"scan\". bit_cutoffs: \"gathering\" uses Pfam's own per-model gathering thresholds (matches InterProScan); clan_filter drops lower-scoring overlapping hits within the same Pfam clan; cache_profiles keeps Pfam-A's ~21k HMMs loaded in memory after first use (recommended for a long-lived batch worker); cpus: 0 = use all available cores.",
+    "bit_cutoffs": "gathering",
+    "clan_filter": true,
+    "cache_profiles": true,
+    "cpus": 0
+  },
+  "deeptmhmm": {
+    "_comment": "scripts/deeptmhmm_runner.py's subprocess bridge to DeepTMHMM 1.0 (academic license, vendored outside the repo, not committed here). install_dir/python are machine-specific and left blank in this checked-in default \u2014 set them in a TAGSITES_BATCH_CONFIG override (e.g. batch.config.local.json) to the local DeepTMHMM checkout and its dedicated conda env's python (needs pytorch<2.6, fair-esm==0.4.0 \u2014 see plan for why). batch_size is scripts/build_topology_cache.py's sequences-per-subprocess-invocation knob, trading ESM1b model-load amortization against peak embedding scratch (deleted after each batch). batch_residues additionally closes a batch at that many total residues (bounds scratch/VRAM for the long isoforms processed last). max_length, if set, skips and logs to topology_cache/_skipped.tsv any sequence longer than that (null = no cap).",
+    "install_dir": "",
+    "python": "",
+    "batch_size": 200,
+    "batch_residues": 60000,
+    "max_length": null
+  },
+  "proteome_db": {
+    "_comment": "scripts/build_proteome_db.py / scripts/proteome_db.py. path = the finished SQLite file (read it with proteome_db.py; it is opened read-only/immutable because SQLite locking is unreliable on network volumes). run_dir = the proteome_run.py output folder to ingest. build_dir = LOCAL disk where the database is assembled before being copied to path (blank = the system temp dir); scratch_dir = where the reagent stage writes its transient per-protein TSVs, deleted after each chunk (blank = under build_dir). chunk_size = proteins per worker task when parsing; curated_sites = JSON lists of known tag sites (gene, wormbase_id, site, flank_n, flank_c) matched to proteins by flanking sequence; reagent_chunk = proteins designed per round of the reagent stage (bounds transient disk: ~6 MB of TSV per protein). app_match = the Shiny app looks a loaded sequence up in this file (exact match) and offers its precomputed results via Setup; it is inert unless the file exists, so the deployed app never shows it. Always run `build_proteome_db.py --estimate` first: it samples, measures each table, and projects the full size and reagent run time without building anything large.",
+    "path": "@DATA_DIR@/runs/proteome_v1/proteome.sqlite3",
+    "app_match": true,
+    "run_dir": "@DATA_DIR@/runs/proteome_v1",
+    "build_dir": "@DATA_DIR@/build",
+    "scratch_dir": "",
+    "chunk_size": 200,
+    "reagent_chunk": 500,
+    "curated_sites": []
+  },
+  "batch_run": {
+    "_comment": "scripts/proteome_run.py knobs",
+    "max_workers": 4,
+    "max_concurrent_network_calls": 3,
+    "genomic_flank_bp": 2000
+  },
+  "batch_app": {
+    "_comment": "app_batch.py (batch review app). batch_dir = LOCAL folder holding every batch (one subfolder each: {name}.batch.json plus one run folder per protein); workers = parallel database exports in Prepare; ebi_max_concurrent = proteins analysed on EBI at once; cache_entries = parsed runs kept in memory for Review (about 3 per protein); port = the app's port (app_modular.py uses 8000).",
+    "batch_dir": "@DATA_DIR@/batches",
+    "workers": 6,
+    "ebi_max_concurrent": 3,
+    "cache_entries": 1500,
+    "port": 8001
+  }
+}

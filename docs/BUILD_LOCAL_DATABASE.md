@@ -1,10 +1,10 @@
 # Building a local proteome database
 
-This guide builds `proteome.sqlite3` for one organism: precomputed analyses, tag-site scores and
+Use this to build `proteome.sqlite3` for one organism: precomputed analyses, tag-site scores and
 CRISPR reagent designs for every protein, in one file the apps read (see
 [LOCAL_DATABASE.md](LOCAL_DATABASE.md) for using it). The steps are the same for any organism
 with a UniProt reference proteome, an Ensembl (or compatible) genome and GFF3, and an AlphaFold
-DB proteome. C. elegans (`batch.config.worm_local.json`) and *S. cerevisiae*
+DB proteome. C. elegans (`batch.config.example.json`) and *S. cerevisiae*
 (`batch.config.yeast.json`) are the worked examples, and the example values below are C. elegans
 unless marked.
 
@@ -12,9 +12,14 @@ Allow disk, time and care: the reference data for one organism is tens of GB (th
 Swiss-Prot / TrEMBL / Pfam files dominate) and a full run takes hours. Sizes in this guide are
 approximate; `--estimate` projects the database size for the organism at hand. Run `--estimate` before every build (step 8).
 
-Prerequisite: the environment from [LOCAL_SETUP.md](LOCAL_SETUP.md) (`mamba env create -f
-environment.yml`, with `diamond`, `mafft` and BLAST+ on the path). That guide also describes each
-local backend in more detail.
+Before starting:
+
+- The environment from [INSTALL.md](INSTALL.md), with `diamond`, `mafft` and BLAST+ on the path
+  (`which diamond mafft blastn makeblastdb`).
+- How configs work: [CONFIG.md](CONFIG.md). Each local backend is described in
+  [LOCAL_SETUP.md](LOCAL_SETUP.md).
+- A machine with many cores, tens of GB of local disk, and hours of run time. A small organism
+  such as yeast is a good first build.
 
 ---
 
@@ -31,13 +36,16 @@ local backend in more detail.
 
 ## 1. Write the organism's config
 
-Everything organism-specific lives in one JSON file chosen with `TAGSITES_BATCH_CONFIG`.
-Copy `batch.config.worm_local.json` (or `batch.config.yeast.json`) and change the values below.
-Config files matching `batch.config.local.json`, `batch.config.worm_local.json` and
-`batch.config.yeast*.json` are gitignored, so machine paths stay out of the repository.
+Everything organism-specific lives in one JSON file chosen with `TAGSITES_BATCH_CONFIG`
+([CONFIG.md](CONFIG.md)). Copy the template and change the values below.
+`batch.config.local.json` and `batch.config.yeast*.json` are gitignored, so machine paths stay
+out of the repository. A config for another organism can use any name ending in `.json`, but
+only those patterns stay untracked unless `.gitignore` is extended.
 
 ```bash
-export TAGSITES_BATCH_CONFIG=batch.config.myorganism.json
+cp batch.config.example.json batch.config.local.json      # C. elegans values
+sed -i.bak "s|@DATA_DIR@|$HOME/tagsites_local/worm|g" batch.config.local.json && rm batch.config.local.json.bak
+export TAGSITES_BATCH_CONFIG=batch.config.local.json
 ```
 
 | Block / key | What to set | C. elegans | *S. cerevisiae* |
@@ -54,10 +62,11 @@ export TAGSITES_BATCH_CONFIG=batch.config.myorganism.json
 | `batch_run.taxid` | NCBI taxonomy ID written into runs | `6239` | `559292` |
 | `batch_run.max_workers`, `conservation_local.threads`, `domains_scan.cpus`, `deeptmhmm.batch_size` | Parallelism for the machine | `16` | `8` |
 | `backends` | Local backends (below) | | |
-| `proteome_db.path`, `run_dir`, `build_dir` | Final file, the per-protein run folders, and **local** disk where the database is assembled | | |
+| `proteome_db.path`, `run_dir`, `build_dir` | Final file, the per-protein run folders, and **local** disk where the database is assembled | `…/proteome_v1/proteome.sqlite3` | same pattern |
 | `proteome_db.curated_sites`, `wormtagdb_strains`, `wormtagdb_notes` | Optional curated tag sites and strain records matched in by flanking sequence (see step 7) | | |
 
-Backends for a fully local build:
+Backends for a fully local build (the template sets all but `topology`, which needs a separate
+DeepTMHMM install, step 4):
 
 ```json
 "backends": {
@@ -182,7 +191,8 @@ Default tasks are `domains,plddt,modifications,uniprot,scores,blast`:
 | `blast` | Conservation | DIAMOND against both databases, then MAFFT + JSD |
 
 Options: `--tasks domains,plddt` limits the tasks, `--limit N` and `--accessions-file` take a
-subset, `--workers`, `--force`, and `--no-presearch-conservation`. Try `--limit 20` first and
+subset, `--workers`, `--force`, `--reagents` (also design reagents; needs the gene-model backend),
+and `--no-presearch-conservation`. Try `--limit 20` first and
 read the failures in `_status.jsonl`:
 
 ```bash
@@ -206,6 +216,10 @@ python scripts/build_proteome_db.py --stage ingest --yes
 python scripts/build_proteome_db.py --stage scores --yes
 python scripts/build_proteome_db.py --stage reagents --yes
 ```
+
+`--stage all` and `--stage core` both run `ingest` then `scores`; `reagents` is always run
+explicitly because it is the long stage. `--stage wormtagdb` refreshes only the curated strain
+table (see step 7).
 
 | Stage | Tables | Notes |
 |---|---|---|

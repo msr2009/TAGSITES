@@ -11,9 +11,10 @@ every protein of one organism (C. elegans, or yeast). Two apps read it:
 Both are local only. The deployed shinyapps.io app has no database file, so the card and the
 batch app never appear there.
 
-Installing the code, creating the environment and the single-protein workflow are covered in
-the main [README](../README.md). Local analysis backends (not needed just to read the
-database) are covered in [LOCAL_SETUP.md](LOCAL_SETUP.md).
+Use this guide to obtain a database and open precomputed results in the main app. Before
+starting: [INSTALL.md](INSTALL.md) (environment). Local analysis backends are not needed just to
+read the database ([LOCAL_SETUP.md](LOCAL_SETUP.md)). The batch app has its own guide:
+[BATCH_APP.md](BATCH_APP.md).
 
 ---
 
@@ -21,9 +22,10 @@ database) are covered in [LOCAL_SETUP.md](LOCAL_SETUP.md).
 
 The database file is not in the repository. Either:
 
-- **Request it from the maintainer** (Matt Rich). The package is the database plus the batch run
-  folder (the AlphaFold structures and conservation alignments of every protein), both required.
-  This is the simplest route.
+- **Request it from the maintainer** (Matt Rich, richm@hhmi.org). The package is the database
+  plus the batch run folder (the AlphaFold structures and conservation alignments of every
+  protein), both required. This is the simplest route. Unpack both into one folder on local
+  disk, for example `~/tagsites_local/worm/runs/proteome_v1/`.
 - **Build it locally** for any organism by following [BUILD_LOCAL_DATABASE.md](BUILD_LOCAL_DATABASE.md)
   (config, reference downloads, indexes, per-protein analyses, then the database build).
   [LOCAL_SETUP.md](LOCAL_SETUP.md) covers the environment and local backends it builds on.
@@ -60,35 +62,17 @@ network volume. Do not edit it while an app is running.
 
 ## 2. Point the config at the database
 
-Every path comes from one JSON config. The apps read `batch.config.json` unless the
-`TAGSITES_BATCH_CONFIG` environment variable names another file (relative paths resolve against
-the repo root). `app_batch.py` defaults that variable to `batch.config.worm_local.json`.
+Paths come from one JSON config ([CONFIG.md](CONFIG.md) explains how it is chosen). Start from
+the template and set the four paths:
 
-Create a config for the organism, or edit `batch.config.json`. The blocks that matter:
-
-```json
-{
-  "reference_data": {
-    "out_dir": "/path/to/reference",
-    "ensembl_species": "caenorhabditis_elegans",
-    "ensembl_assembly": "WBcel235",
-    "ensembl_release": "114",
-    "uniprot_proteome_id": "UP000001940",
-    "protein_fasta": "/path/to/reference/c_elegans.canonical_bioproject.current.protein.fa.gz"
-  },
-  "proteome_db": {
-    "path": "/path/to/proteome.sqlite3",
-    "app_match": true,
-    "run_dir": "/path/to/runs/proteome_v1"
-  },
-  "batch_run": { "taxid": "6239" },
-  "batch_app": {
-    "batch_dir": "/path/to/batches",
-    "workers": 6,
-    "cache_entries": 1500,
-    "port": 8001
-  }
-}
+```bash
+cp batch.config.example.json batch.config.local.json
+# edit batch.config.local.json (absolute paths, no ~):
+#   reference_data.out_dir   folder with the genome, GFF3 and genome_regions.sqlite3
+#   proteome_db.path         .../proteome_v1/proteome.sqlite3
+#   proteome_db.run_dir      .../proteome_v1
+#   batch_app.batch_dir      local folder for batch files (batch app only)
+export TAGSITES_BATCH_CONFIG=batch.config.local.json
 ```
 
 | Key | Meaning |
@@ -96,26 +80,20 @@ Create a config for the organism, or edit `batch.config.json`. The blocks that m
 | `proteome_db.path` | The database file. Relative paths resolve against the repo root. |
 | `proteome_db.app_match` | `true` lets the main app look a loaded sequence up in the database. Inert when the file is missing. |
 | `proteome_db.run_dir` | The `proteome_run.py` output folder the database was built from. |
-| `reference_data.out_dir` | Folder with the genome, GFF3 and `genome_regions.sqlite3`. Must belong to the same organism and assembly as the database. |
+| `reference_data.out_dir` | Genome, GFF3 and `genome_regions.sqlite3`. Must belong to the same organism and assembly as the database. |
 | `reference_data.ensembl_*` | Select the genome and GFF3 file names inside `out_dir`. |
-| `batch_run.taxid` | Taxonomy ID written into loaded runs (default 6239, C. elegans). Set it for any other organism. |
-| `batch_app.batch_dir` | Local-disk folder where each batch saves its files. |
-| `batch_app.cache_entries` | Parsed runs kept in memory for Review (about 3 per protein). |
-| `batch_app.port` | Port of the batch app. |
+| `batch_run.taxid` | Taxonomy ID written into loaded runs (6239 for C. elegans). Set it for any other organism. |
 
-Keep `reference_data` and `proteome_db` in the same config. Pairing a C. elegans database with a
-yeast genome gives wrong arms, because both are read from this one file.
-
-For yeast, start from `batch.config.yeast.json` (UP000002311, R64-1-1, `taxid` 559292) and
-leave `proteome_db.app_match` as the maintainer set it.
+Keep `reference_data` and `proteome_db` in the same config: pairing a C. elegans database with a
+yeast genome gives wrong arms. For yeast, change the `reference_data` and `batch_run` values as
+listed in [BUILD_LOCAL_DATABASE.md](BUILD_LOCAL_DATABASE.md#1-write-the-organisms-config).
 
 ---
 
 ## 3. Check that the database is found
 
 ```bash
-export TAGSITES_BATCH_CONFIG=batch.config.worm_local.json   # or your own config
-python scripts/proteome_db.py lookup trxr-1
+python scripts/proteome_db.py lookup trxr-1      # any gene name in the database
 ```
 
 A table of the protein's products means the path resolves. To print the summary the app shows
@@ -135,7 +113,7 @@ the environment variable wins over `batch.config.json`.
 
 ```bash
 conda activate tagsites
-export TAGSITES_BATCH_CONFIG=batch.config.worm_local.json   # omit to use batch.config.json
+export TAGSITES_BATCH_CONFIG=batch.config.local.json   # as in step 2
 python app_modular.py
 ```
 
@@ -158,29 +136,8 @@ Things to know:
 
 ## 5. Batch review app
 
-```bash
-conda activate tagsites
-python app_batch.py                                          # default: batch.config.worm_local.json
-TAGSITES_BATCH_CONFIG=batch.config.yeast.json python app_batch.py   # another organism
-```
-
-Open **http://127.0.0.1:8001**. The app can run beside the main app.
-
-1. **Setup**: panel 0 shows the database in use (path, size, protein count). **Use database**
-   there points the process at another `.sqlite3` file (checked before use). Paste or upload a
-   protein list. A gene with several products gets a dropdown. The default product is the id
-   equal to the search term, else the UniProt entry, then reagents designed, then structure, then
-   the longest. Set the site filters (suggested sites per protein, position and annotation
-   masks) as batch defaults.
-2. **Prepare**: exports each protein to `{batch_dir}/{batch}/{key}/` and fills the in-memory
-   cache. About 10 s for 10 proteins. Alignment PDFs render afterwards in a background process.
-3. **Review**: the single-protein Results view plus prev/next, a status-coloured list and a
-   per-site guide picker. **Accept → Next** accepts and moves on. **Skip** marks a protein
-   skipped; it is listed in `{batch}.skipped.txt` and never reaches Output.
-4. **Output**: a ZIP of reagents for accepted proteins, plus combined TSVs.
-
-A batch saves and loads as one ZIP. It records the database it used, and reopening it switches
-back to that file.
+To review and design tags for many proteins against the same database, use the batch app:
+[BATCH_APP.md](BATCH_APP.md).
 
 ---
 
@@ -188,7 +145,6 @@ back to that file.
 
 | Symptom | Likely cause |
 |---|---|
-| Panel 0 shows no database | `proteome_db.path` wrong, or the wrong config is active (`echo $TAGSITES_BATCH_CONFIG`) |
 | No "Load precomputed results" card | `app_match` false, file missing, or sequence not an exact match |
 | Reagents tab errors on arms | `reference_data.out_dir` lacks the genome, GFF3 or `genome_regions.sqlite3`, or is another organism |
 | Structure or alignment "not in the batch folder" | `proteome_db.run_dir` wrong or not mounted |
