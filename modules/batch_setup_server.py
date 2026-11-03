@@ -20,6 +20,7 @@ import batch_state as BS  # noqa: E402
 import reagent_bundle as RB  # noqa: E402
 
 from modules.setup_server import _off_loop  # noqa: E402
+from modules.ui_helpers import compact_file_input  # noqa: E402
 
 _TAGS = RB.load_tag_table()
 
@@ -69,18 +70,23 @@ def batch_setup_server(input, output, session, bstate):
         """Select of saved batches under the batch folder, newest first."""
         listing.get()
         rows = BS.list_batches()
-        upload = ui.input_file("batch_zip", "…or load a batch ZIP (⬇ Batch in Review)",
-                               accept=[".zip"], width="100%")
+        upload = ui.div(
+            ui.div(ui.span("— or upload —"), class_="or-divider"),
+            compact_file_input("batch_zip", "Batch ZIP (⬇ Batch in Review)", accept=[".zip"]),
+        )
         if not rows:
             return ui.div(ui.p("No saved batches in {}".format(BS.batch_root()),
-                               class_="text-muted small"), upload)
+                               class_="section-hint"), upload)
         choices = {r["path"]: "{} · {}/{} accepted · {}".format(
             r["name"], r["accepted"], r["n"], r["created"]) for r in rows}
         return ui.div(
-            ui.input_select("open_path", None, choices=choices, width="100%"),
-            ui.input_action_button("open_batch", "Open batch", class_="btn-primary"),
+            ui.div(
+                ui.div(ui.input_select("open_path", None, choices=choices, width="100%"),
+                       style="flex:1; min-width:0;"),
+                ui.input_action_button("open_batch", "Open batch", class_="btn-primary btn-sm"),
+                class_="ts-inline-row", style="flex-wrap:nowrap;"),
             ui.p("Settings and product choices come from the saved file; finished "
-                 "proteins are not exported again.", class_="text-muted small mt-2"),
+                 "proteins are not exported again.", class_="section-hint"),
             upload,
         )
 
@@ -172,17 +178,22 @@ def batch_setup_server(input, output, session, bstate):
                    else "text-muted" if e.get("duplicate_of") else "")
             rows.append(ui.tags.tr(
                 ui.tags.td(e["input"]), ui.tags.td(e.get("gene") or ""),
-                ui.tags.td(pick, style="min-width:360px"),
+                ui.tags.td(pick, style="min-width:340px"),
                 ui.tags.td(note, class_=cls), ui.tags.td(e.get("insert") or "batch default")))
         n_db = sum(e["source"] == "db" and not e.get("duplicate_of") for e in ents)
         n_miss = sum(e["source"] == "missing" for e in ents)
-        return ui.card(
-            ui.card_header("{} in database · {} not found · {} duplicate".format(
-                n_db, n_miss, sum(bool(e.get("duplicate_of")) for e in ents))),
-            ui.tags.table(
-                ui.tags.thead(ui.tags.tr(*[ui.tags.th(h) for h in
-                                           ("Input", "Gene", "Product", "Status", "Insert")])),
-                ui.tags.tbody(*rows), class_="table table-sm"),
+        n_dup = sum(bool(e.get("duplicate_of")) for e in ents)
+        return ui.div(
+            ui.div("{} in database · ".format(n_db),
+                   ui.span("{} not found".format(n_miss), class_="ts-miss" if n_miss else ""),
+                   " · {} duplicate".format(n_dup), class_="ts-resolved-summary"),
+            ui.div(
+                ui.tags.table(
+                    ui.tags.thead(ui.tags.tr(*[ui.tags.th(h) for h in
+                                               ("Input", "Gene", "Product", "Status",
+                                                "Insert")])),
+                    ui.tags.tbody(*rows), class_="table table-sm table-hover ts-resolved"),
+                class_="ts-resolved-wrap"),
         )
 
     def _chosen_entries():
