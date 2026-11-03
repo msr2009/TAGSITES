@@ -36,13 +36,44 @@ from build_proteome_db import SCALE  # noqa: E402
 ARM_LENGTH, PAM, SEED_LEN = 1000, "NGG", 15
 
 
+# set_default_path() replaces the configured database for the rest of the process
+_PATH_OVERRIDE = {"path": None}
+
+
 def default_path():
-    """The database path from batch.config.json's proteome_db block."""
+    """The database in use: set_default_path()'s, else batch.config.json's proteome_db.path."""
+    if _PATH_OVERRIDE["path"]:
+        return Path(_PATH_OVERRIDE["path"])
     from providers import _load_config
 
     cfg = _load_config().get("proteome_db", {})
     p = Path(cfg.get("path") or "data/runs/proteome_v1/proteome.sqlite3")
     return p if p.is_absolute() else _REPO_ROOT / p
+
+
+def set_default_path(path):
+    """Use another database file from now on in this process (None: back to the config)."""
+    if path is not None:
+        describe(path)   # raises unless it is a readable proteome database
+    _PATH_OVERRIDE["path"] = str(path) if path is not None else None
+
+
+def describe(path=None):
+    """Summary of a database file: path, size, build metadata, protein and gene counts."""
+    path = Path(path) if path else default_path()
+    conn = open_db(path)
+    try:
+        tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if not {"proteins", "meta"} <= tables:
+            raise ValueError("{} is not a proteome database (no proteins/meta tables)".format(path))
+        meta = dict(conn.execute("SELECT key, value FROM meta WHERE key IN "
+                                 "('built', 'git_commit', 'stages', 'run_dir')").fetchall())
+        n, genes = conn.execute("SELECT COUNT(*), COUNT(DISTINCT COALESCE(wb_gene, "
+                                "wormbase_gene, gene_name, id)) FROM proteins").fetchone()
+    finally:
+        conn.close()
+    return {"path": str(path), "size_gb": path.stat().st_size / 1e9, "proteins": n,
+            "genes": genes, **meta}
 
 
 def app_match_enabled():

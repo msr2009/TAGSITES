@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 import batch_bundle as BB  # noqa: E402
 import batch_inputs as BI  # noqa: E402
 import batch_state as BS  # noqa: E402
+import proteome_db as P  # noqa: E402
 import reagent_bundle as RB  # noqa: E402
 
 from modules.setup_server import _off_loop  # noqa: E402
@@ -41,6 +42,53 @@ def batch_setup_server(input, output, session, bstate):
     """bstate: shared {"path", "data"} dict plus reactive "rev" (refresh) and "start" (run)."""
     entries = reactive.Value([])        # resolved entries, before the batch is saved
     listing = reactive.Value(0)         # bumped to refresh the saved-batch list
+    db_rev = reactive.Value(0)          # bumped when the database in use changes
+
+    # ── proteome database ────────────────────────────────────────────────────
+    @render.ui
+    def db_card():
+        """The database in use: path, build, protein / gene counts, reference genome."""
+        db_rev.get()
+        ref = BS._load_batch_config().get("reference_data", {})
+        genome = " ".join(x for x in (ref.get("ensembl_species"), ref.get("ensembl_assembly"))
+                          if x) or "—"
+        try:
+            d = P.describe()
+        except Exception as e:
+            return ui.p("No database: {}".format(e), class_="text-danger small")
+        rows = [("File", ui.tags.code(d["path"])),
+                ("Contents", "{:,} proteins · {:,} genes · {:.1f} GB".format(
+                    d["proteins"], d["genes"], d["size_gb"])),
+                ("Built", "{} (commit {}; stages {})".format(
+                    d.get("built", "?"), d.get("git_commit", "?"), d.get("stages", "?"))),
+                ("Species", "{} — reference genome the arms are rebuilt from".format(genome))]
+        return ui.tags.table(*[ui.tags.tr(ui.tags.td(k), ui.tags.td(v)) for k, v in rows],
+                             class_="ts-db-info")
+
+    def _switch_db(path, why):
+        """Use another database file; True on success (a notification either way)."""
+        if os.path.realpath(str(path)) == os.path.realpath(str(P.default_path())):
+            return True
+        try:
+            P.set_default_path(path)
+        except Exception as e:
+            ui.notification_show("Could not use {}: {}".format(path, e), type="error",
+                                 duration=10)
+            return False
+        db_rev.set(db_rev.get() + 1)
+        ui.notification_show("{}: now using {}".format(why, path), duration=6)
+        return True
+
+    @reactive.effect
+    @reactive.event(input.use_db)
+    def _use_db():
+        """Switch to the database path typed in panel 0; earlier lookups no longer apply."""
+        path = os.path.expanduser(input.db_path().strip())
+        if not path:
+            ui.notification_show("Enter the path of a proteome .sqlite3 file.", type="warning")
+            return
+        if _switch_db(path, "Database changed"):
+            entries.set([])
 
     # ── defaults ─────────────────────────────────────────────────────────────
     @reactive.effect
@@ -92,7 +140,15 @@ def batch_setup_server(input, output, session, bstate):
 
     def _hand_over(path):
         """Put a batch file in the shared state and resume it in Progress."""
-        bstate["path"], bstate["data"] = path, BS.load_batch(path)
+        data = BS.load_batch(path)
+        # a batch made with another database reopens on that one (when it is still there)
+        db = data.get("settings", {}).get("proteome_db")
+        if db and os.path.exists(db):
+            _switch_db(db, "Batch '{}' was made with another database".format(data["name"]))
+        elif db:
+            ui.notification_show("Batch database {} is missing; using {}".format(
+                db, P.default_path()), type="warning", duration=10)
+        bstate["path"], bstate["data"] = path, data
         bstate["rev"].set(bstate["rev"].get() + 1)
         bstate["start"].set(bstate["start"].get() + 1)
         ui.update_navset("main_tabs", selected="progress", session=session.root_scope())
@@ -241,7 +297,12 @@ def batch_setup_server(input, output, session, bstate):
                         "no_cterm": bool(input.filt_no_cterm()),
                         "guide_within": int(input.filt_guide_bp() or 0) if input.filt_guide()
                         else 0,
-                        "constitutive_only": bool(input.filt_constitutive())}}
+                        "constitutive_only": bool(input.filt_constitutive()),
+                        "mask_signal": bool(input.filt_mask_signal()),
+                        "mask_tm": bool(input.filt_mask_tm()),
+                        "mask_domain": bool(input.filt_mask_domain()),
+                        "mask_uniprot": bool(input.filt_mask_uniprot())},
+                    "proteome_db": str(P.default_path())}
         path = BS.new_batch(name, settings, ents)
         bstate["path"], bstate["data"] = path, BS.load_batch(path)
         bstate["rev"].set(bstate["rev"].get() + 1)

@@ -25,7 +25,7 @@ from utils.results import (
 from utils.scoring import (
     score_tag_sites, failed_flags, mask_reasons, score_cmap_hex, score_max,
     load_scoring_config, pick_suggested_sites, position_mask_criterion, with_extra_criteria,
-    unmask_checked_topology,
+    unmask_checked_topology, lift_hard_masks, range_positions,
 )
 from utils.tag_filters import isoform_key, isoform_allowed_positions, topology_tag_allowed_positions
 from config import RESULTS_TYPE_DICT, DOMAIN_SOURCE_COLORS, TOPOLOGY_SOURCES
@@ -116,6 +116,14 @@ def _build_colors_and_legend(track, task_name, scheme, aa_df, range_df, seq_len,
 
 # topology labels (Phobius / DeepTMHMM) whose Tag checkbox starts unchecked (masked)
 _TOPOLOGY_DEFAULT_OFF = {"Signal peptide", "Transmembrane", "signal", "TMhelix"}
+# batch app: topology labels set by the Site filters' signal / transmembrane switches
+# (dropped from the topology Tag matrix there), and the hard-mask descriptions each lifts
+_SIGNAL_LABELS = {"Signal peptide", "signal"}
+_TM_LABELS = {"Transmembrane", "TMhelix"}
+_SIGNAL_LIFT = {"Signal peptide", "signal", "Transit peptide"}
+_TM_LIFT = {"Transmembrane", "TMhelix"}
+# defaults of the batch site filters missing from older batch files
+_FILTER_DEFAULTS = {"mask_signal": True, "mask_tm": True}
 
 
 # annotation color-by tracks → (sources, mutations filter; see residue_colors_for_annotations)
@@ -205,7 +213,12 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
         """Batch default of one site filter (False/0 in the single-protein app)."""
         if site_filters is None:
             return False
-        return (site_filters.get() or {}).get(key) or False
+        val = (site_filters.get() or {}).get(key)
+        return _FILTER_DEFAULTS.get(key, False) if val is None else val
+
+    def _mask_on(key):
+        """Current state of a batch annotation-mask switch (its batch default before render)."""
+        return _checked("filt_" + key, bool(_filter_default(key)))
 
     def _suggest(scores):
         """Suggested sites; the batch's n_suggested sets how many (scoring's default otherwise)."""
@@ -231,6 +244,15 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
             out.append(position_mask_criterion(set(range(1, seq_len + 1)) - near,
                                                "user_guide_within",
                                                "no guide within {} bp".format(within)))
+        rng = range_data.get()
+        # annotation masks: every residue inside a domain / a UniProt site annotation
+        if _mask_on("mask_domain"):
+            out.append(position_mask_criterion(
+                range_positions(rng, DOMAIN_STRUCT_SOURCES, seq_len), "user_domain", "in domain"))
+        if _mask_on("mask_uniprot"):
+            out.append(position_mask_criterion(
+                range_positions(rng, {"UniProt_site"}, seq_len), "user_uniprot_site",
+                "UniProt site"))
         return out
 
     @reactive.calc
@@ -247,6 +269,13 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
         constitutive = _checked("iso_constitutive_only", _filter_default("constitutive_only"))
         checked_topology = {lbl for lbl in _topology_labels()
                             if _checked(f"topology_tag_{_safe_id(lbl)}", _topology_default(lbl))}
+        if site_filters is not None:
+            # batch app: signal / TM labels follow the Site filters switches, not the matrix
+            for labels, key in ((_SIGNAL_LABELS, "mask_signal"), (_TM_LABELS, "mask_tm")):
+                present = labels & set(_topology_labels())
+                checked_topology -= present
+                if not _mask_on(key):
+                    checked_topology |= present
         return visible_keys, tagged_keys, constitutive, checked_topology
 
     def _visible_iso_result():
@@ -277,6 +306,12 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
         all_topology = set(_topology_labels())
         # checking Signal peptide / Transmembrane lifts the config's hard mask on them
         cfg = unmask_checked_topology(cfg, checked_topology)
+        if site_filters is not None:
+            # batch app: a switched-off signal / TM mask also lifts the config's hard mask
+            # (UniProt Signal / Transit peptide, Transmembrane), topology data or not
+            lifted = (set() if _mask_on("mask_signal") else _SIGNAL_LIFT) | \
+                     (set() if _mask_on("mask_tm") else _TM_LIFT)
+            cfg = lift_hard_masks(cfg, lifted)
         all_positions = set(range(1, seq_len + 1))
 
         # isoform and topology restrictions are computed independently and each becomes
@@ -813,6 +848,9 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
         isoforms = sorted(iso_result.get("isoforms", []), key=lambda x: x.get("length", 0),
                           reverse=True)
         topology_labels = _topology_labels()
+        if site_filters is not None:
+            topology_labels = [lbl for lbl in topology_labels
+                               if lbl not in _SIGNAL_LABELS | _TM_LABELS]
         topology_sources_present = _topology_sources_present()
         if len(isoforms) <= 1 and not topology_labels and site_filters is None:
             return ui.div()
@@ -831,6 +869,12 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
                 switches.append(ui.input_switch(
                     "filt_guide_within", "Mask sites with no guide cut within {} bp".format(within),
                     value=True))
+            for key, text in (("mask_signal", "Mask signal / transit peptides"),
+                              ("mask_tm", "Mask transmembrane spans"),
+                              ("mask_domain", "Mask domains (Pfam)"),
+                              ("mask_uniprot", "Mask UniProt sites")):
+                switches.append(ui.input_switch("filt_" + key, text,
+                                                value=bool(_filter_default(key))))
             body.append(ui.div(
                 ui.span("Site filters (batch defaults)", class_="ts-matrix-name-label"),
                 *switches,

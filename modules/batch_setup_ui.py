@@ -29,9 +29,19 @@ _BATCH_STYLE = """
     .ts-filter-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
                       gap: 0.1rem 1rem; max-width: 760px; }
     .ts-filter-grid .shiny-input-container { margin-bottom: 0.2rem !important; }
-    .ts-filter-grid .form-check-label { font-size: 0.8rem; }
-    .ts-repair .shiny-options-group { display: flex; flex-wrap: wrap; gap: 0 1rem; }
-    .ts-repair .form-check-label { font-size: 0.8rem; }
+    .ts-filter-grid .form-check-label, .ts-mask-group .form-check-label { font-size: 0.8rem; }
+    .ts-masks-title { font-weight: 700; font-size: 0.875rem; color: #212529;
+                      margin: 0.6rem 0 0.2rem; }
+    .ts-mask-group { margin: 0 0 0.35rem 0.25rem; }
+    .ts-mask-group-label { font-size: 0.78rem; font-weight: 600; color: #495057;
+                           margin-bottom: 0.1rem; }
+    .ts-mask-group .ts-inline-row { flex-wrap: nowrap; }
+    .ts-repair .form-check-inline { margin-right: 1rem; }
+    .ts-repair .form-check-label { font-size: 0.8rem; white-space: nowrap; }
+    .ts-db-info { font-size: 0.8rem; color: #343a40; margin: 0 0 0.4rem; }
+    .ts-db-info td { padding: 0.05rem 0.75rem 0.05rem 0; vertical-align: top; }
+    .ts-db-info td:first-child { color: #6c757d; white-space: nowrap; }
+    .ts-db-info code { font-size: 0.78rem; word-break: break-all; }
     .ts-resolved { font-size: 0.8rem; margin: 0.4rem 0 0; }
     .ts-resolved th { font-weight: 600; color: #343a40; background: #f1f5fb !important;
                       position: sticky; top: 0; z-index: 1; }
@@ -62,6 +72,26 @@ def batch_setup_ui():
     return ui.page_fluid(
         ui.tags.style(_STYLE + COMPACT_FILE_CSS + _BATCH_STYLE),
         ui.accordion(
+            # ── Panel 0: the proteome database ────────────────────────────────
+            ui.accordion_panel(
+                _hint("0 · Proteome database",
+                      "The precomputed analyses every protein is looked up in."),
+                ui.output_ui("db_card"),
+                ui.div(
+                    _inline(
+                        ui.div(ui.input_text("db_path", None, value="", width="100%",
+                                             placeholder="/path/to/proteome.sqlite3"),
+                               style="flex:1; min-width:0;"),
+                        ui.input_action_button("use_db", "Use database",
+                                               class_="btn-sm btn-outline-primary")),
+                    ui.p("Applies to this app until it restarts; a new batch records its "
+                         "database and reopening the batch switches back to it.",
+                         class_="section-hint"),
+                    class_="inputs-inner",
+                ),
+                value="db",
+            ),
+
             # ── Panel 1: open a saved batch ───────────────────────────────────
             ui.accordion_panel(
                 _hint("1 · Open a saved batch",
@@ -104,7 +134,7 @@ def batch_setup_ui():
                             "repair_type", "Repair template",
                             {"ha": "Homology arms", "ssodn": "ssODN", "amplicon": "PCR amplicon",
                              "plasmid": "SapTrap plasmid"},
-                            selected="ssodn"),
+                            selected="ssodn", inline=True, width="100%"),
                         class_="ts-repair"),
                     _inline(ui.tags.label("Arm length (bp)", class_="form-label"),
                             ui.input_numeric("arm_length", None, value=45, min=20, max=1000)),
@@ -128,18 +158,35 @@ def batch_setup_ui():
                       "How many sites to suggest per protein, and where not to."),
                 _inline(ui.tags.label("Suggested sites per protein", class_="form-label"),
                         ui.input_numeric("n_suggested", None, value=2, min=1, max=20)),
+                ui.div("Masks", class_="ts-masks-title"),
                 ui.div(
-                    ui.input_checkbox("filt_no_nterm", "No N-terminus (residue 1)", value=False),
-                    ui.input_checkbox("filt_no_cterm", "No C-terminus (last residue)",
-                                      value=False),
-                    ui.input_checkbox("filt_constitutive", "Constitutive sites only",
-                                      value=False),
+                    ui.div("Position", class_="ts-mask-group-label"),
+                    ui.div(
+                        ui.input_checkbox("filt_no_nterm", "No N-terminus (residue 1)",
+                                          value=False),
+                        ui.input_checkbox("filt_no_cterm", "No C-terminus (last residue)",
+                                          value=False),
+                        class_="ts-filter-grid"),
                     _inline(ui.input_checkbox("filt_guide", "Guide cut within", value=False),
                             ui.input_numeric("filt_guide_bp", None, value=5, min=0, max=100),
                             ui.span("bp", class_="form-label")),
-                    class_="ts-filter-grid",
+                    class_="ts-mask-group",
                 ),
-                ui.p("These mask positions from every protein's suggestions; each can be "
+                ui.div(
+                    ui.div("Annotation", class_="ts-mask-group-label"),
+                    ui.div(
+                        ui.input_checkbox("filt_constitutive", "Constitutive sites only",
+                                          value=False),
+                        ui.input_checkbox("filt_mask_signal", "Signal / transit peptide",
+                                          value=True),
+                        ui.input_checkbox("filt_mask_tm", "Transmembrane", value=True),
+                        ui.input_checkbox("filt_mask_domain", "Domains (Pfam)", value=False),
+                        ui.input_checkbox("filt_mask_uniprot", "All UniProt sites",
+                                          value=False),
+                        class_="ts-filter-grid"),
+                    class_="ts-mask-group",
+                ),
+                ui.p("Masks remove positions from every protein's suggestions; each can be "
                      "switched off per protein in Review (Rescoring), and any site can still "
                      "be added by hand.", class_="section-hint mt-1"),
                 value="filters",
@@ -152,7 +199,7 @@ def batch_setup_ui():
                 ui.div(
                     ui.input_checkbox("ebi_for_missing",
                                       "Run EBI analyses for proteins not in the database",
-                                      value=False),
+                                      value=False, width="100%"),
                     ui.panel_conditional(
                         "input.ebi_for_missing",
                         ui.input_text("email",
@@ -169,7 +216,7 @@ def batch_setup_ui():
                 value="ebi",
             ),
 
-            open=["open", "proteins", "reagents", "filters"],
+            open=["db", "open", "proteins", "reagents", "filters"],
             multiple=True,
         ),
 

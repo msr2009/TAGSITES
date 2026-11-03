@@ -122,7 +122,12 @@ def unmask_checked_topology(config, checked_labels):
     for group in _HARD_MASK_TOPOLOGY_GROUPS:
         if group & set(checked_labels):
             lifted |= group
-    if not lifted:
+    return lift_hard_masks(config, lifted)
+
+
+def lift_hard_masks(config, descriptions):
+    """Copy of config whose hard "in_membrane_or_cleaved" mask no longer matches descriptions."""
+    if not descriptions:
         return config
     out = dict(config)
     out["criteria"] = []
@@ -130,10 +135,15 @@ def unmask_checked_topology(config, checked_labels):
         if c.get("key") == "in_membrane_or_cleaved":
             params = dict(c["params"])
             params["include_descriptions"] = [d for d in params["include_descriptions"]
-                                              if d not in lifted]
+                                              if d not in descriptions]
             c = {**c, "params": params}
         out["criteria"].append(c)
     return out
+
+
+def range_positions(range_df, sources, seq_len):
+    """1-based positions inside any annotation interval from the given sources."""
+    return _range_mask(range_df, set(sources), seq_len)
 
 
 _SUGGESTED_MAX_SITES = 3

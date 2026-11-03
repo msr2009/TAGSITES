@@ -190,16 +190,23 @@ Exports skip arms (`export_reagents(with_arms=False)`) and alignment PDFs (rende
 niced subprocess: in-process they hold the GIL and slowed protein switches ~5x); `batch_output`
 regenerates arms only for accepted sites (`proteome_export.rows_with_arms`). Measured on 10 worm
 proteins: Prepare ~10 s (mostly one-time imports + 2 s genome load), protein switch 25-500 ms.
-Setup's site filters (suggested sites per protein, default 2; no N-term, no C-term, guide cut
-within N bp, constitutive only) are batch defaults of switches in Review's Rescoring panel (`results_server(site_filters=...)`); they mask
-suggestions only. A batch saves/loads as one ZIP (`batch_bundle`): each protein is an ordinary
+Setup's site filters (suggested sites per protein, default 2; position masks: no N-term, no C-term,
+guide cut within N bp; annotation masks: constitutive only, signal / transit peptide (on),
+transmembrane (on), Pfam domains, every UniProt_site annotation) are batch defaults of switches in
+Review's Rescoring panel (`results_server(site_filters=...)`); they mask suggestions only. There the
+signal / TM switches replace the topology matrix's signal / TMhelix rows and, when off, also lift the
+hard `in_membrane_or_cleaved` mask (`scoring.lift_hard_masks`). Setup panel 0 shows the database in
+use (`proteome_db.describe`) and switches it for the process (`proteome_db.set_default_path`); a batch
+records its database in `settings.proteome_db` and reopening it switches back. A batch saves/loads as one ZIP (`batch_bundle`): each protein is an ordinary
 single-app bundle, minus the arm-less reagents TSV for database proteins (the single app then
 recomputes reagents, ~9 s; the batch app re-exports the TSV from the database). The manifest is
 `BATCH_MANIFEST.json` so the single app never takes the batch ZIP for a run bundle.
 Batch reagent names are `{gene}_{uniprot}_{aa}{res}_{tag}` (`reagent_bundle.batch_names`; the
 product id alone when there is no gene); the single app's names are unchanged
 (`single_names`). Statuses: pending -> ready -> in_progress (opened) -> accepted; editing an
-accepted protein returns it to in_progress. Review recomputes the suggested sites every time a protein that is not
+accepted protein returns it to in_progress. Skip (red, next to Accept) marks a protein `skipped`
+(red italic in the list, listed in `{batch}.skipped.txt` beside the batch file, rewritten on each
+save) and moves on; Unskip restores the earlier status; skipped proteins never reach Output. Review recomputes the suggested sites every time a protein that is not
 accepted is opened (saved `selected_sites` are ignored); only accepted proteins keep their sites
 (`results_server(kept_sites=...)`).
 
