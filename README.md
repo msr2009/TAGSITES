@@ -35,10 +35,11 @@ Shared reference: [docs/INSTALL.md](docs/INSTALL.md) (full install) and
 ---
 ## Quickest start (shinyapps hosted app)
 
-A version of the single-protein, web-served analysis app is hosted on shinyapps.
+A version of the single-protein, web-served analysis app is hosted on shinyapps. 
+This is probably sufficient for most use-cases.
 [https://mattrich.shinyapps.io/tagsites/](https://mattrich.shinyapps.io/tagsites/)
 
-## Quick start (web services)
+## Quick start (local app, web services for analyses)
 
 Requires an internet connection. BLAST, Clustal Omega, InterPro and Genewise run through the EBI
 REST API, so no local bioinformatics tools are needed.
