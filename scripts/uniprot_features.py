@@ -21,6 +21,7 @@ Matt Rich, 2026
 
 import sys
 
+from paired_features import split_paired_rows
 from uniprot_api import fetch_entry, resolve_accession
 from progress import report as _report, resolve_reporter
 
@@ -133,7 +134,9 @@ def entry_to_feature_rows(entry_json, feature_config):
         if source == "UniProt_site" and DISORDER_LABEL in detail:
             source = "UniProt_disorder"
         rows.append((source, start, stop, f"{label}: {detail}"))
-    return rows
+    # a disulfide / cross-link location is its two bonded residues, not a stretch between them
+    sequence = (entry_json.get("sequence") or {}).get("value")
+    return split_paired_rows(rows, sequence)
 
 
 def main(fasta_in, output, features_file, accession="", taxid="", report=None):

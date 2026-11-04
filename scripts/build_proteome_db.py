@@ -61,6 +61,8 @@ _REPO_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(_REPO_ROOT))
 
+from paired_features import split_paired_rows  # noqa: E402
+
 # value x scale, rounded to int
 SCALE = {"conservation": 100000, "hydrophobicity": 10000, "plddt": 100, "rsasa": 10000,
          "struct_hydro": 10000, "score": 100}
@@ -340,21 +342,21 @@ def _scaled(text, scale):
     return int(round(v * scale))
 
 
-def _range_features(path, track, stop_shift=0):
+def _range_features(path, track, stop_shift=0, sequence=None):
     """(track, source, start, stop, description) rows from a source/start/stop/description file.
 
-    Disordered Regions are relabelled here as well as in uniprot_features.py: a proteome run's
-    task files were written before that split existed, so ingesting them unchanged would put
-    disorder back into UniProt_site and undo the migration on every rebuild.
+    Disordered Regions are relabelled and disulfide / cross-link spans split into their two
+    residues here as well as in uniprot_features.py: a proteome run's task files were written
+    before either change, so ingesting them unchanged would undo both on every rebuild.
     """
-    out = []
+    rows = []
     for r in _rows(path, maxsplit=3):
         if len(r) >= 4:
             source = r[0]
             if source == "UniProt_site" and "Disordered" in r[3]:
                 source = "UniProt_disorder"
-            out.append((track, source, int(r[1]), int(r[2]) + stop_shift, r[3]))
-    return out
+            rows.append((source, int(r[1]), int(r[2]) + stop_shift, r[3]))
+    return [(track, *r) for r in split_paired_rows(rows, sequence)]
 
 
 def _conservation_summary(hits_path, mean_jsd, aln_rel, hits_rel):
@@ -472,7 +474,7 @@ def parse_protein(job):
                                    ("uniprot", "uniprot", 0)):
             if ok[task]:
                 attempt(task, lambda t=task, k=track, s=shift: out["features"].extend(
-                    _range_features(path[t], k, s)))
+                    _range_features(path[t], k, s, job.get("sequence"))))
         if job.get("topology_file"):
             attempt("topology", lambda: out["features"].extend(
                 _range_features(job["topology_file"], "topology")))

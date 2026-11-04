@@ -14,6 +14,7 @@ from numpy import linspace
 from config import ANALYSIS_COLORS, DOMAIN_SOURCE_COLORS, ISOFORM_CLASS_COLORS, GLOBAL_KEYS, TOPOLOGY_SOURCES
 from config import PLOT_LINE_COLORS, SECONDARY_STRUCTURE_COLORS
 from scripts.task_registry import companion_path
+from scripts.paired_features import is_paired, split_paired_rows
 
 
 # keyword → short label mapping for Phobius region descriptions from EBI InterProScan5.
@@ -149,6 +150,19 @@ def cached_load(kind, json_in, fn, *args):
         while len(data) > _LOAD_CACHE["max"]:
             data.popitem(last=False)
     return value
+
+
+def _split_legacy_pairs(dat, run_json):
+    """Split unsplit two-residue bond rows of a range frame; other rows are untouched."""
+    paired = [is_paired(*r) for r in dat[["source", "start", "stop", "description"]].itertuples(
+        index=False)]
+    # the common case (new runs, proteins without bonds) skips the FASTA read entirely
+    if not any(paired):
+        return dat
+    sequence = load_run_metadata(run_json)["query_seq"] if run_json else None
+    cols = list(dat.columns)
+    rows = split_paired_rows([tuple(r) for r in dat[cols].itertuples(index=False)], sequence)
+    return pd.DataFrame(rows, columns=cols)
 
 
 def load_data_from_json(json_in, type_dict):
@@ -299,6 +313,11 @@ def load_data_from_json(json_in, type_dict):
     # pick the most informative isoform candidate; kept separate from range_df —
     # isoforms get their own pane, not a row in the annotations feature panel
     iso_result = _select_isoform_candidate(iso_candidates) if iso_candidates else None
+
+    # runs and database exports made before scripts/paired_features.py still carry a
+    # disulfide / cross-link as one start..end span; split it into its two bonded residues
+    if not dat.empty:
+        dat = _split_legacy_pairs(dat, j)
 
     # translate verbose Phobius descriptions (DeepTMHMM's own region words pass through
     # untouched) and merge overlapping intervals per (source, label)

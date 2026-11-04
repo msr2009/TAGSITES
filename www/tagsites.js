@@ -983,7 +983,9 @@
     if (cy >= layout.featTop && cy <= layout.featTop + layout.featH) {
       rangeFeatures.forEach(function (feat) {
         if (pos >= feat.start && pos <= feat.stop) {
-          lines.push(feat.source + ": " + feat.desc + " (" + feat.start + "–" + feat.stop + ")");
+          // single-residue features (sites, each bonded cysteine) show one position
+          var where = feat.start === feat.stop ? feat.start : feat.start + "–" + feat.stop;
+          lines.push(feat.source + ": " + feat.desc + " (" + where + ")");
         }
       });
     }
