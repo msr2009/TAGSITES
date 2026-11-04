@@ -501,7 +501,8 @@ def plot_results(aa_df, range_df, title="Results Plot"):
     # all-Phobius-is-purple.
     height = 2
     y_positions = {"Phobius": 2, "DeepTMHMM": 4, "Pfam": 6, "modification": 8,
-                   "hydrophobic_patch": 10, "UniProt": 12, "UniProt_site": 14}
+                   "hydrophobic_patch": 10, "UniProt": 12, "UniProt_site": 14,
+                   "UniProt_disorder": 16}
     color_map = _annotation_color_map(range_df)
 
     # opacity for hydrophobic patches scales with total patch hydrophobicity
@@ -746,7 +747,7 @@ _ANNOTATION_PALETTE = [
 
 # Sources shown in the 2D feature panel
 _FEATURE_SOURCES = {"Pfam", "Phobius", "DeepTMHMM", "modification", "hydrophobic_patch",
-                     "UniProt", "UniProt_site"}
+                     "UniProt", "UniProt_site", "UniProt_disorder"}
 
 # Structure colorschemes built from annotations: __domains__ shows Pfam domains,
 # __sites__ shows UniProt-fetched features (minus mutagenesis) plus regex-predicted modification
@@ -754,12 +755,16 @@ _FEATURE_SOURCES = {"Pfam", "Phobius", "DeepTMHMM", "modification", "hydrophobic
 # (topology sources have their own __topology__ scheme — see TOPOLOGY_SOURCES)
 DOMAIN_STRUCT_SOURCES = {"Pfam"}
 SITES_STRUCT_SOURCES = {"UniProt", "UniProt_site", "modification"}
+# disorder is shown as its own track; it is deliberately NOT in SITES_STRUCT_SOURCES, so the
+# __sites__ colorscheme and the optional "UniProt site" mask both leave disordered stretches alone
+DISORDER_SOURCES = {"UniProt_disorder"}
 # UniProt mutagenesis rows are UniProt_site rows whose description starts with this label
 # (tables/uniprot_features.txt); the __mutations__ scheme shows them, __sites__ excludes them
 MUTATION_PREFIX = "Mutagenesis:"
 
 # paint priority: last painted wins; modifications and UniProt features end up on top
-_FEATURE_PAINT_ORDER = ["Pfam", "Phobius", "DeepTMHMM", "modification", "UniProt_site", "UniProt"]
+_FEATURE_PAINT_ORDER = ["Pfam", "Phobius", "DeepTMHMM", "UniProt_disorder", "modification",
+                        "UniProt_site", "UniProt"]
 
 
 def _annotation_color_map(range_df):
@@ -988,7 +993,8 @@ def build_plot_payload(aa_df, range_df, iso_result=None, title="Results"):
     JSON serialization. NaN values in aa_df are converted to None (→ null in JSON).
     """
     y_positions = {"Phobius": 1, "DeepTMHMM": 3, "Pfam": 5, "modification": 7,
-                   "hydrophobic_patch": 9, "UniProt": 11, "UniProt_site": 13}
+                   "hydrophobic_patch": 9, "UniProt": 11, "UniProt_site": 13,
+                   "UniProt_disorder": 15}
 
     line_tracks = []
     data_max = -float("inf")

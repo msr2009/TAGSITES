@@ -4,6 +4,12 @@
 #   feature_type — must match UniProt's "type" field exactly (case-sensitive)
 #   severity     — "blocking" (site is UniProt track, penalized by not_in_uniprot_feature
 #                  scoring criterion) or "site" (site is UniProt_site track, informational only)
+#
+# One exception is handled in code, not here, because it is a description rather than a type:
+# Region features noted "Disordered" go to their own UniProt_disorder track. They are the bulk
+# of the Region type (23,264 of 24,807 Region rows in the worm database) and mark GOOD tag
+# sites, so leaving them in UniProt_site made the optional "UniProt site" mask hide exactly the
+# positions worth tagging. See scripts/uniprot_features.py (DISORDER_LABEL).
 #   label        — short human-readable name shown in the Results plot legend
 #
 # Feature types not listed here are ignored. Lines starting with # and blank

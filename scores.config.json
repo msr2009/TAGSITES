@@ -33,6 +33,11 @@
     "  range_present:         sources (list), exclude_descriptions (list, optional),",
     "                         include_descriptions (list, optional)",
     "  column_below:          analysis (aa_df column type, e.g. 'plddt'/'blast'), threshold",
+    "  column_ramp:           analysis, low, high — the graded form of column_below. A value at",
+    "                         or past `low` earns the full weight, one at or past `high` earns",
+    "                         none, and it is linear between; `low` is always the good end, so",
+    "                         low > high for a track where a higher value is better. Missing",
+    "                         data still scores 0 and never penalizes.",
     "  reagent_min_below:     column (reagents TSV column), threshold",
     "  reagent_min_above:     columns (list of reagents TSV columns), threshold",
     "  flank_small_fraction:  small_aa (string of residue letters), window, fraction",
@@ -87,30 +92,31 @@
       "key": "low_plddt",
       "type": "column_below",
       "weight": 1,
-      "label": "pLDDT>0.5",
-      "note": "1 pt if AlphaFold pLDDT is below threshold (disordered/flexible)",
+      "label": "pLDDT>0.7",
+      "note": "1 pt if AlphaFold pLDDT is below threshold (disordered/flexible). 0.7 is AlphaFold's own low/confident band edge: yeast essential C-terminal failure is 7.9% below 50 and 7.6% from 50-70, then 16.1% from 70-90 and 15.3% above 90 — one break at 70, not a gradient. The former 0.5 split very-low from low, where nothing differs (a10)",
       "params": {
         "analysis": "plddt",
-        "threshold": 0.5
+        "threshold": 0.7
       }
     },
     {
       "key": "low_conservation",
-      "type": "column_below",
+      "type": "column_ramp",
       "weight": 1,
-      "label": "SJD>0.5",
-      "note": "1 pt if BLAST conservation (SJD) is below threshold",
+      "label": "conservation",
+      "note": "graded: full point at SJD <= 0.635, none at >= 0.831, linear between. Failure rate climbs steadily across that range with no plateau, so the former hard cut at 0.5 sat below where anything happens and scored 0.51 the same as 0.95. Worth ~3x the fixed step on held-out log loss (a10)",
       "params": {
         "analysis": "blast",
-        "threshold": 0.5
+        "low": 0.635,
+        "high": 0.831
       }
     },
     {
       "key": "near_guide",
       "type": "reagent_min_below",
-      "weight": 1,
+      "weight": 0,
       "label": "guide<10bp",
-      "note": "1 pt if a CRISPR guide cut site is within `threshold` bp",
+      "note": "DISABLED (weight 0, kept so the database's criterion bitmask keeps its positions). Guide proximity is reagent availability, not protein biology: it had the largest spread of any criterion, and dropping it improved the independent Gameiro fitness correlation (rho 0.058 -> 0.067) while barely moving the worm choices",
       "params": {
         "column": "distance",
         "threshold": 10

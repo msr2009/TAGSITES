@@ -38,6 +38,24 @@ SCORING_CONFIG_PATH = Path(__file__).parent.parent / "scores.config.json"
 
 _CONFIG_CACHE = {}   # path -> (mtime, parsed config)
 
+# a graded criterion below this contributes too little to count as satisfied, for the
+# pass/fail views that cannot show a fraction (tooltips, the database's criterion bitmask)
+PARTIAL_CREDIT_FLOOR = 0.5
+
+
+def satisfaction(value):
+    """A criterion's contribution as a 0-1 fraction of its weight.
+
+    True/False and missing data (None/NaN) behave exactly as before — missing never
+    penalizes. A graded handler returns a float, which passes through clipped.
+    """
+    if value is None:
+        return 0.0
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        v = float(value)
+        return 0.0 if v != v else min(max(v, 0.0), 1.0)
+    return 1.0 if value else 0.0
+
 
 def load_scoring_config(path=None):
     """Load scores.config.json (or a given path), returning its parsed criteria list.
@@ -67,7 +85,16 @@ def failed_flags(scores_df, config=None):
     active = [c for c in config["criteria"] if c["weight"] > 0]
     flags = []
     for _, row in scores_df.iterrows():
-        flags.append([c["label"] for c in active if not row[c["key"]]])
+        reasons = []
+        for c in active:
+            got = satisfaction(row[c["key"]])
+            # a graded criterion is a reason only when it earned less than half its weight,
+            # and it says how much it did earn rather than reading as a flat failure
+            if got < PARTIAL_CREDIT_FLOOR:
+                pts = c["weight"] * got
+                reasons.append(c["label"] if pts == 0 else
+                               "{} ({:.1f} pt)".format(c["label"], pts))
+        flags.append(reasons)
     return flags
 
 
@@ -290,6 +317,26 @@ def _handle_column_below(positions, params, ctx):
     return [series.get(p, float("nan")) < threshold for p in positions]
 
 
+def _ramp(value, low, high):
+    """0-1 response: full credit at or past `low`, none at or past `high`, linear between."""
+    if value != value:  # NaN: missing data, handled as not-satisfied without penalty
+        return float("nan")
+    if high == low:
+        return 1.0 if value < high else 0.0
+    frac = (high - value) / (high - low)
+    return min(max(frac, 0.0), 1.0)
+
+
+def _handle_column_ramp(positions, params, ctx):
+    """Graded version of column_below: `low` earns the full weight, `high` earns none."""
+    col = _find_column(ctx["aa_df"], params["analysis"])
+    if col is None:
+        return [None] * len(positions)
+    series = ctx["aa_df"].set_index("pos")[col]
+    low, high = params["low"], params["high"]
+    return [_ramp(series.get(p, float("nan")), low, high) for p in positions]
+
+
 def _reagents_cache_for(ctx, column):
     """Get (building + memoizing on ctx if needed) the per-residue min Series for `column`."""
     cache = ctx.setdefault("_reagents_cache", {})
@@ -345,6 +392,7 @@ SCORE_HANDLERS = {
     "range_absent":         _handle_range_absent,
 	"range_present":		_handle_range_present,
     "column_below":         _handle_column_below,
+    "column_ramp":          _handle_column_ramp,
     "reagent_min_below":    _handle_reagent_min_below,
     "reagent_min_above":    _handle_reagent_min_above,
     "flank_small_fraction": _handle_flank_small_fraction,
@@ -389,7 +437,7 @@ def score_tag_sites(aa_df, range_df, query_seq, reagents_df=None, config=None):
     # NaN comparisons inside handlers evaluate False, and None (missing data)
     # is treated as not-satisfied — both are the desired "no penalty" behavior
     out["score"] = sum(
-        c["weight"] * out[c["key"]].apply(lambda v: bool(v)) for c in score_criteria
+        c["weight"] * out[c["key"]].apply(satisfaction) for c in score_criteria
     )
 
     # a fired mask criterion (weight 0, never a penalty for missing data) forces

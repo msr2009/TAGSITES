@@ -4,11 +4,17 @@ Fetches a UniProt entry and emits a curated subset of its feature table (PTMs,
 lipidation, propeptides, binding sites, etc.) as range annotations, following
 the same conventions as regex_sites.py / call_interpro.py.
 
-Two output sources, distinguished by severity in tables/uniprot_features.txt:
+Three output sources. Two come from severity in tables/uniprot_features.txt:
   UniProt       - "blocking" features (lipidation, propeptide, signal peptide, ...):
                   tagging here is expected to disrupt processing/targeting/folding.
   UniProt_site  - "site" features (binding site, motif, modified residue, mutagenesis, ...):
                   informational only.
+The third is split out by description, because severity is per feature type and this is not:
+  UniProt_disorder - Region features annotated "Disordered". These dominate the Region type
+                  (79-86% of all UniProt_site hits at yeast termini; 23,264 of 24,807 Region
+                  rows in the worm database), and a disordered stretch is a *good* tag site,
+                  not a feature to avoid. Keeping them inside UniProt_site made the optional
+                  "UniProt site" mask hide the best candidate positions.
 
 Matt Rich, 2026
 """
@@ -19,6 +25,7 @@ from uniprot_api import fetch_entry, resolve_accession
 from progress import report as _report, resolve_reporter
 
 MAX_DELETION = 10  # deletions longer than this (aa) are not reported
+DISORDER_LABEL = "Disordered"  # UniProt's note on a disordered Region
 
 
 def load_feature_config(path):
@@ -119,8 +126,12 @@ def entry_to_feature_rows(entry_json, feature_config):
         if _is_large_deletion(feature, start, stop):
             continue
         severity, label = feature_config[ftype]
-        source = "UniProt" if severity == "blocking" else "UniProt_site"
         detail = _feature_detail(feature, ftype) + _evidence_suffix(feature)
+        source = "UniProt" if severity == "blocking" else "UniProt_site"
+        # disorder is a Region, but it marks a good tag site rather than one to avoid,
+        # so it gets its own source instead of riding in the informational site track
+        if source == "UniProt_site" and DISORDER_LABEL in detail:
+            source = "UniProt_disorder"
         rows.append((source, start, stop, f"{label}: {detail}"))
     return rows
 

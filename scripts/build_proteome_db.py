@@ -341,11 +341,19 @@ def _scaled(text, scale):
 
 
 def _range_features(path, track, stop_shift=0):
-    """(track, source, start, stop, description) rows from a source/start/stop/description file."""
+    """(track, source, start, stop, description) rows from a source/start/stop/description file.
+
+    Disordered Regions are relabelled here as well as in uniprot_features.py: a proteome run's
+    task files were written before that split existed, so ingesting them unchanged would put
+    disorder back into UniProt_site and undo the migration on every rebuild.
+    """
     out = []
     for r in _rows(path, maxsplit=3):
         if len(r) >= 4:
-            out.append((track, r[0], int(r[1]), int(r[2]) + stop_shift, r[3]))
+            source = r[0]
+            if source == "UniProt_site" and "Disordered" in r[3]:
+                source = "UniProt_disorder"
+            out.append((track, source, int(r[1]), int(r[2]) + stop_shift, r[3]))
     return out
 
 
@@ -414,6 +422,8 @@ def _score_protein(job, files):
         aa_df, range_df, _, _ = load_data_from_json({"tasks": tasks}, RESULTS_TYPE_DICT)
         scores = score_tag_sites(aa_df, range_df, job["sequence"], _reagents_frame(job),
                                  job["scores_config"])
+    from utils.scoring import PARTIAL_CREDIT_FLOOR, satisfaction
+
     keys = [c["key"] for c in job["scores_config"]["criteria"]]
     rows = []
     for pos, rec in scores.iterrows():
@@ -422,7 +432,9 @@ def _score_protein(job, files):
             v = rec[k]
             if v is None or (isinstance(v, float) and math.isnan(v)):
                 missing |= 1 << i
-            elif bool(v):
+            # a graded criterion cannot fit in a bit: it is stored as "earned at least half
+            # its weight", and its exact value rides in the score column at 0.01 resolution
+            elif satisfaction(v) >= PARTIAL_CREDIT_FLOOR:
                 bits |= 1 << i
         rows.append((int(pos), int(round(float(rec["score"]) * SCALE["score"])),
                      int(bool(rec["masked"])), bits, missing))
@@ -560,7 +572,13 @@ def table_in(conn, name):
 def delete_children(conn, pid, stage):
     """Remove one protein's rows from the stage's per-protein tables (for --update)."""
     for t in CHILD_TABLES[stage]:
-        if table_in(conn, t):
+        if not table_in(conn, t):
+            continue
+        # site_scores' key leads with config_id, so a pid-only delete scans every row
+        if t == "site_scores":
+            conn.execute("DELETE FROM site_scores WHERE config_id IN "
+                         "(SELECT config_id FROM score_configs) AND pid=?", (pid,))
+        else:
             conn.execute("DELETE FROM {} WHERE pid=?".format(t), (pid,))
 
 

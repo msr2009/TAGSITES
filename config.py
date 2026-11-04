@@ -65,6 +65,7 @@ DOMAIN_SOURCE_COLORS = {
     "modification": "#d62728",   # red
     "UniProt":      "#795548",   # brown — blocking features (lipidation, propeptide, ...)
     "UniProt_site": "#8d6e63",   # lighter brown — informational features (binding site, motif, ...)
+    "UniProt_disorder": "#bcaaa4",  # palest brown — disordered Regions, split out of UniProt_site
 }
 
 # sources that describe protein topology (transmembrane/signal/orientation) — a run
