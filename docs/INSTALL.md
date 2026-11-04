@@ -6,7 +6,7 @@ Use this once per machine. Every other guide assumes the `tagsites` environment 
 
 - macOS or Linux (Windows works for the web-services install only).
 - [mamba](https://mamba.readthedocs.io/) or conda. Mamba is faster and is used in these docs;
-  replace `mamba` with `conda` if that is what is installed.
+  replace `mamba` with `conda` if that is what is installed. We suggest getting conda via [miniforge](https://github.com/conda-forge/miniforge).
 - Internet access. Local workflows need it only for one-time reference downloads.
 - Disk: a web-services install needs well under 1 GB. Local backends add about 9 GB for one
   organism ([LOCAL_SETUP.md](LOCAL_SETUP.md)); a database build adds tens of GB
