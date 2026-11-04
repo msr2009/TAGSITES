@@ -130,7 +130,10 @@ _TM_LABELS = {"Transmembrane", "TMhelix"}
 _SIGNAL_LIFT = {"Signal peptide", "signal", "Transit peptide"}
 _TM_LIFT = {"Transmembrane", "TMhelix"}
 # defaults of the batch site filters missing from older batch files
-_FILTER_DEFAULTS = {"mask_signal": True, "mask_tm": True}
+_INSIDE_LABELS = {"Cytoplasmic", "inside"}
+_OUTSIDE_LABELS = {"Non-cytoplasmic", "outside"}
+_FILTER_DEFAULTS = {"mask_signal": True, "mask_tm": True, "mask_inside": False,
+                    "mask_outside": False}
 
 
 # annotation color-by tracks → (sources, mutations filter; see residue_colors_for_annotations)
@@ -277,8 +280,10 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
         checked_topology = {lbl for lbl in _topology_labels()
                             if _checked(f"topology_tag_{_safe_id(lbl)}", _topology_default(lbl))}
         if site_filters is not None:
-            # batch app: signal / TM labels follow the Site filters switches, not the matrix
-            for labels, key in ((_SIGNAL_LABELS, "mask_signal"), (_TM_LABELS, "mask_tm")):
+            # batch app: these labels follow the Site filters switches, not the matrix
+            for labels, key in ((_SIGNAL_LABELS, "mask_signal"), (_TM_LABELS, "mask_tm"),
+                                (_INSIDE_LABELS, "mask_inside"),
+                                (_OUTSIDE_LABELS, "mask_outside")):
                 present = labels & set(_topology_labels())
                 checked_topology -= present
                 if not _mask_on(key):
@@ -859,7 +864,8 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
         topology_labels = _topology_labels()
         if site_filters is not None:
             topology_labels = [lbl for lbl in topology_labels
-                               if lbl not in _SIGNAL_LABELS | _TM_LABELS]
+                               if lbl not in _SIGNAL_LABELS | _TM_LABELS
+                               | _INSIDE_LABELS | _OUTSIDE_LABELS]
         topology_sources_present = _topology_sources_present()
         if len(isoforms) <= 1 and not topology_labels and site_filters is None:
             return ui.div()
@@ -880,6 +886,8 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
                     value=True))
             for key, text in (("mask_signal", "Mask signal / transit peptides"),
                               ("mask_tm", "Mask transmembrane spans"),
+                              ("mask_inside", "Mask inside (cytosolic)"),
+                              ("mask_outside", "Mask outside (lumenal / extracellular)"),
                               ("mask_domain", "Mask domains (Pfam)"),
                               ("mask_uniprot", "Mask UniProt sites")):
                 switches.append(ui.input_switch("filt_" + key, text,

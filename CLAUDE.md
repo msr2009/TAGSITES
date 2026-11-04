@@ -204,7 +204,7 @@ regenerates arms only for accepted sites (`proteome_export.rows_with_arms`). Mea
 proteins: Prepare ~10 s (mostly one-time imports + 2 s genome load), protein switch 25-500 ms.
 Setup's site filters (suggested sites per protein, default 2; position masks: no N-term, no C-term,
 guide cut within N bp; annotation masks: constitutive only, signal / transit peptide (on),
-transmembrane (on), Pfam domains, every UniProt_site annotation) are batch defaults of switches in
+transmembrane (on), inside (cytosolic) and outside (lumenal / extracellular) topology (both off), Pfam domains, every UniProt_site annotation) are batch defaults of switches in
 Review's Rescoring panel (`results_server(site_filters=...)`); they mask suggestions only. There the
 signal / TM switches replace the topology matrix's signal / TMhelix rows and, when off, also lift the
 hard `in_membrane_or_cleaved` mask (`scoring.lift_hard_masks`). Setup panel 0 shows the database in

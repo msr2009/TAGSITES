@@ -300,6 +300,8 @@ def batch_setup_server(input, output, session, bstate):
                         "constitutive_only": bool(input.filt_constitutive()),
                         "mask_signal": bool(input.filt_mask_signal()),
                         "mask_tm": bool(input.filt_mask_tm()),
+                        "mask_inside": bool(input.filt_mask_inside()),
+                        "mask_outside": bool(input.filt_mask_outside()),
                         "mask_domain": bool(input.filt_mask_domain()),
                         "mask_uniprot": bool(input.filt_mask_uniprot())},
                     "proteome_db": str(P.default_path())}
