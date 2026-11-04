@@ -16,6 +16,7 @@ from utils.results import (
     residue_colors_for_topology,
     residue_colors_for_isoforms,
     residue_colors_for_patches,
+    residue_colors_for_secondary_structure,
     residue_colors_jet,
     _guess_analysis_type,
     _pick_gradient_cmap,
@@ -85,6 +86,12 @@ def _build_colors_and_legend(track, task_name, scheme, aa_df, range_df, seq_len,
         if range_df is None or not seq_len:
             return None, None
         colors, items = residue_colors_for_patches(range_df, seq_len)
+        return colors, {"type": "categorical", "items": items}
+
+    if track == "__secondary_structure__":
+        if range_df is None or not seq_len:
+            return None, None
+        colors, items = residue_colors_for_secondary_structure(range_df, seq_len)
         return colors, {"type": "categorical", "items": items}
 
     # ── Continuous track coloring ────────────────────────────────────────────────
@@ -395,6 +402,8 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
                 choices["__topology__"] = "Topology"
             if not range_df[range_df["source"] == "hydrophobic_patch"].empty:
                 choices["__hydrophobic_patch__"] = "Hydrophobic patches"
+            if not range_df[range_df["source"] == "secondary_structure"].empty:
+                choices["__secondary_structure__"] = "Secondary structure"
         if iso_result and len(iso_result.get("isoforms", [])) > 1:
             choices["__isoforms__"] = "Isoforms"
         # NOTE: deliberately not calling site_scores() here — this effect (via _do_load)

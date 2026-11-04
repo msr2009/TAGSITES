@@ -174,7 +174,8 @@ def match_sequence(seq, conn=None, path=None):
 
 
 def get_features(pid, tracks=None, conn=None):
-    """Range features (domain / modification / topology / uniprot / hydrophobic_patch)."""
+    """Range features (domain / modification / topology / uniprot / hydrophobic_patch /
+    secondary_structure)."""
     sql = "SELECT track, source, start, stop, description FROM features WHERE pid = ?"
     params = [pid]
     if tracks:

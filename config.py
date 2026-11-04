@@ -66,6 +66,15 @@ DOMAIN_SOURCE_COLORS = {
     "UniProt":      "#795548",   # brown — blocking features (lipidation, propeptide, ...)
     "UniProt_site": "#8d6e63",   # lighter brown — informational features (binding site, motif, ...)
     "UniProt_disorder": "#bcaaa4",  # palest brown — disordered Regions, split out of UniProt_site
+    "secondary_structure": "#d81b60",
+}
+
+# secondary structure (pLDDT task's .ss.txt companion, scripts/dssp_numpy.py): fixed colors
+# per state, PyMOL-like, so helix / strand read the same in every run and on the structure
+SECONDARY_STRUCTURE_COLORS = {
+    "Helix":  "#d81b60",   # magenta
+    "Strand": "#ffb300",   # amber
+    "Coil":   "#e8e8e8",   # structure view only; coil has no range rows
 }
 
 # sources that describe protein topology (transmembrane/signal/orientation) — a run

@@ -489,6 +489,11 @@ def parse_protein(job):
                 if os.path.exists(base + ".patches.txt"):
                     out["features"].extend(_range_features(base + ".patches.txt",
                                                            "hydrophobic_patch"))
+                # absent for proteome runs made before scripts/dssp_numpy.py; export then
+                # computes it from the copied model instead
+                if os.path.exists(base + ".ss.txt"):
+                    out["features"].extend(_range_features(base + ".ss.txt",
+                                                           "secondary_structure"))
             attempt("plddt", structure)
         if ok["scores"]:
             def kd():

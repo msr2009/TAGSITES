@@ -53,7 +53,8 @@
 			"companions": {
 				"sasa": ".sasa.txt",
 				"hydrophobic": ".hydro.txt",
-				"patches": ".patches.txt"
+				"patches": ".patches.txt",
+				"ss": ".ss.txt"
 			},
 			"params": {
 				"pdb":         { "default": "",     "hidden": true, "tooltip": "Path to a local AlphaFold PDB file. Leave blank to search the AlphaFold Database automatically." },

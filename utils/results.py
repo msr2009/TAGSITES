@@ -12,7 +12,7 @@ import numpy as np
 from numpy import linspace
 
 from config import ANALYSIS_COLORS, DOMAIN_SOURCE_COLORS, ISOFORM_CLASS_COLORS, GLOBAL_KEYS, TOPOLOGY_SOURCES
-from config import PLOT_LINE_COLORS
+from config import PLOT_LINE_COLORS, SECONDARY_STRUCTURE_COLORS
 from scripts.task_registry import companion_path
 
 
@@ -253,6 +253,14 @@ def load_data_from_json(json_in, type_dict):
                             dat = pd.concat([dat, patches_df], ignore_index=True)
                         except Exception as e:
                             print(f"Error loading hydrophobic patches for task '{task}': {e}")
+                    # helix / strand runs (scripts/dssp_numpy.py); absent for runs made before it
+                    ss_path = companion_path(output_path, "plddt", "ss")
+                    if os.path.exists(ss_path) and os.path.getsize(ss_path) > 0:
+                        try:
+                            ss_df = pd.read_csv(ss_path, sep="\t", names=range_cols)
+                            dat = pd.concat([dat, ss_df], ignore_index=True)
+                        except Exception as e:
+                            print(f"Error loading secondary structure for task '{task}': {e}")
                 # blast tasks also produce companion files
                 if analysis == "blast":
                     aln_path = companion_path(output_path, "blast", "alignment")
@@ -502,7 +510,7 @@ def plot_results(aa_df, range_df, title="Results Plot"):
     height = 2
     y_positions = {"Phobius": 2, "DeepTMHMM": 4, "Pfam": 6, "modification": 8,
                    "hydrophobic_patch": 10, "UniProt": 12, "UniProt_site": 14,
-                   "UniProt_disorder": 16}
+                   "UniProt_disorder": 16, "secondary_structure": 18}
     color_map = _annotation_color_map(range_df)
 
     # opacity for hydrophobic patches scales with total patch hydrophobicity
@@ -531,6 +539,9 @@ def plot_results(aa_df, range_df, title="Results Plot"):
             label, total_hydro = _parse_patch_description(desc)
             display_name = f"Hydrophobic {label} (Σ={total_hydro:.2f})"
             color = _hex_to_rgba(color, patch_alpha.get(str(desc), 1.0))
+        elif source == "secondary_structure":
+            display_name = str(desc)
+            color = SECONDARY_STRUCTURE_COLORS.get(str(desc), color)
         else:
             display_name = f"{desc} ({source})"
         first_of_label = key not in legend_seen
@@ -958,6 +969,27 @@ def residue_colors_for_patches(range_df, seq_len):
     return colors, legend_items
 
 
+def residue_colors_for_secondary_structure(range_df, seq_len):
+    """Color structure by helix / strand / coil from the secondary_structure rows.
+
+    Returns (per_residue_colors, legend_items).
+    """
+    colors = [SECONDARY_STRUCTURE_COLORS["Coil"]] * seq_len
+    rows = range_df[range_df["source"] == "secondary_structure"]
+    seen = set()
+    # paint each run's residues, clipped to the sequence
+    for _, row in rows.iterrows():
+        label = str(row["description"])
+        color = SECONDARY_STRUCTURE_COLORS.get(label, "#888888")
+        for pos in range(max(1, int(row["start"])), min(seq_len, int(row["stop"])) + 1):
+            colors[pos - 1] = color
+        seen.add(label)
+    legend_items = [{"color": SECONDARY_STRUCTURE_COLORS[k], "label": k}
+                    for k in ("Helix", "Strand") if k in seen]
+    legend_items.append({"color": SECONDARY_STRUCTURE_COLORS["Coil"], "label": "Coil"})
+    return colors, legend_items
+
+
 def residue_colors_for_isoforms(iso_result, seq_len):
     """Color structure by isoform class (constitutive/intermediate/unique), derived from
     each residue's presence count across the chosen isoforms JSON dict.
@@ -994,7 +1026,7 @@ def build_plot_payload(aa_df, range_df, iso_result=None, title="Results"):
     """
     y_positions = {"Phobius": 1, "DeepTMHMM": 3, "Pfam": 5, "modification": 7,
                    "hydrophobic_patch": 9, "UniProt": 11, "UniProt_site": 13,
-                   "UniProt_disorder": 15}
+                   "UniProt_disorder": 15, "secondary_structure": 17}
 
     line_tracks = []
     data_max = -float("inf")
@@ -1034,6 +1066,8 @@ def build_plot_payload(aa_df, range_df, iso_result=None, title="Results"):
             if src == "hydrophobic_patch":
                 color = _hex_to_rgba(color, patch_alpha.get(desc, 1.0))
                 desc = _parse_patch_description(desc)[0]
+            elif src == "secondary_structure":
+                color = SECONDARY_STRUCTURE_COLORS.get(desc, color)
             range_features.append({
                 "source": src,
                 "start": int(row["start"]),

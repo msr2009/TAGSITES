@@ -4,6 +4,7 @@ from Bio.PDB.PDBParser import PDBParser
 from site_selection_util import save_fasta, check_input_type, three_to_one
 from site_selection_util import extract_bfactors_from_pdb, calc_sasa_shrakerupley, calc_hydrophobic_patches
 from calculate_protein_scores import load_scores
+from dssp_numpy import write_ss_file
 from progress import report as _report, resolve_reporter
 
 #default hydrophobicity table, resolved relative to the repo so the CLI doesn't need a new required arg
@@ -67,9 +68,12 @@ def main(input_file, output_file, hydro_table=None, dilation_radius=4.0, min_see
 		n += 1
 	patches_out.close()
 
+	#helix/strand runs (DSSP-style, scripts/dssp_numpy.py); fails soft to an empty file
+	n_ss = write_ss_file(output_file.replace(".txt", ".ss.txt"), struct=struct)
+
 	mean_plddt = sum(bf) / len(bf) if bf else 0.0
 	summary = (f"Extracted pLDDT for {len(bf)} residue(s) (mean {mean_plddt:.1f}); "
-			f"found {n} hydrophobic patch(es)")
+			f"found {n} hydrophobic patch(es), {n_ss} helix/strand segment(s)")
 	_report(reporter, summary, stage="done")
 
 if __name__ == "__main__":

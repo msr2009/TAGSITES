@@ -422,8 +422,13 @@
 
   /* ── Feature panel (row 2: range annotations) ──────────────────────────────── */
 
-  var FEAT_ROWS = ["Phobius", "DeepTMHMM", "Pfam", "modification", "hydrophobic_patch", "UniProt", "UniProt_site"];
-  var FEAT_ROW_LABELS = {hydrophobic_patch: "Hydro. patch", UniProt: "UniProt", UniProt_site: "UniProt site"};
+  // drawn bottom-up: the last entry is the top row. Structure-state rows (disorder, then
+  // secondary structure on top) sit together above the annotation rows
+  var FEAT_ROWS = ["Phobius", "DeepTMHMM", "Pfam", "modification", "hydrophobic_patch",
+                   "UniProt", "UniProt_site", "UniProt_disorder", "secondary_structure"];
+  var FEAT_ROW_LABELS = {secondary_structure: "Sec. struct.", hydrophobic_patch: "Hydro. patch",
+                         UniProt: "UniProt", UniProt_site: "UniProt site",
+                         UniProt_disorder: "Disorder"};
 
   function drawFeaturePanel(ctx, inf, layout) {
     var top = layout.featTop, h = layout.featH;

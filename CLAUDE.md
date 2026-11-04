@@ -43,7 +43,11 @@ scripts/                # core analysis executables
   run_tag_sites_from_json.py  # async pipeline orchestrator (main workhorse)
   run_tag_sites.py            # CLI pipeline runner
   blast_orthologs.py          # NCBI BLAST homolog search
-  extract_from_pdb.py         # pLDDT + SASA from AlphaFold PDB
+  extract_from_pdb.py         # pLDDT + SASA from AlphaFold PDB, plus helix/strand ranges
+                              # ({output}.ss.txt, source secondary_structure)
+  dssp_numpy.py               # DSSP-style 3-state secondary structure from backbone coords:
+                              # numpy port of pydssp (MIT), no torch/einops, O(L^2) bits.
+                              # 99.4% agreement with AFDB mmCIF's DSSP 4 over 19 models
   regex_sites.py              # PTM site identification
   call_interpro.py            # EBI InterPro domain annotation
   uniprot_features.py         # curated UniProt feature annotation (lipidation, PTMs, binding sites, modified residues,

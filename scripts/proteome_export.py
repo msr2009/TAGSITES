@@ -36,6 +36,7 @@ sys.path.insert(0, str(_REPO_ROOT))
 import proteome_db as P  # noqa: E402
 import run_status  # noqa: E402
 from build_proteome_db import db_config  # noqa: E402
+from dssp_numpy import write_ss_file  # noqa: E402
 from task_registry import TASK_DEFS, companion_path, task_output_suffix  # noqa: E402
 
 LABEL = "DB"
@@ -262,6 +263,8 @@ def export_analysis(pid, out_dir, run_name=None, conn=None, render_alignment=Tru
             note("plddt", "{} residues, {} patch residues".format(
                 int(res["plddt"].notna().sum()), len(patches)))
             note("structure", _copy_structure(prot, wd, rn, run_dir=db_config()["run_dir"]))
+            note("secondary structure", _write_secondary_structure(
+                feats, companion_path(out, "plddt", "ss"), "{}{}.pdb".format(wd, rn)))
         if "scores" in have:
             _write(_out(wd, rn, "scores"), _dense(res, "hydrophobicity", "%.6f",
                                                   lambda p: seq[p - 1] if p <= len(seq) else "-"))
@@ -313,6 +316,18 @@ def render_alignment_pdf(aln_path):
     except Exception as e:   # the alignment image is optional; the Results tab says so
         return "copied; PDF failed ({}: {})".format(type(e).__name__, e)
     return "copied and rendered"
+
+
+def _write_secondary_structure(feats, path, pdb):
+    """Helix/strand ranges from the database, else computed from the copied model; log phrase."""
+    ss = feats[feats.track == "secondary_structure"]
+    if not ss.empty:
+        _write(path, _lines([(r.source, r.start, r.stop, r.description) for r in ss.itertuples()]))
+        return "{} segments".format(len(ss))
+    # databases built before the track existed hold none; the model gives it in ~50 ms
+    if os.path.exists(pdb):
+        return "{} segments (computed from the model)".format(write_ss_file(path, pdb_path=pdb))
+    return "no model"
 
 
 def _copy_structure(prot, wd, rn, run_dir):
