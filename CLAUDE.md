@@ -177,6 +177,19 @@ from the genome and was verified byte-identical to the reagent TSV. The reagent 
 `TAGSITES_BATCH_CONFIG=batch.config.local.json` (local genewise backend) and is resumable.
 Knobs live in `batch.config.json`'s `proteome_db` block.
 
+**One sequence, several UniProt accessions**: UniProt often keeps an identical sequence under
+two entries, and accession-keyed services may know only one (unc-25: the proteome lists
+Q7K7A3, AFDB models only G5EDB7). `local_store.py --build-aliases` indexes every proteome
+entry and every AFDB tarball model by sequence (`sequence_aliases`; rebuilt after
+`reference_data.py --only afdb`); `uniprot_api.sequence_aliases()` returns them (local index,
+then UniProt's checksum search). `structure_bulk.py` tries the aliases after the protein's own
+accession (local files before AFDB fetches, and records the model's accession in the
+`{run}.uniprot_accession.txt` sidecar); remote `ucsc_gene_model` tries them when the resolved
+accession has no unipAli alignment. `structure_remote.py` already tried every checksum match.
+The database copies the table (`sequence_aliases`, keyed by `proteins.crc64`), sets
+`structure_source = 'afdb:ACC'` for a model from another entry, `find_protein` matches an
+alias accession, and the Setup card lists "also ACC".
+
 **Precomputed results in the app**: with `proteome_db.app_match` true in `batch.config.json`
 and the SQLite file present, Setup looks the loaded sequence (UniProt hit, upload or paste) up
 by exact match and offers "Load precomputed results". The load runs `proteome_export`:
@@ -237,7 +250,26 @@ guide or site out of the reagent design UI — annotate instead, so the user alw
 option and decides. Guides are ordered by distance from cut to insertion site; RS3 rides
 along as a badge and never participates in selection or sorting. A regression check for this
 is that the pre-existing columns of `{run}_reagents.tsv` are byte-identical with and without
-`rs3` installed.
+`rs3` installed. This rule has no exceptions. RS3 was briefly a term in the within-region pick
+below and was removed: over 300 worm proteins it moved the cut distance not at all (median
+3.0 bp, 73.1% within 5 bp at every weight tried) and the chosen guide's RS3 median only
+0.657 → 0.689, which is not worth an exception to the rule.
+
+**Suggested sites are regions, not points**: the top of a protein's score is a plateau, not a
+peak — most top-scoring residues sit where the conservation ramp is clipped, so the score
+genuinely cannot rank them (worm median: 10 tied residues in 3 distinct regions; 90th
+percentile 56 residues in 14 regions). `utils/scoring.find_regions` groups residues tied at
+the best unmasked score **with an identical set of satisfied biological criteria**; masks and
+any change of criteria split a region, and reagent-availability criteria
+(`site_selection.technical_criteria`) are excluded so a guide appearing never splits one.
+`pick_suggested_sites` offers one site per region, widest first, up to `max_sites` — the count
+is data-driven and is **never** padded with lower-scoring residues to reach a fixed number
+(58% of yeast / 46% of worm proteins have fewer than three regions, so the old fixed 3 was
+presenting a worse site as a peer of the best). `pick_in_region` then chooses the residue on
+technical grounds only, since every residue there scores the same: guide proximity (ramped,
+flat below `cut_near_bp`) and distance from the region edge. All of
+it is tunable in `scores.config.json`'s `site_selection` block. The return type is still a
+list of 1-based ints, one per region, so nothing downstream needs to know about regions.
 
 **Never call a blocking function directly from a Shiny effect**: Shiny's asyncio event
 loop serves *every* session, so one slow `requests.get` freezes the whole app — including

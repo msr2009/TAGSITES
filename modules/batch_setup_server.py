@@ -292,7 +292,7 @@ def batch_setup_server(input, output, session, bstate):
                     "ebi_for_missing": bool(input.ebi_for_missing()),
                     "email": input.email().strip(),
                     "site_filters": {
-                        "n_suggested": max(1, int(input.n_suggested() or 2)),
+                        "n_suggested": max(1, int(input.n_suggested() or 5)),
                         "no_nterm": bool(input.filt_no_nterm()),
                         "no_cterm": bool(input.filt_no_cterm()),
                         "guide_within": int(input.filt_guide_bp() or 0) if input.filt_guide()

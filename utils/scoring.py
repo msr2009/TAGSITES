@@ -173,27 +173,136 @@ def range_positions(range_df, sources, seq_len):
     return _range_mask(range_df, set(sources), seq_len)
 
 
-_SUGGESTED_MAX_SITES = 3
-_SUGGESTED_MIN_SPACING = 10
+# fallbacks for a config written before the site_selection block existed
+_SITE_SELECTION_DEFAULTS = {
+    "max_sites": 5,
+    "min_spacing": 10,
+    "technical_criteria": ["near_guide", "not_near_splice"],
+    "cut_near_bp": 5,
+    "cut_far_bp": 20,
+    "weight_proximity": 1.0,
+    "weight_margin": 0.5,
+}
+
+_SUGGESTED_MAX_SITES = _SITE_SELECTION_DEFAULTS["max_sites"]
+_SUGGESTED_MIN_SPACING = _SITE_SELECTION_DEFAULTS["min_spacing"]
 
 
-def pick_suggested_sites(scores, max_sites=_SUGGESTED_MAX_SITES, min_spacing=_SUGGESTED_MIN_SPACING):
-    """Rank positions by score and return up to max_sites, each at least min_spacing apart.
+def site_selection_params(config=None):
+    """The site_selection block of the scoring config, with defaults for any missing key."""
+    config = config or load_scoring_config()
+    out = dict(_SITE_SELECTION_DEFAULTS)
+    out.update({k: v for k, v in (config.get("site_selection") or {}).items()
+                if k != "__doc__"})
+    return out
 
-    Stops at the first masked or non-positive-scoring position in descending-score order,
-    since scores are already 0-forced at masked positions — used both by the Results tab
-    (issue #32) and scripts/suggest_sites.py.
+
+def _criteria_signature(scores, config):
+    """Per-position tuple of which biological criteria are satisfied.
+
+    Reagent-availability criteria are excluded, so a guide appearing or disappearing never
+    splits a region. This reproduces the database's criterion bitmask from the scores frame,
+    which the app has no bitmask for: a criterion counts as satisfied at PARTIAL_CREDIT_FLOOR,
+    exactly as scripts/build_proteome_db.py packs its bits.
     """
-    ranked = scores.sort_values("score", ascending=False)
+    tech = set(site_selection_params(config)["technical_criteria"])
+    keys = [c["key"] for c in config["criteria"]
+            if not c.get("mask") and c["key"] not in tech and c["key"] in scores.columns]
+    if not keys:
+        return pd.Series([()] * len(scores), index=scores.index)
+    flags = pd.concat(
+        [scores[k].apply(lambda v: satisfaction(v) >= PARTIAL_CREDIT_FLOOR) for k in keys],
+        axis=1)
+    return pd.Series(list(map(tuple, flags.to_numpy())), index=scores.index)
+
+
+def find_regions(scores, config=None):
+    """Contiguous runs of unmasked residues tied at the best score with identical biology.
+
+    Every residue in a region is an equivalent place to tag, so the choice among them is
+    technical rather than biological (see pick_in_region). Masks and any change of satisfied
+    biological criteria split a region. Returns dicts with start/stop/width/mid, widest first.
+    """
+    config = config or load_scoring_config()
+    if scores is None or scores.empty or "score" not in scores.columns:
+        return []
+    masked = (scores["masked"].astype(bool) if "masked" in scores.columns
+              else pd.Series(False, index=scores.index))
+    free = scores[(scores["score"] > 0) & (~masked)]
+    if free.empty:
+        return []
+    at_best = free[free["score"] >= free["score"].max()]
+    sig = _criteria_signature(scores, config)
+    pos = list(at_best.index)
+    regions, start = [], pos[0]
+    # a gap of more than one residue, or a change of criteria, ends the current region
+    for a, b in zip(pos, pos[1:] + [None]):
+        if b is None or b - a > 1 or sig.loc[b] != sig.loc[a]:
+            regions.append({"start": int(start), "stop": int(a), "width": int(a - start + 1),
+                            "mid": int((start + a) // 2)})
+            start = b
+    return sorted(regions, key=lambda g: (-g["width"], g["start"]))
+
+
+def pick_in_region(region, scores, config=None):
+    """The residue in a region closest to a guide cut and furthest from the region's edges.
+
+    Every residue here scores the same biologically, so this is purely a technical tiebreak.
+    With no guide anywhere in the region the proximity term is 0 throughout and the rule
+    degenerates to the region's centre, which is the right default; the region is still offered.
+    """
+    p = site_selection_params(config)
+    start, stop = region["start"], region["stop"]
+    centre = (start + stop) // 2
+    if "guide_distance" not in scores.columns:
+        return centre
+    sub = scores.loc[start:stop]
+    dist = pd.to_numeric(sub["guide_distance"], errors="coerce")
+    if dist.isna().all():
+        return centre
+    prox = dist.apply(lambda d: _ramp(d, p["cut_near_bp"], p["cut_far_bp"])).fillna(0.0)
+    # depth into the region: 1 at the centre, 0 at either edge, and 1 for a width-1 region
+    half = max((stop - start) // 2, 1)
+    idx = sub.index.to_series()
+    margin = (idx - start).combine(stop - idx, min) / half
+    total = p["weight_proximity"] * prox + p["weight_margin"] * margin
+    return int(total.idxmax())
+
+
+def pick_suggested_regions(scores, max_sites=None, min_spacing=None, config=None):
+    """The offered regions, each as start/stop plus the residue picked inside it, by position.
+
+    The count is data-driven: a protein whose best score forms two regions offers two,
+    never padded to max_sites with lower-scoring residues. Within each region the residue is
+    chosen on technical grounds only (see pick_in_region). The Results plot draws the spans;
+    everything else wants only the residue and calls pick_suggested_sites.
+    """
+    config = config or load_scoring_config()
+    p = site_selection_params(config)
+    max_sites = p["max_sites"] if max_sites is None else max_sites
+    min_spacing = p["min_spacing"] if min_spacing is None else min_spacing
     picked = []
-    for pos in ranked.index:
-        if ranked.loc[pos, "score"] <= 0 or ranked.loc[pos].get("masked", False):
-            break
-        if all(abs(pos - p) >= min_spacing for p in picked):
-            picked.append(pos)
+    for region in find_regions(scores, config):
         if len(picked) >= max_sites:
             break
-    return [int(p) for p in picked]
+        pos = pick_in_region(region, scores, config)
+        # two regions can be adjacent when they satisfy different criteria at the same score;
+        # offering both would spend the cap on what reads as one location, so skip to the
+        # next region instead (the cap still fills if the protein has somewhere else)
+        if all(abs(pos - q["pos"]) >= min_spacing for q in picked):
+            picked.append({"start": int(region["start"]), "stop": int(region["stop"]),
+                           "pos": int(pos)})
+    return sorted(picked, key=lambda q: q["pos"])
+
+
+def pick_suggested_sites(scores, max_sites=None, min_spacing=None, config=None):
+    """One suggested site per equivalent-scoring region, as 1-based positions.
+
+    Used by the Results tab (issue #32), scripts/suggest_sites.py and the proteome
+    database's scores stage.
+    """
+    return [q["pos"] for q in pick_suggested_regions(scores, max_sites=max_sites,
+                                                     min_spacing=min_spacing, config=config)]
 
 
 def score_cmap_hex(frac):
@@ -262,6 +371,21 @@ def _reagents_min_by_residue(reagents_df, column):
         return None
     non_negative = reagents_df[reagents_df[column] >= 0]
     return non_negative.groupby("residue_index")[column].min()
+
+
+def _nearest_guide_by_residue(reagents_df):
+    """Per-residue cut-to-insert distance of the nearest guide, as a Series indexed by residue.
+
+    Negative distances are sentinels and are dropped, matching _reagents_min_distance.
+    """
+    if reagents_df is None or "distance" not in reagents_df.columns:
+        return None
+    rows = reagents_df[reagents_df["distance"] >= 0]
+    if rows.empty:
+        return None
+    nearest = rows.groupby("residue_index")["distance"].min()
+    nearest.index.name = "pos"
+    return nearest.rename("guide_distance")
 
 
 def _reagents_min_distance(reagents_df, pos, column, _cache=None):
@@ -449,6 +573,15 @@ def score_tag_sites(aa_df, range_df, query_seq, reagents_df=None, config=None):
     else:
         out["masked"] = False
     out.loc[out["masked"], "score"] = 0
+
+    # raw nearest-guide distance for the within-region pick (pick_in_region). This is not a
+    # criterion and never contributes to the score; it rides along so pick_suggested_sites
+    # needs nothing but this frame.
+    nearest = _nearest_guide_by_residue(reagents_df)
+    if nearest is None:
+        out["guide_distance"] = float("nan")
+    else:
+        out = out.join(nearest)
 
     return out
 

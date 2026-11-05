@@ -61,6 +61,7 @@
 
   // Zoom/pan state — null means full range
   var currentRange = null;
+  var suggestedRegions = [];  // [start, stop] of the score-equivalent span each site came from
   var dragState    = null;  // {startX, lastX, mode, startR0, startR1}
   var wasDrag      = false;
   var dragMode     = "zoom";  // "zoom" or "pan" — toggled by toolbar buttons
@@ -764,7 +765,8 @@
 
     ctx.restore();
 
-    // downward-facing green triangle above each suggested site, in the reserved top margin
+    // downward-facing green triangle above each suggested site, in the reserved top margin,
+    // over a translucent bar spanning the score-equivalent region the site was chosen from
     if (suggestedSites.length) {
       ctx.save();
       ctx.beginPath();
@@ -781,6 +783,15 @@
         ctx.lineTo(cx + triW / 2, markTop);
         ctx.lineTo(cx, markTop + triH);
         ctx.closePath();
+      ctx.fillStyle = "rgba(40, 167, 69, 0.25)";
+      for (var j = 0; j < suggestedRegions.length; j++) {
+        var rg = suggestedRegions[j];
+        if (rg[1] < lo || rg[0] > hi) continue;
+        var rx0 = posToX(rg[0] - 0.5, inf);
+        var rx1 = posToX(rg[1] + 0.5, inf);
+        // a width-1 region would otherwise vanish; keep every span visible as a thin bar
+        ctx.fillRect(rx0, markTop, Math.max(rx1 - rx0, 2), markH);
+      }
         ctx.fill();
       }
       ctx.restore();
@@ -1518,6 +1529,7 @@
       canvas._tsInteractive = true;
       initCanvasInteractions(canvas);
     }
+    suggestedRegions = msg.suggestedRegions || [];
     ensureTooltip();
     buildLegend();
     render();
@@ -1594,6 +1606,7 @@
   var _CMAP_CSS = {
     viridis: "linear-gradient(to right," +
       "#440154,#48306e,#3e4989,#31688e,#26838f,#1f9e89,#35b779,#6ece58,#b5de2b,#fde725)",
+    suggestedRegions = msg.suggestedRegions || [];
     plasma:  "linear-gradient(to right,#0d0887,#7e03a8,#cb4679,#f89540,#f0f921)",
     cool:    "linear-gradient(to right,#00ffff,#ff00ff)",
     // pLDDT gradient: stops at band boundaries (0%, 50%, 70%, 100%)

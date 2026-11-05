@@ -29,7 +29,7 @@ from utils.scoring import (
 from utils.tag_filters import position_isoform_labels, describe_position_isoforms
 
 
-def suggest_sites_for_run(run_json_path, config=None, n_sites=3, min_spacing=10,
+def suggest_sites_for_run(run_json_path, config=None, n_sites=None, min_spacing=None,
                           isoform_mode="none", isoforms=None, topology=None):
     """Rank and return the top tag sites for one run.
 
@@ -49,7 +49,8 @@ def suggest_sites_for_run(run_json_path, config=None, n_sites=3, min_spacing=10,
     reagents_df = load_reagents_df(run_json)
     scores_df = score_tag_sites(aa_df, range_df, meta.get("query_seq", ""), reagents_df, config)
 
-    picked = pick_suggested_sites(scores_df, max_sites=n_sites, min_spacing=min_spacing)
+    picked = pick_suggested_sites(scores_df, max_sites=n_sites, min_spacing=min_spacing,
+                                  config=config)
     max_score = score_max(config)
 
     # isoform specificity is annotated for context only — never used to filter which
@@ -110,10 +111,14 @@ if __name__ == "__main__":
                         help="output TSV path (default: stdout)")
     parser.add_argument("-c", "--config", default=str(SCORING_CONFIG_PATH), dest="CONFIG",
                         help="path to a scores.config.json (default: repo scores.config.json)")
-    parser.add_argument("--n-sites", type=int, default=3, dest="N_SITES",
-                        help="maximum number of sites to suggest per run (default: 3)")
-    parser.add_argument("--min-spacing", type=int, default=10, dest="MIN_SPACING",
-                        help="minimum residue gap between suggested sites (default: 10)")
+    parser.add_argument("--n-sites", type=int, default=None, dest="N_SITES",
+                        help="maximum number of sites to suggest per run; one site is offered "
+                             "per equivalent-scoring region, so a run with fewer regions yields "
+                             "fewer sites (default: scores.config.json site_selection.max_sites)")
+    parser.add_argument("--min-spacing", type=int, default=None, dest="MIN_SPACING",
+                        help="minimum residue gap between suggested sites; regions are already "
+                             "distinct, so this only suppresses offers that sit close together "
+                             "(default: scores.config.json site_selection.min_spacing)")
     parser.add_argument("--isoform-mode", choices=["none", "constitutive", "tagged"],
                         default="none", dest="ISOFORM_MODE",
                         help="restrict to constitutive sequence, or to specific isoforms "

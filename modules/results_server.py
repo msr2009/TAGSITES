@@ -25,7 +25,7 @@ from utils.results import (
 )
 from utils.scoring import (
     score_tag_sites, failed_flags, mask_reasons, score_cmap_hex, score_max,
-    load_scoring_config, pick_suggested_sites, position_mask_criterion, with_extra_criteria,
+    load_scoring_config, pick_suggested_regions, position_mask_criterion, with_extra_criteria,
     unmask_checked_topology, lift_hard_masks, range_positions,
 )
 from utils.tag_filters import isoform_key, isoform_allowed_positions, topology_tag_allowed_positions
@@ -132,6 +132,9 @@ _TM_LIFT = {"Transmembrane", "TMhelix"}
 # defaults of the batch site filters missing from older batch files
 _INSIDE_LABELS = {"Cytoplasmic", "inside"}
 _OUTSIDE_LABELS = {"Non-cytoplasmic", "outside"}
+# n_suggested is deliberately absent: a missing value resolves to 0 here, and _suggest
+# then lets scores.config.json's site_selection.max_sites decide, so the cap lives in
+# one place rather than being duplicated per app
 _FILTER_DEFAULTS = {"mask_signal": True, "mask_tm": True, "mask_inside": False,
                     "mask_outside": False}
 
@@ -230,10 +233,15 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
         """Current state of a batch annotation-mask switch (its batch default before render)."""
         return _checked("filt_" + key, bool(_filter_default(key)))
 
-    def _suggest(scores):
-        """Suggested sites; the batch's n_suggested sets how many (scoring's default otherwise)."""
+    def _suggest_regions(scores):
+        """Offered regions with their picked residue; n_suggested caps how many (config's if unset)."""
         n = int(_filter_default("n_suggested") or 0)
-        return pick_suggested_sites(scores, max_sites=n) if n else pick_suggested_sites(scores)
+        return (pick_suggested_regions(scores, max_sites=n) if n
+                else pick_suggested_regions(scores))
+
+    def _suggest(scores):
+        """One site per equivalent-scoring region; n_suggested caps how many (config's if unset)."""
+        return [r["pos"] for r in _suggest_regions(scores)]
 
     def _site_filter_masks(seq_len):
         """Extra mask criteria from the Site filters switches (batch app only)."""
@@ -525,7 +533,9 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
         """
         if scores is None or scores.empty or not seq_len:
             return {"scoreTrack": [], "scoreFlags": [], "scoreMasked": [],
-                    "scoreMaskReasons": [], "scoreMax": 1, "suggestedSites": []}
+                    "scoreMaskReasons": [], "scoreMax": 1, "suggestedSites": [],
+                    "suggestedRegions": []}
+        regions = _suggest_regions(scores)
         by_pos = scores["score"]
         flags_by_pos = dict(zip(scores.index, failed_flags(scores, cfg)))
         masked_by_pos = scores["masked"]
@@ -538,7 +548,9 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
                            for p in range(1, seq_len + 1)],
             "scoreMaskReasons": [mask_reasons_by_pos.get(p, []) for p in range(1, seq_len + 1)],
             "scoreMax": max(1, int(score_max(cfg))),
-            "suggestedSites": _suggest(scores),
+            "suggestedSites": [r["pos"] for r in regions],
+            # the score-equivalent span each site was chosen from, drawn behind its marker
+            "suggestedRegions": [[r["start"], r["stop"]] for r in regions],
         }
 
     async def _send_plot(aa_df, range_df, meta, title, iso_result=None):

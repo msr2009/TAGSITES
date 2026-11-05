@@ -155,9 +155,11 @@ def batch_setup_ui():
             # ── Panel 4: suggested-site filters ───────────────────────────────
             ui.accordion_panel(
                 _hint("4 · Suggested sites",
-                      "How many sites to suggest per protein, and where not to."),
-                _inline(ui.tags.label("Suggested sites per protein", class_="form-label"),
-                        ui.input_numeric("n_suggested", None, value=2, min=1, max=20)),
+                      "At most how many sites to suggest per protein, and where not to. "
+                      "One site is offered per equivalent-scoring region, so a protein with "
+                      "fewer regions than this shows fewer sites."),
+                _inline(ui.tags.label("Maximum suggested sites", class_="form-label"),
+                        ui.input_numeric("n_suggested", None, value=5, min=1, max=20)),
                 ui.div("Masks", class_="ts-masks-title"),
                 ui.div(
                     ui.div("Position", class_="ts-mask-group-label"),
