@@ -37,6 +37,7 @@ import proteome_db as P  # noqa: E402
 import run_status  # noqa: E402
 from build_proteome_db import db_config  # noqa: E402
 from dssp_numpy import write_ss_file  # noqa: E402
+from providers import _load_config as _load_batch_config  # noqa: E402
 from task_registry import TASK_DEFS, companion_path, task_output_suffix  # noqa: E402
 
 LABEL = "DB"
@@ -131,7 +132,8 @@ def prepare_run(pid, out_dir, run_name=None, conn=None):
     fasta = "{}{}.fa".format(wd, rn)
     _write(fasta, ">{}\n{}\n".format(rn, prot["sequence"]))
     pdb = "{}{}.pdb".format(wd, rn) if prot["has_structure"] else ""
-    gb = build_global_block("", rn, wd, fasta, pdb=pdb, taxid="6239")
+    taxid = str(_load_batch_config().get("batch_run", {}).get("taxid", "6239"))
+    gb = build_global_block("", rn, wd, fasta, pdb=pdb, taxid=taxid)
     gb["source"] = "proteome_db"
     gb["proteome_db"] = {"path": str(P.default_path()), "pid": pid, "id": prot["id"],
                          "accession": prot["accession"], "gene_name": prot["gene_name"],

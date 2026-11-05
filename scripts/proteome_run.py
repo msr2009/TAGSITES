@@ -71,11 +71,12 @@ def _batch_run_config():
     return {
         "max_workers": cfg.get("max_workers") or os.cpu_count() or 4,
         "genomic_flank_bp": cfg.get("genomic_flank_bp", 2000),
+        "taxid": str(cfg.get("taxid", "6239")),
     }
 
 
 def build_tasks_for_protein(accession, seq, working_dir, run_name, task_types,
-                            email="", taxid="6239", include_reagents=False):
+                            email="", taxid=None, include_reagents=False):
     """Build the task list for one protein, in the same {"id", "analysis",
     "args", "output"} shape modules/progress_server.py / task_runners.py use.
 
@@ -84,6 +85,7 @@ def build_tasks_for_protein(accession, seq, working_dir, run_name, task_types,
     address when every configured backend is local — none of the four local/
     bulk backends use it.
     """
+    taxid = taxid or _batch_run_config()["taxid"]
     fasta_path = os.path.join(working_dir, f"{run_name}.fa")
     with open(fasta_path, "w") as f:
         f.write(f">{run_name}\n{seq}\n")

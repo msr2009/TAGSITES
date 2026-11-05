@@ -223,6 +223,17 @@ def db_config():
 
 # ── proteins, status, cache names ─────────────────────────────────────────────
 
+def _header_attrs(text):
+    """Header attributes from WormBase key=value or Ensembl key:value (gene, gene_symbol) text."""
+    attrs = dict(re.findall(r"(\w+)=(\S+)", text))
+    # Ensembl headers carry gene:ORF and gene_symbol:NAME; map them to the worm key names
+    if "gene" not in attrs:
+        attrs = dict(re.findall(r"\b(gene|gene_symbol):(\S+)", text))
+        if "gene_symbol" in attrs:
+            attrs["locus"] = attrs.pop("gene_symbol")
+    return attrs
+
+
 def read_wb_fasta(path):
     """{transcript: (header attributes dict, sequence)} from the WormBase protein FASTA."""
     import gzip
@@ -236,7 +247,7 @@ def read_wb_fasta(path):
                     out[name] = (attrs, "".join(chunks))
                 head = line[1:].split(None, 1)
                 name = head[0]
-                attrs = dict(re.findall(r"(\w+)=(\S+)", head[1])) if len(head) > 1 else {}
+                attrs = _header_attrs(head[1]) if len(head) > 1 else {}
                 chunks = []
             else:
                 chunks.append(line.strip())
