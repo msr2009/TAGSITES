@@ -1452,7 +1452,7 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
         job = loop.run_in_executor(None, _export_rest, pid, out_dir, rn)
         _db_jobs.add(job)
         job.add_done_callback(_db_jobs.discard)
-        ui.update_navs("main_tabs", selected="progress", session=session.root_scope())
+        ui.update_navset("main_tabs", selected="progress", session=session.root_scope())
 
     @render.text
     def save_status():
@@ -1972,6 +1972,6 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
 
         # give the save a moment to register before jumping to the Progress tab
         await asyncio.sleep(0.5)
-        ui.update_navs("main_tabs", selected="progress", session=session.root_scope())
+        ui.update_navset("main_tabs", selected="progress", session=session.root_scope())
         if shared_autostart is not None:
             shared_autostart.set(shared_autostart.get() + 1)

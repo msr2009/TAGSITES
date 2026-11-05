@@ -544,7 +544,7 @@ def progress_server(input, output, session, shared_json, shared_results_trigger,
         if (db_mode.get() and "Analyses_db" in newly_done
                 and status["Analyses_db"].get("status") == "success"
                 and any(k[1] == "Analyses_db" and k[0] == run for k in _db_seen_unfinished)):
-            ui.update_navs("main_tabs", selected="results", session=session.root_scope())
+            ui.update_navset("main_tabs", selected="results", session=session.root_scope())
 
     # task ids already warned about running long — avoids renotifying every 2 s poll
     _long_running_warned = set()
@@ -620,7 +620,7 @@ def progress_server(input, output, session, shared_json, shared_results_trigger,
         status = _run_status.load_status(wd, rn) if (wd and rn) else {}
         any_failed = any(e.get("status") == "failed" for e in status.values())
         if not any_failed:
-            ui.update_navs("main_tabs", selected="results", session=session.root_scope())
+            ui.update_navset("main_tabs", selected="results", session=session.root_scope())
 
     @reactive.effect
     @reactive.event(input.run_analysis)
