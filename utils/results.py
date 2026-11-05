@@ -1116,10 +1116,12 @@ def _build_isoform_pane(iso_result, range_df):
     query Pfam domains projected onto each isoform's present spans.
 
     Returns {"isoforms": [...], "exonBoundaries": [...]} — empty when there's <=1 isoform
-    (nothing to show; www/tagsites.js hides the pane in that case).
+    (nothing to show; www/tagsites.js hides the pane in that case) unless isoforms are hidden.
     """
-    if not iso_result or len(iso_result.get("isoforms", [])) <= 1:
-        return {"isoforms": [], "exonBoundaries": []}
+    n_hidden = (iso_result or {}).get("n_hidden", 0)
+    # keep the pane when only the query is left but others are hidden (it carries the undo hint)
+    if not iso_result or (len(iso_result.get("isoforms", [])) <= 1 and not n_hidden):
+        return {"isoforms": [], "exonBoundaries": [], "nHidden": 0}
 
     color_map = _annotation_color_map(range_df) if range_df is not None else {}
     pfam_rows = (range_df[range_df["source"] == "Pfam"]
@@ -1138,13 +1140,15 @@ def _build_isoform_pane(iso_result, range_df):
         out.append({
             "label":     iso.get("name") or iso.get("accession") or "",
             "accession": iso.get("accession", ""),
+            "key":       iso.get("_key", ""),
             "isQuery":   bool(iso.get("is_query")),
             "present":   iso.get("present", []),
             "skipped":   iso.get("skipped", []),
             "inserts":   iso.get("inserts", []),
             "domains":   domains,
         })
-    return {"isoforms": out, "exonBoundaries": iso_result.get("exon_boundaries", [])}
+    return {"isoforms": out, "exonBoundaries": iso_result.get("exon_boundaries", []),
+            "nHidden": n_hidden}
 
 
 def _hex_to_rgb(hex_color):

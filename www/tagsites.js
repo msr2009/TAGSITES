@@ -15,6 +15,8 @@
  * Click/dblclick behavior:
  *   click anywhere in data area  → add residue to committed sites (residue_click)
  *   dblclick in plot panels      → reset zoom to full range
+ *   dblclick on an isoform row   → hide that isoform (query row: no-op); undo with
+ *                                  "Show all isoforms" in the Advanced pane
  *   click on 3D structure        → add residue to committed sites (struct_click)
  */
 
@@ -48,6 +50,7 @@
     return iso.label + (iso.accession && iso.accession !== iso.label ? " (" + iso.accession + ")" : "");
   }
   var isoExonBoundaries = [];  // [pos, ...] — reserved for future genewise integration; empty today
+  var isoHidden        = 0;   // number of isoforms hidden via the Advanced Show boxes
   var isoHitBoxes      = [];  // [{isoIdx, x, y, r}] — insert-marker hit targets, rebuilt on each render
 
   // Tag-site score heatmap row (see utils/scoring.py, issue #32)
@@ -205,7 +208,8 @@
   function getPanelLayout(cssH) {
     var lineH = Math.max(MIN_LINE_H, lineTracks.length * LINE_TRACK_H);
     var featH = Math.max(MIN_FEAT_H, activeFeatRows().length * FEAT_ROW_H);
-    var isoH  = isoIsoforms.length > 1 ? isoIsoforms.length * ISO_ROW_H + ISO_PAD : 0;
+    var isoH  = (isoIsoforms.length > 1 || isoHidden > 0)
+      ? isoIsoforms.length * ISO_ROW_H + ISO_PAD : 0;
 
     // 5 gaps: line→legend, legend→feat, feat→iso (if present), iso/feat→score, score→seq
     var nGaps = isoH > 0 ? 5 : 4;
@@ -544,6 +548,13 @@
     ctx.textAlign    = "left";
     ctx.textBaseline = "top";
     ctx.fillText("Isoforms", LEFT_GUTTER, layout.isoLabelTop);
+    if (isoHidden > 0) {
+      var titleW = ctx.measureText("Isoforms").width;
+      ctx.font      = "11px sans-serif";
+      ctx.fillStyle = "#888";
+      ctx.fillText("  · " + isoHidden + " hidden (use Show all isoforms in Advanced)",
+                   LEFT_GUTTER + titleW, layout.isoLabelTop + 1);
+    }
     ctx.restore();
 
     var n = isoIsoforms.length;
@@ -1028,6 +1039,7 @@
             var skip = (iso.skipped || []).find(function (s) { return pos >= s[0] && pos <= s[1]; });
             if (skip) lines = [isoLbl + " — absent (" + skip[0] + "–" + skip[1] + ")"];
           }
+          if (lines.length) lines.push(iso.isQuery ? "query isoform can't be hidden" : "double-click to hide");
         }
       }
     }
@@ -1176,6 +1188,15 @@
       var layout = getPanelLayout(inf ? inf.cssH : 520);
 
       if (cy >= layout.legendTop && cy <= layout.legendTop + LEGEND_H) return;
+
+      // isoform row: hide it (the query row does nothing, and never resets zoom)
+      if (layout.isoH > 0 && cy >= layout.isoTop && cy <= layout.isoTop + layout.isoH) {
+        var rowH   = (layout.isoH - ISO_PAD) / isoIsoforms.length;
+        var rowIdx = Math.floor((cy - layout.isoTop - ISO_PAD / 2) / rowH);
+        var iso    = isoIsoforms[rowIdx];
+        if (iso && !iso.isQuery && iso.key) shinySet(inputNames.iso_hide, iso.key);
+        return;
+      }
 
       currentRange = null;
       render();
@@ -1511,6 +1532,7 @@
     var isoformPane   = msg.isoformPane || {};
     isoIsoforms       = isoformPane.isoforms || [];
     isoExonBoundaries = isoformPane.exonBoundaries || [];
+    isoHidden         = isoformPane.nHidden || 0;
     hiddenTracks  = new Set(defaultHidden);
     committedSet.clear();
     perResidueColors = [];
@@ -1587,6 +1609,7 @@
     if (msg.isoformPane) {
       isoIsoforms       = msg.isoformPane.isoforms       || [];
       isoExonBoundaries = msg.isoformPane.exonBoundaries || [];
+      isoHidden         = msg.isoformPane.nHidden || 0;
     }
     render();
   });

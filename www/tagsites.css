@@ -434,6 +434,14 @@
   margin: 12px 0;
 }
 
+.ts-mask-header {
+  display: block;
+  color: #495057;
+  font-size: 0.75rem;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
 .ts-filter-hint {
   color: #999;
   font-style: italic;

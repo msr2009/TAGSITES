@@ -298,15 +298,22 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
                     checked_topology |= present
         return visible_keys, tagged_keys, constitutive, checked_topology
 
+    def _stamp_keys(iso_result, n_hidden=0):
+        """Copy of iso_result with each isoform tagged by its checkbox key and the hidden count."""
+        isoforms = [{**iso, "_key": isoform_key(iso, i)}
+                    for i, iso in enumerate(iso_result.get("isoforms", []))]
+        return {**iso_result, "isoforms": isoforms, "n_hidden": n_hidden}
+
     def _visible_iso_result():
         """iso_data with hidden isoforms filtered out (the query isoform is never hidden)."""
         iso_result = iso_data.get()
         if not iso_result:
             return iso_result
         visible_keys, _, _, _ = user_filter_spec()
-        isoforms = [iso for i, iso in enumerate(iso_result.get("isoforms", []))
-                   if iso.get("is_query") or isoform_key(iso, i) in visible_keys]
-        return {**iso_result, "isoforms": isoforms}
+        stamped = _stamp_keys(iso_result)["isoforms"]
+        # keep the query isoform and every isoform whose Show box is checked
+        shown = [iso for iso in stamped if iso.get("is_query") or iso["_key"] in visible_keys]
+        return {**iso_result, "isoforms": shown, "n_hidden": len(stamped) - len(shown)}
 
     @reactive.calc
     def site_scores():
@@ -431,7 +438,8 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
         color_by_choices.set(choices)
         ui.update_select("color_by", choices=choices, selected="(none)")
 
-        await _send_plot(aa_df, range_df, meta, json_content["global"]["run_name"], iso_result)
+        await _send_plot(aa_df, range_df, meta, json_content["global"]["run_name"],
+                         _stamp_keys(iso_result) if iso_result else iso_result)
         _plot_epoch[0] += 1  # marks the full payload just sent above as current
         # always reset structure colors on load — don't rely on color_by reactive firing
         # (it won't fire if color_by was already "(none)" before this load)
@@ -522,6 +530,7 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
             "residue_click": session.ns("residue_click"),
             "struct_click":  session.ns("struct_click"),
             "remove_site":   session.ns("remove_site"),
+            "iso_hide":      session.ns("iso_hide"),
         }
 
     def _score_payload(scores, cfg, seq_len):
@@ -703,6 +712,24 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
         sites = [s for s in shared_sites.get() if s != pos]
         shared_sites.set(sites)
 
+    @reactive.effect
+    @reactive.event(input.iso_hide)
+    def on_iso_hide():
+        """Hide an isoform (double-click in the pane) by unchecking its Show box."""
+        key = input.iso_hide()
+        if not key:
+            return
+        for i, iso in enumerate((iso_data.get() or {}).get("isoforms", [])):
+            if isoform_key(iso, i) == key and not iso.get("is_query"):
+                ui.update_checkbox(f"iso_show_{_safe_id(key)}", value=False)
+
+    @reactive.effect
+    @reactive.event(input.iso_show_all)
+    def on_iso_show_all():
+        """Re-check every isoform's Show box."""
+        for i, iso in enumerate((iso_data.get() or {}).get("isoforms", [])):
+            ui.update_checkbox(f"iso_show_{_safe_id(isoform_key(iso, i))}", value=True)
+
     # ── Sync JS highlight state whenever Python state changes ───────────────────
 
     @reactive.effect
@@ -883,6 +910,7 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
             return ui.div()
 
         body = []
+        mask_body = []  # everything under the "Mask sites" header (after the isoform group)
         # batch app: the Setup site filters, switchable per protein
         if site_filters is not None:
             within = int(_filter_default("guide_within") or 0)
@@ -904,21 +932,18 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
                               ("mask_uniprot", "Mask UniProt sites")):
                 switches.append(ui.input_switch("filt_" + key, text,
                                                 value=bool(_filter_default(key))))
-            body.append(ui.div(
-                ui.span("Site filters (batch defaults)", class_="ts-matrix-name-label"),
+            mask_body.append(ui.div(
                 *switches,
                 ui.span("Masks suggestions only; any site can still be added by hand.",
                         class_="ts-filter-hint"),
                 class_="ts-site-filters"))
-            if len(isoforms) > 1 or topology_labels:
-                body.append(ui.tags.hr(class_="ts-filter-divider"))
 
         if len(isoforms) > 1:
             # Show before Tag so Tag ends up the rightmost column in both matrices —
             # matches the Phobius matrix below (Name, Tag) at the same 340px width, so
             # the Tag checkboxes line up vertically between the two matrices.
             header = ui.div(
-                ui.span("Isoform (Uniprot ID)", class_="ts-matrix-name-label"),
+                ui.span("", class_="ts-matrix-name-label"),  # no group header; keeps the grid cell
                 ui.span("Show", class_="ts-matrix-col-label"),
                 ui.span("Tag", class_="ts-matrix-col-label"),
                 class_="ts-iso-matrix-row ts-matrix-header",
@@ -951,6 +976,8 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
                 id="ts-iso-matrix",
                 class_="ts-matrix",
             ))
+            body.append(ui.input_action_button("iso_show_all", "Show all isoforms",
+                                               class_="btn-sm btn-outline-secondary"))
             body.append(ui.div(
                 ui.input_switch("iso_constitutive_only", "Constitutive only",
                                 value=bool(_filter_default("constitutive_only"))),
@@ -980,9 +1007,6 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
                 }})();
             """)))
 
-        if len(isoforms) > 1 and topology_labels:
-            body.append(ui.tags.hr(class_="ts-filter-divider"))
-
         if topology_labels:
             topo_header = ui.div(
                 ui.span("Topology", class_="ts-matrix-name-label"),
@@ -998,10 +1022,17 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
                 )
                 for lbl in topology_labels
             ]
-            body.append(ui.div(
+            mask_body.append(ui.div(
                 topo_header, *topo_rows,
                 class_="ts-matrix",
             ))
+
+        # second group: masks, set off from the isoform group by a separator and a header
+        if mask_body:
+            if body:
+                body.append(ui.tags.hr(class_="ts-filter-divider"))
+            body.append(ui.span("Mask sites", class_="ts-mask-header"))
+            body.extend(mask_body)
 
         body.append(ui.output_text("filter_summary"))
 
