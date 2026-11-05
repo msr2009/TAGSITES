@@ -16,6 +16,12 @@ Schema (one row per canonical UniProt entry in the proteome):
   index on accession — one row per protein2ipr.dat match (see
   reference_data.fetch_interpro()), backing scripts/domains_bulk.py
 
+  sequence_aliases(crc64, accession, sequence, source)
+  every accession known to carry a sequence: the proteome's own entries plus every AFDB
+  tarball model (source "afdb_model"). UniProt often holds one sequence under two entries
+  (unc-25: Q7K7A3 in the reference proteome, G5EDB7 in AFDB), and services keyed by
+  accession may know only one of them; aliases_for_sequence() returns them all
+
 wormbase_transcript/wormbase_gene come straight out of the UniProt JSON's
 genes[].orfNames — this is the accession<->WormBase-name cross-reference
 scripts/genome_regions.py (Phase A2) needs to look CDS exons up in the GFF3,
@@ -24,6 +30,7 @@ with no separate mapping file or per-protein lookup required.
 Usage
 -----
     python scripts/local_store.py --build          # (re)build the index
+    python scripts/local_store.py --build-aliases  # (re)build sequence_aliases
     python scripts/local_store.py --stats          # print row counts
 """
 
@@ -195,6 +202,128 @@ def build_domains_index(cfg=None, force=False):
     return db_path
 
 
+def afdb_model_path(accession, cfg=None):
+    """Path of an accession's AFDB model in the extracted tarball (it may not exist)."""
+    ref_dir, _ = _reference_dir(cfg)
+    return ref_dir / "afdb_pdbs" / f"AF-{accession}-F1-model_v6.pdb.gz"
+
+
+def _pdb_sequence(path):
+    """One-letter sequence of a gzipped AFDB PDB from its SEQRES records (CA atoms if none)."""
+    from Bio.SeqUtils import seq1
+
+    seqres, ca = [], []
+    with gzip.open(path, "rt") as fh:
+        for line in fh:
+            if line.startswith("SEQRES"):
+                seqres.extend(line[19:].split())
+            elif line.startswith("ATOM") and line[12:16] == " CA ":
+                # SEQRES precedes the coordinates, so reaching atoms with it means it is complete
+                if seqres:
+                    break
+                ca.append(line[17:20])
+    return seq1("".join(seqres or ca))
+
+
+def build_aliases_index(cfg=None, force=False):
+    """(Re)build sequence_aliases from the proteins table and every AFDB tarball model."""
+    from Bio.SeqUtils.CheckSum import crc64
+
+    db_path = _db_path(cfg)
+    if not db_path.exists():
+        raise FileNotFoundError(f"{db_path} not found — run `python scripts/local_store.py "
+                                "--build` first.")
+    conn = sqlite3.connect(db_path)
+    if conn.execute("SELECT name FROM sqlite_master WHERE type='table' "
+                    "AND name='sequence_aliases'").fetchone():
+        if not force:
+            print(f"[skip] sequence_aliases already present in {db_path}; pass force=True")
+            conn.close()
+            return db_path
+        conn.execute("DROP TABLE sequence_aliases")
+    conn.execute("""
+        CREATE TABLE sequence_aliases (
+            crc64     TEXT,
+            accession TEXT,
+            sequence  TEXT,
+            source    TEXT,
+            has_model INTEGER,
+            PRIMARY KEY (crc64, accession)
+        )
+    """)
+    conn.executemany("INSERT OR IGNORE INTO sequence_aliases VALUES "
+                     "(?, ?, ?, 'reference_proteome', 0)",
+                     conn.execute("SELECT crc64, accession, sequence FROM proteins").fetchall())
+
+    pdb_dir = afdb_model_path("X", cfg).parent
+    rows = []
+    # every model file, including ones structure_bulk fetched and cached after extraction
+    for i, path in enumerate(sorted(pdb_dir.glob("AF-*-F1-model_v6.pdb.gz"))):
+        acc = path.name[3:-len("-F1-model_v6.pdb.gz")]
+        try:
+            seq = _pdb_sequence(path)
+        except (OSError, EOFError) as e:
+            print(f"[local_store] unreadable model {path.name}: {e}")
+            continue
+        rows.append((crc64(seq).replace("CRC-", ""), acc, seq))
+        if (i + 1) % 5000 == 0:
+            print(f"[local_store] read {i + 1:,} models …")
+    # has_model = the accession's model carries exactly this sequence; a model built on an
+    # older sequence version lands under its own checksum, leaving the proteome row at 0
+    conn.executemany("INSERT INTO sequence_aliases VALUES (?, ?, ?, 'afdb_model', 1) "
+                     "ON CONFLICT (crc64, accession) DO UPDATE SET has_model = 1", rows)
+    conn.commit()
+    n, n_crc = conn.execute("SELECT COUNT(*), COUNT(DISTINCT crc64) FROM sequence_aliases").fetchone()
+    shared = conn.execute("SELECT COUNT(*) FROM (SELECT crc64 FROM sequence_aliases GROUP BY crc64 "
+                          "HAVING COUNT(*) > 1)").fetchone()[0]
+    print(f"[local_store] {n:,} accessions over {n_crc:,} sequences ({shared:,} sequences "
+          f"under more than one accession) -> {db_path}")
+    conn.close()
+    return db_path
+
+
+def aliases_for_sequence(seq, conn=None):
+    """Accessions whose indexed sequence equals seq, proteome entries first; [] without the table."""
+    return [acc for acc, _, _ in alias_rows(seq, conn)]
+
+
+def alias_rows(seq, conn=None):
+    """(accession, source, has_model) whose indexed sequence equals seq, proteome entries first.
+
+    has_model = AFDB has a model of exactly this sequence under that accession.
+
+    Selenocysteine is compared as cysteine, since AFDB models carry it as CYS.
+    """
+    from Bio.SeqUtils.CheckSum import crc64
+
+    seq = "".join(str(seq).split()).upper().rstrip("*")
+    if not seq:
+        return []
+    own_conn = conn is None
+    conn = conn or open_index()
+    try:
+        if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                            "AND name='sequence_aliases'").fetchone():
+            return []
+        # a model's sequence has C where the proteome's has U, so both checksums are looked up
+        keys = {crc64(seq).replace("CRC-", ""), crc64(seq.replace("U", "C")).replace("CRC-", "")}
+        rows = conn.execute(
+            "SELECT accession, sequence, source, has_model FROM sequence_aliases WHERE crc64 IN ({}) "
+            "ORDER BY source != 'reference_proteome', accession".format(",".join("?" * len(keys))),
+            list(keys)).fetchall()
+    finally:
+        if own_conn:
+            conn.close()
+    # the checksum only narrows; the sequence itself decides
+    want = seq.replace("U", "C")
+    out, seen = [], set()
+    for acc, s, source, has_model in rows:
+        if s.replace("U", "C") == want and acc not in seen:
+            seen.add(acc)
+            out.append((acc, source, has_model))
+    return out
+
+
 def lookup_domains_by_accession(accession, conn=None):
     """Return all InterPro match rows for `accession` as a list of dicts."""
     own_conn = conn is None
@@ -258,6 +387,8 @@ if __name__ == "__main__":
     parser = ArgumentParser(description=__doc__)
     parser.add_argument("--build", action="store_true", help="(re)build the proteins index")
     parser.add_argument("--build-domains", action="store_true", help="(re)build the domains index")
+    parser.add_argument("--build-aliases", action="store_true",
+                        help="(re)build the sequence_aliases index (proteome + AFDB models)")
     parser.add_argument("--force", action="store_true", help="rebuild even if the index already exists")
     parser.add_argument("--stats", action="store_true", help="print row counts for the existing index")
     args = parser.parse_args()
@@ -266,6 +397,8 @@ if __name__ == "__main__":
         build_index(force=args.force)
     if args.build_domains:
         build_domains_index(force=args.force)
+    if args.build_aliases:
+        build_aliases_index(force=args.force)
     if args.stats:
         conn = open_index()
         n = conn.execute("SELECT COUNT(*) FROM proteins").fetchone()[0]
@@ -276,5 +409,10 @@ if __name__ == "__main__":
             print(f"domain matches: {n_dom:,}")
         except sqlite3.OperationalError:
             pass
-    if not (args.build or args.build_domains or args.stats):
-        parser.error("specify --build, --build-domains, and/or --stats")
+        try:
+            n_al = conn.execute("SELECT COUNT(*) FROM sequence_aliases").fetchone()[0]
+            print(f"sequence aliases: {n_al:,}")
+        except sqlite3.OperationalError:
+            pass
+    if not (args.build or args.build_domains or args.build_aliases or args.stats):
+        parser.error("specify --build, --build-domains, --build-aliases, and/or --stats")

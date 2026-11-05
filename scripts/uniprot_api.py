@@ -47,6 +47,29 @@ def checksum_lookup_all(seq, taxid=None, size=25):
     return [r["primaryAccession"] for r in resp.json().get("results", [])]
 
 
+def sequence_aliases(seq, taxid="", remote=True):
+    """Every UniProt accession with seq's sequence: the local alias index, then UniProt's search.
+
+    One sequence often sits under several entries, and accession-keyed services (AFDB, UCSC
+    unipAli) may know only one of them, so a caller that misses on one accession tries the rest.
+    The local index confirms full sequences; UniProt's search matches the CRC64 only.
+    """
+    seq = "".join(seq.split()).upper().rstrip("*")
+    out = []
+    try:
+        from local_store import aliases_for_sequence
+
+        out = aliases_for_sequence(seq)
+    except Exception:
+        pass   # no local reference data (e.g. the deployed app)
+    if remote:
+        try:
+            out += [a for a in checksum_lookup_all(seq, taxid) if a not in out]
+        except Exception:
+            pass
+    return out
+
+
 def checksum_lookup(seq, taxid=None):
     """Query UniProt REST API for an exact sequence match by CRC64 checksum.
 

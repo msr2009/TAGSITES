@@ -16,6 +16,12 @@ while AFDB also models the other UniProt entries), the model is fetched from AFD
 structure_remote.fetch_afdb_pdb and cached next to the tarball's files, so the next lookup is
 local. A failed fetch is the same "no model" outcome as before.
 
+UniProt often keeps one sequence under two entries, and AFDB may model only the one the
+reference proteome does not list (unc-25: Q7K7A3 in the proteome, the model under G5EDB7).
+So after the protein's own accession, every accession with the identical sequence in
+local_store's sequence_aliases index is tried, local files before AFDB fetches; the model's
+accession is then recorded in {name}.uniprot_accession.txt.
+
 AFDB only has predictions for canonical UniProt entries — a non-canonical
 isoform's accession won't have its own AF-*.pdb.gz member. That's a known,
 documented limitation (see the plan's Phase B), not something this backend
@@ -38,7 +44,7 @@ from pathlib import Path
 from site_selection_util import get_sequence, uniprot_accession_regex, save_fasta
 
 sys.path.insert(0, str(Path(__file__).parent))
-from local_store import lookup_by_crc64, _reference_dir
+from local_store import afdb_model_path, aliases_for_sequence, lookup_by_crc64
 from progress import report as _report, resolve_reporter
 
 
@@ -97,20 +103,52 @@ def main(fasta_in, email, workingdir, name, taxid, evalue, percentid,
     if not uniprot_accession_regex(fasta_in):
         from site_selection_util import read_fasta
         expected = str(read_fasta(fasta_in)[1])
-    if accession is None:
+    accessions = [accession] if accession else []
+    # other entries with this exact sequence: AFDB often models only one of them
+    if expected is not None:
+        accessions += [a for a in _aliases(expected) if a not in accessions]
+    if not accessions:
         _report(reporter,
                 "Could not resolve a UniProt accession for this sequence in "
                 "the local index — no AFDB structure available from the bulk "
                 "backend.", stage="afdb_bulk", level="warning")
         return 1
 
-    ref_dir, _ = _reference_dir()
-    pdb_gz_path = ref_dir / "afdb_pdbs" / f"AF-{accession}-F1-model_v6.pdb.gz"
-    if not pdb_gz_path.exists() and not _fetch_missing_model(accession, pdb_gz_path, reporter):
-        _report(reporter, f"no local AFDB structure for {accession}",
-                stage="afdb_bulk", level="warning")
-        return 1
+    # local models first (no network), then AFDB fetches in the same accession order
+    for acc, fetch in [(a, False) for a in accessions] + [(a, True) for a in accessions]:
+        pdb_gz_path = afdb_model_path(acc)
+        if fetch:
+            # a file present now was already tried in the local pass
+            if pdb_gz_path.exists() or not _fetch_missing_model(acc, pdb_gz_path, reporter):
+                continue
+        elif not pdb_gz_path.exists():
+            continue
+        fasta_path = _use_model(pdb_gz_path, acc, workingdir, name, expected, reporter)
+        if fasta_path is None:
+            continue
+        if acc != accessions[0]:
+            _report(reporter, f"AFDB has no model for {accessions[0]}; used {acc}, an entry "
+                              "with the identical sequence", stage="afdb_bulk")
+            # record the model's accession beside the run (as structure_remote does on a match)
+            from structure_remote import _record_accession
+            _record_accession(workingdir, name, acc)
+        return fasta_path
 
+    _report(reporter, f"no AFDB structure for {', '.join(accessions)}",
+            stage="afdb_bulk", level="warning")
+    return 1
+
+
+def _aliases(seq):
+    """Accessions in the local alias index with exactly this sequence ([] without the index)."""
+    try:
+        return aliases_for_sequence(seq)
+    except Exception:
+        return []
+
+
+def _use_model(pdb_gz_path, accession, workingdir, name, expected, reporter):
+    """Write {name}.AF.pdb / .fa from a model whose sequence equals expected; else None."""
     outfile_prefix = f"{workingdir}/{name}.AF"
     pdb_path = f"{outfile_prefix}.pdb"
     with gzip.open(pdb_gz_path, "rt") as f_in, open(pdb_path, "w") as f_out:
@@ -124,7 +162,7 @@ def main(fasta_in, email, workingdir, name, taxid, evalue, percentid,
                           f"({len(model_seq)} aa vs {len(expected)} aa); not used",
                 stage="afdb_bulk", level="warning")
         os.remove(pdb_path)
-        return 1
+        return None
 
     fasta_path = f"{outfile_prefix}.fa"
     save_fasta(name, model_seq, fasta_path)

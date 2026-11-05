@@ -215,13 +215,26 @@ def evaluate(protein_fa, taxid, accession="", flank_bp=2000, backend="remote", r
             if taxid else ""
         if not genome:
             raise LookupError(f"no UCSC assembly configured for taxid {taxid or '(none)'}")
+        from uniprot_api import sequence_aliases
+
         acc, how = resolve_accession(protein_fa, accession, taxid)
-        if not acc:
-            raise LookupError(how)
         cfg = ensembl_rest.load_config()
         budget = deadline_s or ensembl_rest.timeouts()["total_timeout_s"]
         deadline = http_retry.deadline_from(budget)
-        items = _remote_items(genome, acc, cfg, deadline, reporter)
+        items = _remote_items(genome, acc, cfg, deadline, reporter) if acc else []
+        # unipAli may align another entry with this exact sequence; looked up only on a miss
+        if not items:
+            for alias in sequence_aliases(query, taxid):
+                if alias == acc:
+                    continue
+                items = _remote_items(genome, alias, cfg, deadline, reporter)
+                if items:
+                    _report(reporter, f"UCSC aligns {alias} (identical sequence) rather than "
+                                      f"{acc or 'the resolved accession'}", stage="ucsc_model")
+                    acc = alias
+                    break
+        if not acc:
+            raise LookupError(how)
 
     label = acc or "the input sequence"
     if not items:

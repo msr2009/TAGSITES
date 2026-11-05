@@ -251,6 +251,12 @@ def fetch_afdb(cfg, force=False):
                 print(f"[extract] {n:,} structures so far…")
     marker.write_text(f"{n}\n")
     print(f"[extract] done: {n:,} structures -> {pdb_dir}")
+    # models are keyed by accession; index their sequences so an entry with the same
+    # sequence under another accession still finds its model (needs local_store built)
+    import local_store
+
+    if local_store._db_path().exists():
+        local_store.build_aliases_index(force=True)
 
 
 # ── Ensembl genome + annotation ───────────────────────────────────────────────

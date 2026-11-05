@@ -1391,11 +1391,13 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
             return None
 
         def label(r):
-            """One match as 'id · gene · length · reagents status · structure status'."""
+            """One match as 'id · gene · length · reagents · structure · other accessions'."""
             reagents = "reagents ok" if r.reagent_status == "success" else "no reagents"
             structure = "" if r.has_structure else "no structure"
+            # other UniProt entries with this exact sequence (absent in older databases)
+            also = f"also {r.aliases}" if getattr(r, "aliases", "") else ""
             return " · ".join(str(x) for x in (r.id, r.gene_name or "", f"{r.seq_length} aa",
-                                               reagents, structure) if x != "")
+                                               reagents, structure, also) if x != "")
 
         rows = list(found.itertuples())
         if len(rows) == 1:

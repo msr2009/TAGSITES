@@ -107,7 +107,8 @@ def find_protein(term, conn=None):
     """Proteins matching a term: accession, id, gene name, WormBase gene / transcript / locus.
 
     Case-insensitive and exact (so `trxr-1` finds both trxr-1 proteins); returns one row per
-    protein without the sequence.
+    protein without the sequence. Another UniProt entry with the same sequence (sequence_aliases,
+    e.g. G5EDB7 for Q7K7A3) finds the protein too.
     """
     sql = """SELECT DISTINCT p.pid, p.id, p.kind, p.accession, p.gene_name, p.wormbase_gene,
                     p.wormbase_transcript, p.wb_transcript, p.wb_gene, p.seq_length,
@@ -118,12 +119,15 @@ def find_protein(term, conn=None):
                 OR p.wormbase_transcript = :t COLLATE NOCASE OR p.wb_transcript = :t COLLATE NOCASE
                 OR p.wb_gene = :t COLLATE NOCASE OR w.locus = :t COLLATE NOCASE
                 OR p.wormbase_transcript = 'CELE_' || :t COLLATE NOCASE
-                OR lower(w.transcript) GLOB lower(:t) || '[a-z]'
+                OR lower(w.transcript) GLOB lower(:t) || '[a-z]'{aliases}
              ORDER BY p.pid"""
     own = conn is None
     conn = conn or open_db()
     try:
-        return pd.read_sql_query(sql, conn, params={"t": term})
+        # databases built before sequence_aliases existed lack the table
+        alias_sql = ("\n                OR p.crc64 IN (SELECT crc64 FROM sequence_aliases "
+                     "WHERE accession = :t COLLATE NOCASE)") if _has_table(conn, "sequence_aliases") else ""
+        return pd.read_sql_query(sql.format(aliases=alias_sql), conn, params={"t": term})
     finally:
         if own:
             conn.close()
@@ -166,11 +170,34 @@ def match_sequence(seq, conn=None, path=None):
             "p.has_structure, r.status AS reagent_status, r.error AS reagent_error "
             "FROM proteins p LEFT JOIN reagent_status r ON r.pid = p.pid "
             "WHERE p.pid IN ({}) ORDER BY p.pid".format(marks), conn, params=pids)
+        df["aliases"] = [", ".join(aliases(pid, conn)) for pid in df["pid"]]
     finally:
         if own:
             conn.close()
     # a CRC collision is possible in principle; the sequence itself decides
     return df[df["sequence"] == seq].drop(columns=["sequence"]).reset_index(drop=True)
+
+
+def _has_table(conn, name):
+    """True when the table exists in this database."""
+    return conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                        (name,)).fetchone() is not None
+
+
+def aliases(pid, conn=None):
+    """Other UniProt accessions carrying this protein's exact sequence (sequence_aliases)."""
+    own = conn is None
+    conn = conn or open_db()
+    try:
+        if not _has_table(conn, "sequence_aliases"):
+            return []
+        return [r[0] for r in conn.execute(
+            "SELECT a.accession FROM sequence_aliases a JOIN proteins p ON p.crc64 = a.crc64 "
+            "WHERE p.pid = ? AND a.accession NOT IN (p.id, COALESCE(p.accession, '')) "
+            "ORDER BY a.accession", (pid,))]
+    finally:
+        if own:
+            conn.close()
 
 
 def get_features(pid, tracks=None, conn=None):

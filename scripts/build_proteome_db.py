@@ -84,10 +84,11 @@ SCALES_WITH = {
     "insertion_sites": "residues", "site_guides": "residues",
     "genotyping_primers": "residues",
     "wb_transcripts": "fixed", "meta": "fixed", "score_configs": "fixed",
+    "sequence_aliases": "proteins",
 }
 STAGE_TABLES = {
     "ingest": ["proteins", "wb_transcripts", "features", "residues", "conservation_summary",
-               "isoforms", "isoform_spans", "run_status", "meta"],
+               "isoforms", "isoform_spans", "run_status", "meta", "sequence_aliases"],
     "scores": ["score_configs", "site_scores", "tag_sites", "curated_sites"],
     "reagents": ["regions", "insertion_sites", "guides", "site_guides", "edits",
                  "genotyping_primers", "reagent_status"],
@@ -155,6 +156,11 @@ SCHEMA = {
         WITHOUT ROWID""",
     "reagent_status": """CREATE TABLE reagent_status (
         pid INTEGER PRIMARY KEY, status TEXT, seconds REAL, error TEXT)""",
+    # every UniProt accession carrying a protein's exact sequence (keyed like proteins.crc64);
+    # has_model = AFDB models exactly this sequence under that accession
+    "sequence_aliases": """CREATE TABLE sequence_aliases (
+        crc64 TEXT, accession TEXT, source TEXT, has_model INTEGER,
+        PRIMARY KEY (crc64, accession)) WITHOUT ROWID""",
 }
 INDEXES = [
     "CREATE INDEX idx_proteins_gene ON proteins(gene_name)",
@@ -170,6 +176,7 @@ INDEXES = [
     "CREATE INDEX idx_isospans_pid ON isoform_spans(pid, iso_idx)",
     "CREATE INDEX idx_tag_sites_pid ON tag_sites(pid)",
     "CREATE INDEX idx_guides_pid ON guides(pid)",
+    "CREATE INDEX idx_aliases_acc ON sequence_aliases(accession)",
 ]
 # per-protein child tables, for delete-then-insert on --update
 CHILD_TABLES = {
@@ -589,22 +596,46 @@ def delete_children(conn, pid, stage):
             conn.execute("DELETE FROM {} WHERE pid=?".format(t), (pid,))
 
 
-def insert_proteins(conn, proteins, wb, status):
+def _model_accession(run_dir, pid_):
+    """Accession structure_bulk recorded for a run's model ({id}.uniprot_accession.txt), or ''."""
+    from uniprot_api import ACCESSION_SIDECAR, parse_accession
+
+    try:
+        with open(Path(run_dir) / pid_ / ACCESSION_SIDECAR.format(run=pid_)) as fh:
+            return parse_accession(fh.read())
+    except OSError:
+        return ""
+
+
+def _structure_source(p, has, run_dir):
+    """'afdb', or 'afdb:ACC' when the model came from another entry with the same sequence."""
+    if not has:
+        return None
+    acc = _model_accession(run_dir, p["id"])
+    return "afdb:" + acc if acc and acc not in (p["id"], p["accession"]) else "afdb"
+
+
+def insert_proteins(conn, proteins, wb, status, run_dir):
     """Insert/refresh the proteins and wb_transcripts tables; assigns pid to each dict."""
+    from concurrent.futures import ThreadPoolExecutor
+
     existing = dict(conn.execute("SELECT id, pid FROM proteins"))
     next_pid = max(existing.values(), default=0) + 1
+    has = [int(status.get(p["id"], {}).get("tasks", {}).get("plddt") == "ok") for p in proteins]
+    # one small sidecar read per structured protein, threaded since the run folder is remote
+    with ThreadPoolExecutor(32) as ex:
+        sources = list(ex.map(lambda ph: _structure_source(ph[0], ph[1], run_dir),
+                              zip(proteins, has)))
     rows = []
-    for p in proteins:
+    for p, h, source in zip(proteins, has, sources):
         if p["id"] in existing:
             p["pid"] = existing[p["id"]]
         else:
             p["pid"], next_pid = next_pid, next_pid + 1
-        st = status.get(p["id"], {}).get("tasks", {})
-        has = int(st.get("plddt") == "ok")
         rows.append((p["pid"], p["id"], p["kind"], p["accession"], p["gene_name"],
                      p["wormbase_gene"], p["wormbase_transcript"], p["wb_gene"],
-                     p["wb_transcript"], p["crc64"], len(p["sequence"]), p["sequence"], has,
-                     "afdb" if has else None, p.get("sequence_differs", 0)))
+                     p["wb_transcript"], p["crc64"], len(p["sequence"]), p["sequence"], h,
+                     source, p.get("sequence_differs", 0)))
     conn.executemany("INSERT OR REPLACE INTO proteins VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", rows)
     pid_by_crc = {}
     for p in proteins:
@@ -613,6 +644,28 @@ def insert_proteins(conn, proteins, wb, status):
     conn.executemany("INSERT OR REPLACE INTO wb_transcripts VALUES (?,?,?,?,?,?)", [
         (name, a.get("gene"), a.get("locus"), a.get("uniprot"), crc64(seq),
          pid_by_crc.get(crc64(seq))) for name, (a, seq) in wb.items()])
+
+
+def write_aliases(conn, proteins):
+    """sequence_aliases from local_store's index: every accession with each protein's sequence.
+
+    Inert (table left empty) when local_store has no sequence_aliases table yet.
+    """
+    import local_store
+
+    conn.execute("DELETE FROM sequence_aliases")
+    lconn = local_store.open_index()
+    rows = {}
+    try:
+        for p in proteins:
+            for acc, source, has_model in local_store.alias_rows(p["sequence"], conn=lconn):
+                rows.setdefault((p["crc64"], acc), (source, has_model))
+    finally:
+        lconn.close()
+    conn.executemany("INSERT INTO sequence_aliases VALUES (?,?,?,?)",
+                     [(crc, acc, source, has_model)
+                      for (crc, acc), (source, has_model) in rows.items()])
+    return len(rows)
 
 
 def write_result(conn, res, stage_set, config_id):
@@ -826,7 +879,10 @@ def build_core(conn, proteins, wb, status, cfg, stages, workers, update=False, e
     t0 = time.time()
     create_schema(conn)
     upgrade_schema(conn)
-    insert_proteins(conn, everyone or proteins, wb, status)
+    insert_proteins(conn, everyone or proteins, wb, status, cfg["run_dir"])
+    if "ingest" in stages:
+        n_alias = write_aliases(conn, everyone or proteins)
+        print("[build_proteome_db] sequence aliases: {}".format(n_alias), flush=True)
     write_status(conn, proteins, status)
     config_id, scores_config = (None, None)
     if "scores" in stages:
@@ -1174,7 +1230,7 @@ def estimate_reagents(args, cfg, proteins, wb, status, total_res):
     path.unlink(missing_ok=True)
     conn = connect_build(path)
     create_schema(conn)
-    insert_proteins(conn, chosen, wb, status)
+    insert_proteins(conn, chosen, wb, status, cfg["run_dir"])
     caches = reagent_caches(conn)
     workers = min(args.workers or cfg["max_workers"], len(chosen))
     stats = run_reagent_chunk(conn, [(p["pid"], p["id"], p["sequence"]) for p in chosen],
