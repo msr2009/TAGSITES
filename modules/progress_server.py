@@ -541,9 +541,15 @@ def progress_server(input, output, session, shared_json, shared_results_trigger,
         _refreshed_success_ids.update(keyed[tid] for tid in newly_done)
         _completion_count[0] += 1
         shared_results_trigger.set(_completion_count[0])
-        if (db_mode.get() and "Analyses_db" in newly_done
-                and status["Analyses_db"].get("status") == "success"
-                and any(k[1] == "Analyses_db" and k[0] == run for k in _db_seen_unfinished)):
+        # a precomputed load waits for BOTH db tasks before jumping to Results: the reagents
+        # export lands seconds after the analyses, and arriving early shows an empty Reagents
+        # tab. Reagents may legitimately fail, so only the analyses must have succeeded
+        db_present = [t for t in DB_TASKS if t in status]
+        db_finished = all(status[t].get("status") in ("success", "failed") for t in db_present)
+        if (db_mode.get() and db_present and db_finished
+                and newly_done & set(db_present)
+                and status.get("Analyses_db", {}).get("status") == "success"
+                and any(k[1] in DB_TASKS and k[0] == run for k in _db_seen_unfinished)):
             ui.update_navset("main_tabs", selected="results", session=session.root_scope())
 
     # task ids already warned about running long — avoids renotifying every 2 s poll

@@ -371,6 +371,21 @@ def load_isoforms_from_json(json_in):
     return _select_isoform_candidate(iso_candidates) if iso_candidates else None
 
 
+def run_display_title(json_content):
+    """Heading for the Results tab: the gene name when one is known, else the run name.
+
+    A precomputed run's name is the database protein id (an accession), which keys every
+    output file and so cannot be renamed, but proteome_export records the gene name beside
+    it. Rendered as "gly-8 (O45293)" so the accession stays visible.
+    """
+    g = (json_content or {}).get("global", {}) if isinstance(json_content, dict) else {}
+    run_name = g.get("run_name", "") or ""
+    gene = (g.get("proteome_db") or {}).get("gene_name") or ""
+    if not gene or gene == run_name:
+        return run_name
+    return "{} ({})".format(gene, run_name)
+
+
 def load_run_metadata(json_in):
     """Extract run-level metadata needed by the results UI (sequence, PDB path, task params).
 

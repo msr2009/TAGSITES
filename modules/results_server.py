@@ -6,6 +6,7 @@ from utils.results import (
     cached_load,
     load_data_from_json,
     load_run_metadata,
+    run_display_title,
     load_reagents_df,
     build_plot_payload,
     assign_task_colors,
@@ -489,7 +490,7 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
         color_by_choices.set(choices)
         ui.update_select("color_by", choices=choices, selected="(none)")
 
-        await _send_plot(aa_df, range_df, meta, json_content["global"]["run_name"],
+        await _send_plot(aa_df, range_df, meta, run_display_title(json_content),
                          _stamp_keys(iso_result) if iso_result else iso_result)
         _plot_epoch[0] += 1  # marks the full payload just sent above as current
         # always reset structure colors on load — don't rely on color_by reactive firing
@@ -930,12 +931,15 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
                 text += " — click again to confirm"
             spans.append(ui.span(text, class_=f"ts-term-verdict ts-term-{v.get('tier', 'ok')}",
                                  title="; ".join(v.get("reasons") or [])))
-            # muted while flagged, amber once armed; addressed by id so the button's own
-            # DOM (and its click counter) is never replaced
+            # muted while flagged, amber once armed; a putative terminus that does not warn
+            # still gets an amber outline, visible but in no way blocking. Addressed by id so
+            # the button's own DOM (and its click counter) is never replaced
+            btn = session.ns(f"add_{end.lower()}term_button")
             if v.get("warns"):
                 css.append("#{} {{ background:{}; border-color:{}; color:#6c757d; }}".format(
-                    session.ns(f"add_{end.lower()}term_button"),
-                    "#fff3cd" if armed else "#f3f3f3", "#e0a800" if armed else "#b9b9b9"))
+                    btn, "#fff3cd" if armed else "#f3f3f3", "#e0a800" if armed else "#b9b9b9"))
+            elif v.get("tier") == "putative":
+                css.append("#{} {{ border-color:#e0a800; color:#997404; }}".format(btn))
         return ui.div(ui.tags.style("\n".join(css)), *spans, class_="ts-term-row")
 
     @render.ui
