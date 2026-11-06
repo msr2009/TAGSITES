@@ -380,7 +380,8 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
         for end in ("N", "C"):
             # the merged cfg, not a fresh load: mask labels come from the user-restriction
             # criteria too (see site_scores' docstring)
-            v = assess_terminus(scores, range_data.get(), seq_len, end, cfg)
+            v = assess_terminus(scores, range_data.get(), seq_len, end, cfg,
+                                tracks=aa_data.get())
             v["warns"] = terminus_warns(v, cfg)
             out[end] = v
         return out

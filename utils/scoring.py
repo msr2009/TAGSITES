@@ -20,6 +20,7 @@ position_mask_criterion() below) rather than scores.config.json; don't use that
 prefix for a config-authored criterion key.
 """
 
+import fnmatch
 import json
 import os
 from pathlib import Path
@@ -205,6 +206,7 @@ _TERMINUS_DEFAULTS = {
                          "prevents secretion from er", "propeptide", "binding site",
                          "signal peptide", "transit peptide", "transmembrane"],
     "curated_requires_experimental": False,
+    "curated_mask_keys": ["in_membrane_or_cleaved", "user_*"],
     "putative_sources": ["modification"],
     "track_rules": [],
     "warn_tiers": ["masked"],
@@ -231,22 +233,91 @@ def _window_ranges(range_df, sources, start, stop):
     return hit if not hit.empty else None
 
 
-def _track_rule_reasons(scores, pos, rules):
-    """Labels of the configured track rules that fire at pos (the reserved tier-2 slot)."""
+def _mask_labels_by_evidence(scores, pos, config, curated_keys):
+    """Labels of the mask criteria firing at pos, split into (curated, regex-only).
+
+    A mask is only as good as what it rests on: topology calls come from several agreeing
+    predictors and are corroborated by curation 86% of the time, while a motif regex alone
+    manages 5% (worm) to 19% (yeast). Patterns are matched with fnmatch so a family such as
+    the runtime "user_*" restrictions is one config entry.
+    """
+    curated, soft = [], []
+    if scores is None or scores.empty or pos not in scores.index:
+        return curated, soft
+    row = scores.loc[[pos]].iloc[0]
+    for c in config["criteria"]:
+        if not c.get("mask") or c["key"] not in scores.columns or not bool(row[c["key"]]):
+            continue
+        hit = any(fnmatch.fnmatchcase(c["key"], pat) for pat in curated_keys)
+        (curated if hit else soft).append(c["label"])
+    return curated, soft
+
+
+_AGGS = ("mean", "median", "min", "max")
+
+
+def _end_window(seq_len, end, width):
+    """Inclusive (start, stop) of the `width` residues at this end."""
+    width = max(1, int(width or 1))
+    return (1, min(width, seq_len)) if end == "N" \
+        else (max(1, seq_len - width + 1), seq_len)
+
+
+def _window_stat(tracks, col, start, stop, agg):
+    """Aggregate of one track over the inclusive residue window, or None if unavailable."""
+    if col is None or tracks is None or "pos" not in tracks.columns:
+        return None
+    rows = tracks[(tracks["pos"] >= start) & (tracks["pos"] <= stop)]
+    vals = pd.to_numeric(rows[col], errors="coerce").dropna()
+    return None if vals.empty else float(getattr(vals, agg)())
+
+
+def _bounds_ok(val, cond):
+    """Whether a value satisfies a condition's above/below bounds; one bound is required."""
+    if val is None or (cond.get("above") is None and cond.get("below") is None):
+        return False
+    if cond.get("above") is not None and val < cond["above"]:
+        return False
+    if cond.get("below") is not None and val > cond["below"]:
+        return False
+    return True
+
+
+def _condition_value(tracks, seq_len, end, cond):
+    """(column, aggregate) for one rule or gate at this terminus, or (None, None)."""
+    col, agg = _find_column(tracks, cond.get("track")), cond.get("agg", "mean")
+    if col is None or agg not in _AGGS:
+        return None, None
+    lo, hi = _end_window(seq_len, end, cond.get("window"))
+    return col, _window_stat(tracks, col, lo, hi, agg)
+
+
+def _track_rule_reasons(tracks, seq_len, end, rules):
+    """Labels of the configured track rules firing at this terminus (the tier-2 slot).
+
+    A rule aggregates one track over a window at this end and tests it against a bound, or
+    against the same window at the opposite end via above_other_end_by — the relative form,
+    which the competition data supports best: the more conserved end is the worse end to tag.
+    Each `requires` entry is an extra gate on another track, which is how pLDDT suppresses a
+    conservation call sitting on a floppy, badly modelled tail.
+    """
     out = []
+    if tracks is None or getattr(tracks, "empty", True) or not seq_len:
+        return out
+    other = "C" if end == "N" else "N"
     for rule in rules or []:
-        col = rule.get("analysis")
-        if col not in scores.columns or pos not in scores.index:
+        col, val = _condition_value(tracks, seq_len, end, rule)
+        if val is None:
             continue
-        val = pd.to_numeric(pd.Series([scores.loc[pos, col]]), errors="coerce").iloc[0]
-        if pd.isna(val):
+        margin = rule.get("above_other_end_by")
+        if margin is not None:
+            _, oval = _condition_value(tracks, seq_len, other, rule)
+            if oval is None or val - oval < margin:
+                continue
+        elif not _bounds_ok(val, rule):
             continue
-        # a rule states one bound or the other; both may be given to describe a band
-        if rule.get("above") is not None and val < rule["above"]:
-            continue
-        if rule.get("below") is not None and val > rule["below"]:
-            continue
-        if rule.get("above") is None and rule.get("below") is None:
+        if not all(_bounds_ok(_condition_value(tracks, seq_len, end, g)[1], g)
+                   for g in rule.get("requires") or []):
             continue
         out.append(rule.get("label") or rule.get("key") or col)
     return out
@@ -262,11 +333,14 @@ def _dedupe(items):
     return out
 
 
-def assess_terminus(scores, range_df, seq_len, end, config=None):
+def assess_terminus(scores, range_df, seq_len, end, config=None, tracks=None):
     """Three-tier verdict for one terminus: masked, putative or ok, with reasons.
 
-    Fails open: missing scores, annotations or sequence length all return ok rather than
-    raising, so a data gap never makes the Add button behave unexpectedly.
+    `tracks` is the per-residue continuous frame (aa_df); it is only read by track_rules,
+    so leaving it out simply skips those rules.
+
+    Fails open: missing scores, annotations, tracks or sequence length all return ok rather
+    than raising, so a data gap never makes the Add button behave unexpectedly.
     """
     config = config or load_scoring_config()
     p = terminus_params(config)
@@ -277,11 +351,9 @@ def assess_terminus(scores, range_df, seq_len, end, config=None):
     start, stop = (1, min(p["window"], seq_len)) if end == "N" \
         else (max(1, seq_len - p["window"] + 1), seq_len)
 
-    # already masked by a scoring criterion (transmembrane, signal peptide, ...)
-    reasons = []
-    if scores is not None and not scores.empty and pos in scores.index \
-            and "masked" in scores.columns and bool(scores.loc[pos, "masked"]):
-        reasons = list(mask_reasons(scores.loc[[pos]], config)[0])
+    # masks split by what they rest on: topology and explicit user restrictions are tier 1,
+    # a motif regex alone only raises the putative tier (see _mask_labels_by_evidence)
+    reasons, soft = _mask_labels_by_evidence(scores, pos, config, p["curated_mask_keys"])
 
     curated = _window_ranges(range_df, p["curated_sources"], start, stop)
     if curated is not None:
@@ -297,11 +369,11 @@ def assess_terminus(scores, range_df, seq_len, end, config=None):
         verdict.update(tier="masked", reasons=_dedupe(reasons))
         return verdict
 
+    reasons += soft
     putative = _window_ranges(range_df, p["putative_sources"], start, stop)
     if putative is not None:
         reasons += sorted({str(d) for d in putative["description"]})
-    if scores is not None and not scores.empty:
-        reasons += _track_rule_reasons(scores, pos, p["track_rules"])
+    reasons += _track_rule_reasons(tracks, seq_len, end, p["track_rules"])
     if reasons:
         verdict.update(tier="putative", reasons=_dedupe(reasons))
     return verdict
@@ -451,13 +523,19 @@ def _range_mask(range_df, sources, seq_len, exclude_descriptions=None, include_d
 
 
 def _find_column(aa_df, analysis_type):
-    """Return the first aa_df column classified as `analysis_type` by _guess_analysis_type, or None."""
-    if aa_df is None:
+    """The aa_df column classified as `analysis_type`, or None.
+
+    The pLDDT task also writes _sasa and _hydro tracks, which _guess_analysis_type groups
+    under the same type for palette purposes, so the plain track wins and a derivative is
+    only used when nothing else matches.
+    """
+    if aa_df is None or getattr(aa_df, "empty", False) or not analysis_type:
         return None
-    for col in aa_df.columns[1:]:
-        if _guess_analysis_type(col) == analysis_type:
-            return col
-    return None
+    cands = [c for c in aa_df.columns
+             if c != "pos" and _guess_analysis_type(c) == analysis_type]
+    plain = [c for c in cands if not c.endswith(("_sasa", "_hydro"))]
+    pick = plain or cands
+    return pick[0] if pick else None
 
 
 def _small_aa_fraction(query_seq, pos, window, small_aa):
