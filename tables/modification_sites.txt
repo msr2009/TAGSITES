@@ -1,7 +1,12 @@
 myristoylation	^MG...S
 N-terminal palmitoylation	^MGC..S
-CAAX prenylation	C[AILMV][AILMV].$
+CAAX prenylation	C[AILMVFTSG]{2}[A-Z]$
 RAB prenylation	C{1,2}$
+PTS1 peroxisome targeting	[SAC][KRH][LM]$
+HDEL/KDEL ER targeting	[HK]DEL$
+KKXX ER retention	KK..$
+FFAT motif	[DE][FY][FY][DE]A.[DE]
+phospho-FFAT motif	[DE][FY][FY][ST]A.[DE]
 Canonical PDZ binding site	[ST]{1}.[VL]{1}$
 PDZ binding site class 1a (Tonikian 2008)	[VILFWYM][KR].SDV$
 PDZ binding site class 1b (Tonikian 2008)	[FWY][RK]ET[STRK][VILFWYM]$
