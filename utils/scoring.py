@@ -197,6 +197,121 @@ def site_selection_params(config=None):
     return out
 
 
+# fallbacks for a config written before the terminus block existed
+_TERMINUS_DEFAULTS = {
+    "window": 10,
+    "curated_sources": ["UniProt", "UniProt_site"],
+    "curated_blocking": ["lipidation", "cysteine methyl ester", "microbody targeting",
+                         "prevents secretion from er", "propeptide", "binding site",
+                         "signal peptide", "transit peptide", "transmembrane"],
+    "curated_requires_experimental": False,
+    "putative_sources": ["modification"],
+    "track_rules": [],
+    "warn_tiers": ["masked"],
+    "arm_timeout_s": 15,
+}
+
+
+def terminus_params(config=None):
+    """The terminus block of the scoring config, with defaults for any missing key."""
+    config = config or load_scoring_config()
+    out = dict(_TERMINUS_DEFAULTS)
+    out.update({k: v for k, v in (config.get("terminus") or {}).items() if k != "__doc__"})
+    return out
+
+
+def _window_ranges(range_df, sources, start, stop):
+    """Rows of range_df from the given sources overlapping the inclusive start..stop window."""
+    if range_df is None or range_df.empty or "source" not in range_df.columns:
+        return None
+    rows = range_df[range_df["source"].isin(set(sources))]
+    if rows.empty:
+        return None
+    hit = rows[(rows["start"] <= stop) & (rows["stop"] >= start)]
+    return hit if not hit.empty else None
+
+
+def _track_rule_reasons(scores, pos, rules):
+    """Labels of the configured track rules that fire at pos (the reserved tier-2 slot)."""
+    out = []
+    for rule in rules or []:
+        col = rule.get("analysis")
+        if col not in scores.columns or pos not in scores.index:
+            continue
+        val = pd.to_numeric(pd.Series([scores.loc[pos, col]]), errors="coerce").iloc[0]
+        if pd.isna(val):
+            continue
+        # a rule states one bound or the other; both may be given to describe a band
+        if rule.get("above") is not None and val < rule["above"]:
+            continue
+        if rule.get("below") is not None and val > rule["below"]:
+            continue
+        if rule.get("above") is None and rule.get("below") is None:
+            continue
+        out.append(rule.get("label") or rule.get("key") or col)
+    return out
+
+
+def _dedupe(items):
+    """The list with duplicates dropped, keeping first-seen order."""
+    seen, out = set(), []
+    for x in items:
+        if x not in seen:
+            seen.add(x)
+            out.append(x)
+    return out
+
+
+def assess_terminus(scores, range_df, seq_len, end, config=None):
+    """Three-tier verdict for one terminus: masked, putative or ok, with reasons.
+
+    Fails open: missing scores, annotations or sequence length all return ok rather than
+    raising, so a data gap never makes the Add button behave unexpectedly.
+    """
+    config = config or load_scoring_config()
+    p = terminus_params(config)
+    pos = 1 if end == "N" else int(seq_len or 0)
+    verdict = {"end": end, "pos": pos, "tier": "ok", "reasons": []}
+    if not seq_len or pos < 1:
+        return verdict
+    start, stop = (1, min(p["window"], seq_len)) if end == "N" \
+        else (max(1, seq_len - p["window"] + 1), seq_len)
+
+    # already masked by a scoring criterion (transmembrane, signal peptide, ...)
+    reasons = []
+    if scores is not None and not scores.empty and pos in scores.index \
+            and "masked" in scores.columns and bool(scores.loc[pos, "masked"]):
+        reasons = list(mask_reasons(scores.loc[[pos]], config)[0])
+
+    curated = _window_ranges(range_df, p["curated_sources"], start, stop)
+    if curated is not None:
+        for desc in curated["description"].astype(str):
+            low = desc.lower()
+            if not any(w.lower() in low for w in p["curated_blocking"]):
+                continue
+            # UniProt marks its rule-based calls "(predicted)" and cites a PubMed id otherwise
+            if p["curated_requires_experimental"] and "pubmed" not in low:
+                continue
+            reasons.append(desc)
+    if reasons:
+        verdict.update(tier="masked", reasons=_dedupe(reasons))
+        return verdict
+
+    putative = _window_ranges(range_df, p["putative_sources"], start, stop)
+    if putative is not None:
+        reasons += sorted({str(d) for d in putative["description"]})
+    if scores is not None and not scores.empty:
+        reasons += _track_rule_reasons(scores, pos, p["track_rules"])
+    if reasons:
+        verdict.update(tier="putative", reasons=_dedupe(reasons))
+    return verdict
+
+
+def terminus_warns(verdict, config=None):
+    """Whether this verdict's tier is one the config asks the UI to warn about."""
+    return verdict.get("tier") in set(terminus_params(config)["warn_tiers"])
+
+
 def _criteria_signature(scores, config):
     """Per-position tuple of which biological criteria are satisfied.
 

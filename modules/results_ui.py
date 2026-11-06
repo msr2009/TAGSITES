@@ -85,6 +85,7 @@ def results_ui(between=None):
         # ── Chosen tag sites: chips | N-term | C-term | Add suggested | Clear ──
         ui.div(
             ui.output_ui("chosen_sites_display"),
+            ui.output_ui("terminus_verdict"),
             ui.input_action_button("add_nterm_button",
                                    "Add N-term",
                                    class_="btn btn-outline-primary btn-sm ts-sites-btn"),

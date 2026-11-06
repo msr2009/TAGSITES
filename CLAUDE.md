@@ -255,6 +255,31 @@ below and was removed: over 300 worm proteins it moved the cut distance not at a
 3.0 bp, 73.1% within 5 bp at every weight tried) and the chosen guide's RS3 median only
 0.657 → 0.689, which is not worth an exception to the rule.
 
+**Termini are judged on their own three-tier ladder**: the per-residue score was built for
+internal sites and does not describe a terminus — the features predicting C-terminal failure and
+internal mislocalization are uncorrelated (rho 0.028 over 35 features), and the motifs that matter
+at an end (PTS1, H/KDEL, KKXX, CAAX) are properties of the protein, not of a residue.
+`utils/scoring.assess_terminus` returns one of three tiers with human-readable reasons: **masked**
+(a curated UniProt feature in the terminal window, or the position already masked by a scoring
+criterion), **putative** (a regex motif from `tables/modification_sites.txt` fired with no curated
+annotation behind it, or a configured `track_rule` fired), or **ok**. The split exists because
+motif precision varies hugely — measured against UniProt's own terminal annotations in yeast,
+H/KDEL is 100% precise but CAAX is 38.6%, PTS1 20.0% and RAB prenylation 9.1% — so a motif hit is
+a suspicion, not a curated call. Everything is tunable in `scores.config.json`'s `terminus` block;
+`warn_tiers` is the single threshold knob (`["masked"]` by default, `["masked", "putative"]` to
+warn on everything that is not OK to tag). Note `curated_requires_experimental` should stay false:
+97% of worm terminal blocking annotations are `(predicted)` rather than PubMed-cited, so enabling
+it empties the masked tier for worm.
+
+This is also how the "never withholds reagents" rule is honoured at a terminus. A flagged Add
+button is styled as a warning but stays **clickable**: the first click explains why and adds
+nothing, a second click tags it anyway. The button is never `disabled` — a disabled button cannot
+be clicked twice — and it is never re-rendered from `@render.ui`, because replacing an
+`input_action_button`'s DOM rebinds it and resets `input.x()` to 0, breaking the click count. The
+greyed/amber state is emitted as a `<style>` block keyed on the namespaced id instead. The armed
+state is a token carrying `{run, tier, time}`, so it cannot survive a protein switch in the batch
+app, a rescoring change, or `terminus.arm_timeout_s`.
+
 **Suggested sites are regions, not points**: the top of a protein's score is a plateau, not a
 peak — most top-scoring residues sit where the conservation ramp is clipped, so the score
 genuinely cannot rank them (worm median: 10 tied residues in 3 distinct regions; 90th

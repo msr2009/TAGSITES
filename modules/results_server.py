@@ -1,5 +1,5 @@
 from shiny import reactive, ui, render, module
-import base64, json, os, re
+import base64, json, os, re, time
 from modules.json_card import json_upload_card as _json_upload_card
 
 from utils.results import (
@@ -27,6 +27,7 @@ from utils.scoring import (
     score_tag_sites, failed_flags, mask_reasons, score_cmap_hex, score_max,
     load_scoring_config, pick_suggested_regions, position_mask_criterion, with_extra_criteria,
     unmask_checked_topology, lift_hard_masks, range_positions,
+    assess_terminus, terminus_params, terminus_warns,
 )
 from utils.tag_filters import isoform_key, isoform_allowed_positions, topology_tag_allowed_positions
 from config import RESULTS_TYPE_DICT, DOMAIN_SOURCE_COLORS, TOPOLOGY_SOURCES
@@ -187,6 +188,11 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
 
     # set by _do_load when auto_suggest is on and the run has no saved sites
     _suggest_pending = reactive.Value(False)
+
+    # confirm-to-override tokens for the two terminus buttons: None, or
+    # {"run": key, "tier": str, "t": monotonic}. A token rather than a bool so a stale arm
+    # cannot survive a protein switch or a rescoring change even if a clear path is missed.
+    _term_armed = {"N": reactive.Value(None), "C": reactive.Value(None)}
 
     # ── Advanced / Rescoring: isoform + topology restrictions (session-only) ────
 
@@ -365,6 +371,47 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
                                     reagents_data.get(), cfg)
         return scores_df, cfg
 
+    @reactive.calc
+    def terminus_info():
+        """Three-tier verdict for both termini, keyed "N"/"C" (see utils.scoring)."""
+        scores, cfg = site_scores()
+        seq_len = (run_meta.get() or {}).get("seq_len", 0)
+        out = {}
+        for end in ("N", "C"):
+            # the merged cfg, not a fresh load: mask labels come from the user-restriction
+            # criteria too (see site_scores' docstring)
+            v = assess_terminus(scores, range_data.get(), seq_len, end, cfg)
+            v["warns"] = terminus_warns(v, cfg)
+            out[end] = v
+        return out
+
+    def _run_key():
+        """Identity of the loaded run, so an arm token cannot outlive a protein switch."""
+        return (run_name.get(), (run_meta.get() or {}).get("seq_len"))
+
+    def _try_add_terminus(end):
+        """Add a terminus, or warn and arm it when its tier is one the config warns about."""
+        with reactive.isolate():
+            info = terminus_info().get(end) or {}
+            pos, armed = info.get("pos", 0), _term_armed[end].get()
+            timeout = terminus_params(site_scores()[1])["arm_timeout_s"]
+            key = _run_key()
+        if not pos:
+            return
+        ok = (armed is not None and armed["run"] == key and armed["tier"] == info["tier"]
+              and time.monotonic() - armed["t"] <= timeout)
+        # first click on a flagged terminus explains itself and adds nothing; the site is
+        # never withheld, it just takes a deliberate second click
+        if info.get("warns") and not ok:
+            _term_armed[end].set({"run": key, "tier": info["tier"], "t": time.monotonic()})
+            ui.notification_show(
+                "{}-terminus is {}: {}. Click “Add {}-term” again to tag it anyway.".format(
+                    end, info["tier"], "; ".join(info.get("reasons") or ["flagged"]), end),
+                type="warning", duration=timeout, id=session.ns(f"term_warn_{end}"))
+            return
+        _term_armed[end].set(None)
+        shared_sites.set(sorted(set(shared_sites.get()) | {pos}))
+
     # ── Load results ────────────────────────────────────────────────────────────
 
     async def _do_load(json_content):
@@ -380,6 +427,9 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
         run_name.set(json_content["global"]["run_name"])
         run_meta.set(meta)
         task_colors.set(assign_task_colors(aa_df) if aa_df is not None else {})
+        # a terminus armed on the previous protein must never carry over (batch app)
+        for _armed in _term_armed.values():
+            _armed.set(None)
 
         # tag-site suggestion scoring (see utils/scoring.py, issue #32) — reagents
         # data is optional and only present once the Reagents task has run; site_scores()
@@ -653,20 +703,18 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
     @reactive.effect
     @reactive.event(input.add_nterm_button)
     def on_add_nterm():
-        """Add position 1 (N-terminus) to committed sites."""
-        sites = sorted(set(shared_sites.get()) | {1})
-        shared_sites.set(sites)
+        """Add position 1 (N-terminus), or warn first if its tier calls for it."""
+        if not input.add_nterm_button():
+            return
+        _try_add_terminus("N")
 
     @reactive.effect
     @reactive.event(input.add_cterm_button)
     def on_add_cterm():
-        """Add the last residue (C-terminus) to committed sites."""
-        meta = run_meta.get() or {}
-        seq_len = meta.get("seq_len", 0)
-        if not seq_len:
+        """Add the last residue (C-terminus), or warn first if its tier calls for it."""
+        if not input.add_cterm_button():
             return
-        sites = sorted(set(shared_sites.get()) | {seq_len})
-        shared_sites.set(sites)
+        _try_add_terminus("C")
 
     @reactive.effect
     @reactive.event(input.add_suggested_button)
@@ -700,6 +748,8 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
     def on_clear():
         """Clear all committed tag sites."""
         shared_sites.set([])
+        for _armed in _term_armed.values():
+            _armed.set(None)
 
     @reactive.effect
     @reactive.event(input.remove_site)
@@ -852,6 +902,40 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
         )
         return ui.div(*buttons, ui.span("|", class_="ts-divider"), reset_btn, png_btn,
                       class_="ts-colorby-row")
+
+    @render.ui
+    def terminus_verdict():
+        """Compact 'N M1 · ok / C K742 · masked (reason)' readout, plus the button styling.
+
+        The style block is emitted here rather than re-rendering the two buttons: replacing an
+        input_action_button's DOM rebinds it and resets its click count to 0, which would break
+        the confirm-twice logic. Only a <style> element is swapped, so the buttons are untouched.
+        """
+        info = terminus_info()
+        meta = run_meta.get() or {}
+        seq = meta.get("query_seq", "")
+        if not meta.get("seq_len"):
+            return ui.div()
+        spans, css = [], []
+        for end in ("N", "C"):
+            v = info.get(end) or {}
+            pos = v.get("pos", 0)
+            aa = seq[pos - 1] if seq and 0 < pos <= len(seq) else "?"
+            armed = _term_armed[end].get() is not None
+            text = f"{end} {aa}{pos} · {v.get('tier', 'ok')}"
+            if v.get("reasons"):
+                text += " (" + "; ".join(v["reasons"][:2]) + ")"
+            if armed:
+                text += " — click again to confirm"
+            spans.append(ui.span(text, class_=f"ts-term-verdict ts-term-{v.get('tier', 'ok')}",
+                                 title="; ".join(v.get("reasons") or [])))
+            # muted while flagged, amber once armed; addressed by id so the button's own
+            # DOM (and its click counter) is never replaced
+            if v.get("warns"):
+                css.append("#{} {{ background:{}; border-color:{}; color:#6c757d; }}".format(
+                    session.ns(f"add_{end.lower()}term_button"),
+                    "#fff3cd" if armed else "#f3f3f3", "#e0a800" if armed else "#b9b9b9"))
+        return ui.div(ui.tags.style("\n".join(css)), *spans, class_="ts-term-row")
 
     @render.ui
     def chosen_sites_display():

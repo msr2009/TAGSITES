@@ -541,3 +541,23 @@
   align-self: center;
   padding: 0 2px;
 }
+
+/* terminus verdict readout beside the Add N-/C-term buttons (three-tier assessment).
+   A flagged terminus is styled as a warning but stays clickable — the button's own
+   greyed/amber state is emitted per session by results_server.terminus_verdict. */
+.ts-term-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-shrink: 0;
+}
+.ts-term-verdict {
+  font-size: 0.75rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 260px;
+}
+.ts-term-ok       { color: #6c757d; }
+.ts-term-putative { color: #997404; }
+.ts-term-masked   { color: #842029; }
