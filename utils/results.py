@@ -328,6 +328,9 @@ def load_data_from_json(json_in, type_dict):
         topology_merged = _merge_topology_intervals(dat[mask])
         dat = pd.concat([dat[~mask], topology_merged], ignore_index=True)
 
+    # screen deletion alleles say nothing about where to tag (see MAX_MUTAGENESIS_SPAN)
+    dat = drop_large_mutagenesis(dat)
+
     return df, dat, alns, iso_result
 
 
@@ -806,6 +809,23 @@ DISORDER_SOURCES = {"UniProt_disorder"}
 # UniProt mutagenesis rows are UniProt_site rows whose description starts with this label
 # (tables/uniprot_features.txt); the __mutations__ scheme shows them, __sites__ excludes them
 MUTATION_PREFIX = "Mutagenesis:"
+# A mutagenesis span longer than this is a deletion allele from a genetic screen, not a
+# positional annotation — ubr-1's hp821 covers 2,025 of 2,058 residues, so it says nothing
+# about where to tag and, with the batch app's UniProt-site mask on, blanks the protein.
+# Point mutations and short spans are kept: those mark functionally required sites.
+# scripts/uniprot_features.MAX_DELETION drops the same thing at fetch time, but only where
+# UniProt records no replacement residues, and not for data already on disk.
+MAX_MUTAGENESIS_SPAN = 20
+
+
+def drop_large_mutagenesis(range_df, max_span=MAX_MUTAGENESIS_SPAN):
+    """Drop UniProt mutagenesis rows spanning more than max_span residues."""
+    if range_df is None or range_df.empty:
+        return range_df
+    is_mut = (range_df["source"].astype(str).eq("UniProt_site")
+              & range_df["description"].astype(str).str.startswith(MUTATION_PREFIX))
+    too_long = (range_df["stop"] - range_df["start"] + 1) > max_span
+    return range_df[~(is_mut & too_long)].reset_index(drop=True)
 
 # paint priority: last painted wins; modifications and UniProt features end up on top
 _FEATURE_PAINT_ORDER = ["Pfam", "Phobius", "DeepTMHMM", "UniProt_disorder", "modification",
