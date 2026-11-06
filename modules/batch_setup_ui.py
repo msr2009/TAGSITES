@@ -18,6 +18,10 @@ _LIST_PLACEHOLDER = ("One protein per line: gene name, UniProt accession or isof
 
 _HINT = "font-size:0.8rem; font-weight:400; color:#6c757d; margin-left:0.75rem;"
 
+# what to do with each terminus: "warn" defers to the three-tier assessment
+# (utils.scoring.assess_terminus), "block" is the old no-N/C-terminus position mask
+_TERMINUS_POLICY = {"warn": "Warn if flagged", "block": "Never tag", "allow": "Always allow"}
+
 # batch-only additions to the single app's Setup stylesheet
 _BATCH_STYLE = """
     .ts-inline-row { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
@@ -26,6 +30,8 @@ _BATCH_STYLE = """
     .ts-inline-row .form-check { margin-bottom: 0; }
     .ts-inline-row .form-label { white-space: nowrap; margin: 0; }
     .ts-inline-row input[type=number] { width: 5rem; }
+    /* the container above is width:auto, which collapses a select onto its chevron */
+    .ts-inline-row select.form-select { width: auto; min-width: 11rem; }
     .ts-filter-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
                       gap: 0.1rem 1rem; max-width: 760px; }
     .ts-filter-grid .shiny-input-container { margin-bottom: 0.2rem !important; }
@@ -158,22 +164,26 @@ def batch_setup_ui():
                       "At most how many sites to suggest per protein, and where not to. "
                       "One site is offered per equivalent-scoring region, so a protein with "
                       "fewer regions than this shows fewer sites."),
-                _inline(ui.tags.label("Maximum suggested sites", class_="form-label"),
-                        ui.input_numeric("n_suggested", None, value=5, min=1, max=20)),
-                ui.div("Masks", class_="ts-masks-title"),
+                # ── How many ──────────────────────────────────────────────────
+                ui.div(
+                    ui.div("How many", class_="ts-mask-group-label"),
+                    _inline(ui.tags.label("Show at most", class_="form-label"),
+                            ui.input_numeric("n_suggested", None, value=3, min=1, max=20),
+                            ui.span("sites per protein", class_="form-label")),
+                    ui.p("A cap, not a target: one site is offered per equivalent-scoring "
+                         "region, so most proteins show fewer. Review says when the cap hid "
+                         "regions.", class_="section-hint mt-1"),
+                    class_="ts-mask-group",
+                ),
+                # ── Where not to tag ──────────────────────────────────────────
                 ui.div(
                     ui.div("Position", class_="ts-mask-group-label"),
-                    ui.div(
-                        ui.input_checkbox("filt_no_nterm", "No N-terminus (residue 1)",
-                                          value=False),
-                        ui.input_checkbox("filt_no_cterm", "No C-terminus (last residue)",
-                                          value=False),
-                        class_="ts-filter-grid"),
                     _inline(ui.input_checkbox("filt_guide", "Guide cut within", value=False),
                             ui.input_numeric("filt_guide_bp", None, value=5, min=0, max=100),
                             ui.span("bp", class_="form-label")),
                     class_="ts-mask-group",
                 ),
+                # ── What not to tag ───────────────────────────────────────────
                 ui.div(
                     ui.div("Annotation", class_="ts-mask-group-label"),
                     ui.div(
@@ -190,6 +200,24 @@ def batch_setup_ui():
                         ui.input_checkbox("filt_mask_uniprot", "All UniProt sites",
                                           value=False),
                         class_="ts-filter-grid"),
+                    ui.p("Pfam domains cover a median 60% of the proteins they annotate, so "
+                         "that one masks most of a typical protein.",
+                         class_="section-hint mt-1"),
+                    class_="ts-mask-group",
+                ),
+                # ── Termini ───────────────────────────────────────────────────
+                ui.div(
+                    ui.div("Termini", class_="ts-mask-group-label"),
+                    _inline(ui.tags.label("N-terminus", class_="form-label"),
+                            ui.input_select("filt_nterm_policy", None, selected="warn",
+                                            choices=_TERMINUS_POLICY)),
+                    _inline(ui.tags.label("C-terminus", class_="form-label"),
+                            ui.input_select("filt_cterm_policy", None, selected="warn",
+                                            choices=_TERMINUS_POLICY)),
+                    ui.p("Warn uses the three-tier assessment: a terminus with a curated "
+                         "annotation greys its Add button and takes a second click. Block "
+                         "masks the residue outright; allow never warns.",
+                         class_="section-hint mt-1"),
                     class_="ts-mask-group",
                 ),
                 ui.p("Masks remove positions from every protein's suggestions; each can be "

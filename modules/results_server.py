@@ -138,7 +138,7 @@ _OUTSIDE_LABELS = {"Non-cytoplasmic", "outside"}
 # then lets scores.config.json's site_selection.max_sites decide, so the cap lives in
 # one place rather than being duplicated per app
 _FILTER_DEFAULTS = {"mask_signal": True, "mask_tm": True, "mask_inside": False,
-                    "mask_outside": False}
+                    "mask_outside": False, "nterm_policy": "warn", "cterm_policy": "warn"}
 
 
 # annotation color-by tracks → (sources, mutations filter; see residue_colors_for_annotations)
@@ -383,7 +383,13 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
             # criteria too (see site_scores' docstring)
             v = assess_terminus(scores, range_data.get(), seq_len, end, cfg,
                                 tracks=aa_data.get())
-            v["warns"] = terminus_warns(v, cfg)
+            # "block" needs no case here: it adds a position mask (see _site_filter_masks),
+            # which user_* already makes a masked tier. Only "allow" overrides, and not when
+            # the per-protein Review switch has masked this end anyway
+            low = end.lower()
+            allow = (_filter_default(f"{low}term_policy") == "allow"
+                     and not _checked(f"filt_no_{low}term", bool(_filter_default(f"no_{low}term"))))
+            v["warns"] = False if allow else terminus_warns(v, cfg)
             out[end] = v
         return out
 

@@ -292,9 +292,13 @@ def batch_setup_server(input, output, session, bstate):
                     "ebi_for_missing": bool(input.ebi_for_missing()),
                     "email": input.email().strip(),
                     "site_filters": {
-                        "n_suggested": max(1, int(input.n_suggested() or 5)),
-                        "no_nterm": bool(input.filt_no_nterm()),
-                        "no_cterm": bool(input.filt_no_cterm()),
+                        "n_suggested": max(1, int(input.n_suggested() or 3)),
+                        "nterm_policy": input.filt_nterm_policy(),
+                        "cterm_policy": input.filt_cterm_policy(),
+                        # the policies subsume the old per-end checkboxes; the boolean keys
+                        # stay so a batch written here still loads in an older build
+                        "no_nterm": input.filt_nterm_policy() == "block",
+                        "no_cterm": input.filt_cterm_policy() == "block",
                         "guide_within": int(input.filt_guide_bp() or 0) if input.filt_guide()
                         else 0,
                         "constitutive_only": bool(input.filt_constitutive()),
