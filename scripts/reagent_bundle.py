@@ -181,19 +181,23 @@ def single_names(rn, tag):
 def batch_names(prefix, tag, ranks=None):
     """Batch naming: every reagent of a site is {prefix}_{site}_{tag}, e.g. trxr-1_Q17745_K45_FLAG.
 
-    With `ranks` ({residue_index: rank}) the site's rank joins the name as
-    trxr-1_Q17745_K45_r1_FLAG. The batch's output is reagents rather than the site itself,
-    so the rank says which of several equally-scoring sites this one was — r1 is the app's
-    first choice. It is reproducible for the same scores (see
-    utils.scoring.pick_suggested_regions); a hand-added site has no rank and is left bare.
+    With `ranks` ({residue_index: label}) the label joins the name as
+    trxr-1_Q17745_K45_r1_FLAG, or trxr-1_Q17745_M1_Nterm_FLAG at an end. The batch's output
+    is reagents rather than the site itself, so the label says where this one came from — r1
+    is the app's first choice among the equally-scoring internal regions, and a terminus is
+    named for its end rather than ranked, since it was never compared against them. Labels
+    are reproducible for the same scores (see utils.scoring.pick_suggested_regions); a
+    hand-added site has none and is left bare. A batch saved before labels existed holds a
+    bare rank number, which still reads as r{n}.
 
     One guide per site in the batch app, so strand and distance stay out of the name (they
     remain columns of the guides TSV). SapTrap oligos, bare {site}_sgRNA_top from
     plasmid_assembly, get the same base so a combined file has no collisions.
     """
     def base(row):
-        rank = (ranks or {}).get(int(row["residue_index"]))
-        site = site_name(row) if rank is None else "{}_r{}".format(site_name(row), rank)
+        label = (ranks or {}).get(int(row["residue_index"]))
+        label = "r{}".format(label) if str(label).isdigit() else label
+        site = site_name(row) if label is None else "{}_{}".format(site_name(row), label)
         return "{}_{}_{}".format(prefix, site, tag)
 
     return {

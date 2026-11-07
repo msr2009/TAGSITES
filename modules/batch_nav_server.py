@@ -198,12 +198,12 @@ def batch_nav_server(input, output, session, bstate, shared_json, shared_sites, 
             df = _reagents_df(p)
             for r, g in RB.default_guides(df, [s for s in sites if str(s) not in guides]).items():
                 guides[str(r)] = g
-            # rank of the region each site came from; hand-added sites have none. The ranks
-            # count only while they carry this protein's own run path, so a switch cannot
-            # stamp the previous protein's ranks onto this one
+            # where each site came from, as the reagent name spells it ("r1", "Cterm");
+            # hand-added sites have none. The labels count only while they carry this
+            # protein's own run path, so a switch cannot stamp the previous protein's onto it
             ranks = (published.get("ranks") or {}) if _same(published.get("path"),
                                                             p["run_json"]) else {}
-            site_ranks = {str(s): int(ranks[s]) for s in sites if s in ranks}
+            site_ranks = {str(s): str(ranks[s]) for s in sites if s in ranks}
             chose = sites != sorted(p.get("sites") or []) or guides != (p.get("guides") or {})
             if not chose and site_ranks == (p.get("site_ranks") or {}):
                 return

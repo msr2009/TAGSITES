@@ -296,6 +296,19 @@ flat below `cut_near_bp`) and distance from the region edge. All of
 it is tunable in `scores.config.json`'s `site_selection` block. The return type is still a
 list of 1-based ints, one per region, so nothing downstream needs to know about regions.
 
+**A terminus is suggested first, and in its own quota**: a terminal tag is the ordinary lab
+choice when nothing argues against it, but a terminus never ties for the best per-residue
+score, so the suggestion machinery could not reach one. `terminus_offers` adds the C end then
+the N end ahead of the internal regions, capped by `terminus.suggest_max` rather than by
+`site_selection.max_sites` — asking for 3 sites on a protein with two clean ends offers 5.
+Only a terminus the ladder does not warn about is offered, so the confirm-twice path is never
+bypassed, and an internal region **containing** an offered terminus is dropped rather than
+offered beside it. A terminus is committed only with a guide cut within
+`terminus.suggest_guide_bp` (10): an internal region can move to a better cut and a terminus
+cannot, so without one it is drawn as an outline to click. Each offer carries the `label` its
+batch reagent name uses — `r1` for the first internal region, `Nterm` / `Cterm` for an end,
+which is named rather than ranked because it was never compared against them.
+
 **Never call a blocking function directly from a Shiny effect**: Shiny's asyncio event
 loop serves *every* session, so one slow `requests.get` freezes the whole app — including
 its ability to notice a pasted sequence or enable a button. Route remote work through

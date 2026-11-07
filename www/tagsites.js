@@ -62,6 +62,22 @@
   var MASKED_HEX = "#d9b3b3";  // must match modules.results_server._MASKED_HEX
   var suggestedSites = [];  // positions picked by "Add suggested" — marked with * above the heatmap
   var suggestedRegions = [];  // [start, stop] of the score-equivalent span each site came from
+  var terminusSites = {};   // {"N": pos, "C": pos} for the offered termini, coloured by end
+  // an end is its own kind of site, not one region among many, so it gets its own colour
+  var SITE_GREEN = "#28a745", NTERM_BLUE = "#0d6efd", CTERM_RED = "#dc3545";
+
+  // "#rrggbb" as an rgba() string, for the translucent bar behind a marker
+  function hexAlpha(hex, a) {
+    var n = parseInt(hex.slice(1), 16);
+    return "rgba(" + ((n >> 16) & 255) + "," + ((n >> 8) & 255) + "," + (n & 255) + "," + a + ")";
+  }
+
+  // colour of the marker at a position: blue at the N end, red at the C end, else green
+  function siteColor(pos) {
+    if (terminusSites.N === pos) return NTERM_BLUE;
+    if (terminusSites.C === pos) return CTERM_RED;
+    return SITE_GREEN;
+  }
 
   // Zoom/pan state — null means full range
   var currentRange = null;
@@ -776,17 +792,19 @@
 
     ctx.restore();
 
-    // downward-facing green triangle above each suggested site, in the reserved top margin,
-    // over a translucent bar spanning the score-equivalent region the site was chosen from
+    // downward-facing triangle above each suggested site, in the reserved top margin, over a
+    // translucent bar spanning the score-equivalent region the site was chosen from. Green
+    // for an internal region, blue at the N terminus and red at the C terminus (see
+    // siteColor): an end is offered on its own evidence rather than on the residue score
     if (suggestedSites.length) {
       ctx.save();
       ctx.beginPath();
       ctx.rect(LEFT_GUTTER, markTop, inf.dataW, markH);
       ctx.clip();
-      ctx.fillStyle = "rgba(40, 167, 69, 0.25)";
       for (var j = 0; j < suggestedRegions.length; j++) {
         var rg = suggestedRegions[j];
         if (rg[1] < lo || rg[0] > hi) continue;
+        ctx.fillStyle = hexAlpha(siteColor(rg[0] === rg[1] ? rg[0] : -1), 0.25);
         var rx0 = posToX(rg[0] - 0.5, inf);
         var rx1 = posToX(rg[1] + 0.5, inf);
         // a width-1 region would otherwise vanish; keep every span visible as a thin bar
@@ -794,12 +812,11 @@
       }
       // filled = committed, so reagents get built for it; outlined = an equally-scoring
       // alternative on offer. Clicking an outline commits that site and fills it in
-      ctx.fillStyle = "#28a745";
-      ctx.strokeStyle = "#28a745";
       ctx.lineWidth = 1.5;
       for (var i = 0; i < suggestedSites.length; i++) {
         var sp = suggestedSites[i];
         if (sp < lo || sp > hi) continue;
+        ctx.fillStyle = ctx.strokeStyle = siteColor(sp);
         var cx = posToX(sp, inf);
         var triW = 8, triH = markH - 1;
         ctx.beginPath();
@@ -1545,6 +1562,7 @@
     scoreMax      = (typeof msg.scoreMax === "number" && msg.scoreMax > 0) ? msg.scoreMax : 1;
     suggestedSites = msg.suggestedSites || [];
     suggestedRegions = msg.suggestedRegions || [];
+    terminusSites = msg.terminusSites || {};
     var isoformPane   = msg.isoformPane || {};
     isoIsoforms       = isoformPane.isoforms || [];
     isoExonBoundaries = isoformPane.exonBoundaries || [];
@@ -1622,6 +1640,7 @@
     scoreMax         = (typeof msg.scoreMax === "number" && msg.scoreMax > 0) ? msg.scoreMax : 1;
     suggestedSites   = msg.suggestedSites   || [];
     suggestedRegions = msg.suggestedRegions || [];
+    terminusSites    = msg.terminusSites    || {};
     if (msg.isoformPane) {
       isoIsoforms       = msg.isoformPane.isoforms       || [];
       isoExonBoundaries = msg.isoformPane.exonBoundaries || [];

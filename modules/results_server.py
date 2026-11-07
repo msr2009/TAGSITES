@@ -28,7 +28,7 @@ from utils.scoring import (
     score_tag_sites, failed_flags, mask_reasons, score_cmap_hex, score_max,
     load_scoring_config, pick_suggested_regions, position_mask_criterion, with_extra_criteria,
     unmask_checked_topology, lift_hard_masks, range_positions,
-    assess_terminus, terminus_params, terminus_warns,
+    assess_terminus, terminus_params, terminus_warns, guide_near,
 )
 from utils.tag_filters import isoform_key, isoform_allowed_positions, topology_tag_allowed_positions
 from config import RESULTS_TYPE_DICT, DOMAIN_SOURCE_COLORS, TOPOLOGY_SOURCES
@@ -241,11 +241,29 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
         """Current state of a batch annotation-mask switch (its batch default before render)."""
         return _checked("filt_" + key, bool(_filter_default(key)))
 
+    def _suggestable_termini():
+        """Termini the ladder lets through, as terminus_offers wants them.
+
+        `warns` already folds in the tier, the batch's N/C policy and the user's own
+        position masks, so a terminus that would need the confirm-twice click is never
+        suggested here.
+        """
+        with reactive.isolate():
+            info = terminus_info()
+        return [{"end": end, "pos": v["pos"]} for end, v in info.items()
+                if v.get("pos") and not v.get("warns")]
+
     def _suggest_regions(scores):
-        """Offered regions with their picked residue; n_suggested caps how many (config's if unset)."""
+        """Offered regions with their picked residue; n_suggested caps how many (config's if unset).
+
+        The cap counts internal regions only: termini come with their own quota (see
+        utils.scoring.terminus_offers), so asking for 3 sites on a protein with two clean
+        ends offers 5.
+        """
         n = int(_filter_default("n_suggested") or 0)
-        return (pick_suggested_regions(scores, max_sites=n) if n
-                else pick_suggested_regions(scores))
+        termini = _suggestable_termini()
+        return (pick_suggested_regions(scores, max_sites=n, termini=termini) if n
+                else pick_suggested_regions(scores, termini=termini))
 
     def _suggest(scores):
         """The sites to commit: one per region, capped by n_suggested (config's if unset).
@@ -395,6 +413,11 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
             allow = (_filter_default(f"{low}term_policy") == "allow"
                      and not _checked(f"filt_no_{low}term", bool(_filter_default(f"no_{low}term"))))
             v["warns"] = False if allow else terminus_warns(v, cfg)
+            # a terminus with no guide near it is still offered, but as an outline rather
+            # than a committed site: unlike a region there is nowhere to move for a better
+            # cut, so the readout says so (see utils.scoring.terminus_offers)
+            v["guide_bp"] = terminus_params(cfg)["suggest_guide_bp"]
+            v["guide_near"] = guide_near(scores, v["pos"], v["guide_bp"])
             out[end] = v
         return out
 
@@ -615,7 +638,7 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
             with reactive.isolate():
                 path = json_path.get()
             shared_regions.set({"path": path,
-                                "ranks": {int(r["pos"]): int(r["rank"]) for r in regions}})
+                                "ranks": {int(r["pos"]): r["label"] for r in regions}})
         by_pos = scores["score"]
         flags_by_pos = dict(zip(scores.index, failed_flags(scores, cfg)))
         masked_by_pos = scores["masked"]
@@ -631,6 +654,9 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
             "suggestedSites": [r["pos"] for r in regions],
             # the score-equivalent span each site was chosen from, drawn behind its marker
             "suggestedRegions": [[r["start"], r["stop"]] for r in regions],
+            # the offered termini, so their markers read as an end rather than a region
+            "terminusSites": {r["label"][0]: r["pos"] for r in regions
+                              if r["label"].endswith("term")},
         }
 
     async def _send_plot(aa_df, range_df, meta, title, iso_result=None):
@@ -946,6 +972,9 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
             text = f"{end} {aa}{pos} · {v.get('tier', 'ok')}"
             if v.get("reasons"):
                 text += " (" + "; ".join(v["reasons"][:2]) + ")"
+            # reagent quality, not biology, so it is kept out of the tier and its reasons
+            if not v.get("warns") and not v.get("guide_near", True):
+                text += " · no guide within {} bp".format(v.get("guide_bp"))
             if armed:
                 text += " — click again to confirm"
             spans.append(ui.span(text, class_=f"ts-term-verdict ts-term-{v.get('tier', 'ok')}",

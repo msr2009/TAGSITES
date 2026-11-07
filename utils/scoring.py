@@ -203,14 +203,16 @@ _TERMINUS_DEFAULTS = {
     "window": 10,
     "curated_sources": ["UniProt", "UniProt_site"],
     "curated_blocking": ["lipidation", "cysteine methyl ester", "microbody targeting",
-                         "prevents secretion from er", "propeptide", "binding site",
-                         "signal peptide", "transit peptide", "transmembrane"],
+                         "prevents secretion from er", "propeptide", "binding site"],
     "curated_requires_experimental": False,
     "curated_mask_keys": ["in_membrane_or_cleaved", "user_*"],
     "putative_sources": ["modification"],
     "track_rules": [],
     "warn_tiers": ["masked"],
     "arm_timeout_s": 15,
+    "suggest": True,
+    "suggest_max": 2,
+    "suggest_guide_bp": 10,
 }
 
 
@@ -456,10 +458,43 @@ def pick_in_region(region, scores, config=None):
     return int(total.idxmax())
 
 
-def pick_suggested_regions(scores, max_sites=None, min_spacing=None, config=None):
+def guide_near(scores, pos, within_bp):
+    """Whether a guide cuts within within_bp of pos. Unknown distance counts as not near."""
+    if scores is None or "guide_distance" not in getattr(scores, "columns", []) \
+            or pos not in scores.index:
+        return False
+    d = pd.to_numeric(pd.Series([scores.loc[pos, "guide_distance"]]), errors="coerce").iloc[0]
+    return bool(pd.notna(d) and abs(d) <= within_bp)
+
+
+def terminus_offers(termini, scores, config=None):
+    """Terminal sites to offer, C end first, as region-shaped entries.
+
+    `termini` is what the caller's terminus assessment allows through — [{"end", "pos"}] —
+    so the ladder's verdict and the user's own restrictions are applied before this point
+    and a warned terminus is never offered. A terminus is committed (`chosen`) only with a
+    guide cut within suggest_guide_bp: an internal region can move to a better cut and a
+    terminus cannot, so without one it is drawn as an outline to click instead.
+    """
+    p = terminus_params(config)
+    if not p["suggest"] or not termini:
+        return []
+    order = {"C": 0, "N": 1}
+    out = []
+    for t in sorted(termini, key=lambda t: order.get(t["end"], 9)):
+        if len(out) >= int(p["suggest_max"]):
+            break
+        pos = int(t["pos"])
+        out.append({"start": pos, "stop": pos, "pos": pos,
+                    "rank": 0, "label": t["end"] + "term",
+                    "chosen": guide_near(scores, pos, p["suggest_guide_bp"])})
+    return out
+
+
+def pick_suggested_regions(scores, max_sites=None, min_spacing=None, config=None, termini=None):
     """Every equivalent-scoring region, as start/stop plus the residue picked inside it.
 
-    Returns them all, by position, each carrying `rank` and `chosen`. The count is
+    Returns them all, by position, each carrying `rank`, `label` and `chosen`. The count is
     data-driven: a protein whose best score forms two regions offers two, never padded to
     max_sites with lower-scoring residues. Within each region the residue is chosen on
     technical grounds only (see pick_in_region).
@@ -467,24 +502,39 @@ def pick_suggested_regions(scores, max_sites=None, min_spacing=None, config=None
     `chosen` marks the ones inside max_sites — what the batch app builds reagents for. The
     rest are still returned so the plot can show the alternatives as outlined markers; a
     click promotes one. `rank` is the offer order, which find_regions fixes as widest region
-    first with ties broken by position. It is deliberately not random: it ends up in batch
-    reagent names, so the same scores must always produce the same name.
+    first with ties broken by position; `label` is what a batch reagent name carries. Both
+    are deliberately not random: the same scores must always produce the same name.
+
+    `termini` (see terminus_offers) are offered ahead of the regions and in their own quota,
+    so they never spend a slot of max_sites. A region containing an offered terminus is
+    dropped rather than offered beside it: the two would read as one location, and at an end
+    the terminus is the site that was meant.
     """
     config = config or load_scoring_config()
     p = site_selection_params(config)
     max_sites = p["max_sites"] if max_sites is None else max_sites
     min_spacing = p["min_spacing"] if min_spacing is None else min_spacing
-    out, taken = [], []
+    out = terminus_offers(termini, scores, config)
+    ends = [q["pos"] for q in out]
+    # a chosen terminus crowds its neighbourhood as any other chosen site does; one left as
+    # an outline does not, or a protein could end up offering nothing near that end
+    taken = [q for q in out if q["chosen"]]
+    n_internal, n_chosen = 0, 0
     for region in find_regions(scores, config):
+        if any(region["start"] <= e <= region["stop"] for e in ends):
+            continue
         pos = pick_in_region(region, scores, config)
         # two regions can be adjacent when they satisfy different criteria at the same score;
         # offering both would spend the cap on what reads as one location, so skip to the
         # next region instead (the cap still fills if the protein has somewhere else)
         crowded = any(abs(pos - q["pos"]) < min_spacing for q in taken)
+        n_internal += 1
         entry = {"start": int(region["start"]), "stop": int(region["stop"]), "pos": int(pos),
-                 "rank": len(out) + 1, "chosen": not crowded and len(taken) < max_sites}
+                 "rank": n_internal, "label": "r{}".format(n_internal),
+                 "chosen": not crowded and n_chosen < max_sites}
         if entry["chosen"]:
             taken.append(entry)
+            n_chosen += 1
         out.append(entry)
     return sorted(out, key=lambda q: q["pos"])
 

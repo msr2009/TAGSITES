@@ -74,8 +74,8 @@ def protein_files(protein, settings, tags):
     selection = {r: {g} for r, g in guides.items()}
     geno = RB.load_genotyping(paths["geno"], sites)
     prefix = BS.name_prefix(protein)
-    # rank of the region each site came from, recorded by Review; empty for older batches
-    ranks = {int(r): int(v) for r, v in (protein.get("site_ranks") or {}).items()}
+    # where each site came from ("r1", "Cterm"), recorded by Review; empty for older batches
+    ranks = {int(r): str(v) for r, v in (protein.get("site_ranks") or {}).items()}
     files = []
     inserts = protein_inserts(protein, settings, tags)
     for tag, dna in inserts:

@@ -177,7 +177,24 @@
       "warn_tiers                   which tiers make the Add button warn and require a second",
       "                             click. [\"masked\"] by default; use [\"masked\", \"putative\"] to",
       "                             warn on everything that is not OK to tag.",
-      "arm_timeout_s                how long the confirm stays armed after the first click."
+      "arm_timeout_s                how long the confirm stays armed after the first click.",
+      "suggest                      whether a terminus that passes every filter joins the",
+      "                             suggested sites. Termini are offered first, C before N,",
+      "                             and in their own quota: they never spend a slot of",
+      "                             site_selection.max_sites, so the usual offer is up to",
+      "                             suggest_max termini plus the internal regions. A tag at an",
+      "                             end is the ordinary lab choice when nothing argues against",
+      "                             it, and the suggestion machinery could not reach one before:",
+      "                             the per-residue score was built for internal sites and a",
+      "                             terminus never ties for the best of it. Only a terminus the",
+      "                             ladder does not warn about is offered, so the confirm-twice",
+      "                             path is never bypassed.",
+      "suggest_max                  how many termini may be offered (0 disables, 2 is both).",
+      "suggest_guide_bp             a terminus is committed only with a guide cut this close.",
+      "                             Unlike an internal region there is nowhere to move to for a",
+      "                             better cut, so without one the terminus is still drawn, as",
+      "                             an outline to click rather than a site reagents are built",
+      "                             for. Tighter than site_selection.cut_near_bp on purpose."
     ],
     "window": 10,
     "curated_sources": ["UniProt", "UniProt_site"],
@@ -196,7 +213,10 @@
        "label": "more conserved than the other terminus"}
     ],
     "warn_tiers": ["masked"],
-    "arm_timeout_s": 15
+    "arm_timeout_s": 15,
+    "suggest": true,
+    "suggest_max": 2,
+    "suggest_guide_bp": 10
   },
   "criteria": [
     {
