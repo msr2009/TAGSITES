@@ -18,6 +18,10 @@ def app_server(input, output, session):
     shared_json = reactive.Value("")
     shared_sites = reactive.Value([])
     shared_results_trigger = reactive.Value(0)
+    # {"path": run json, "ranks": {position: rank}} for the loaded protein's suggested
+    # regions, so batch_nav can record each accepted site's rank, and only its own
+    # (see utils.scoring.pick_suggested_regions)
+    shared_regions = reactive.Value({})
     # set by results_server once a protein's run is loaded and its sites restored
     loaded_path = reactive.Value("")
     # the open batch's Setup site filters (defaults of the Rescoring switches)
@@ -43,6 +47,6 @@ def app_server(input, output, session):
     results_server("results", shared_json=shared_json, shared_sites=shared_sites,
                    shared_results_trigger=shared_results_trigger, auto_suggest=True,
                    loaded_path=loaded_path, site_filters=site_filters,
-                   kept_sites=_kept_sites)
+                   kept_sites=_kept_sites, shared_regions=shared_regions)
     batch_nav_server("nav", bstate=bstate, shared_json=shared_json, shared_sites=shared_sites,
-                     loaded_path=loaded_path)
+                     loaded_path=loaded_path, shared_regions=shared_regions)

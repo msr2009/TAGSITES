@@ -792,7 +792,11 @@
         // a width-1 region would otherwise vanish; keep every span visible as a thin bar
         ctx.fillRect(rx0, markTop, Math.max(rx1 - rx0, 2), markH);
       }
+      // filled = committed, so reagents get built for it; outlined = an equally-scoring
+      // alternative on offer. Clicking an outline commits that site and fills it in
       ctx.fillStyle = "#28a745";
+      ctx.strokeStyle = "#28a745";
+      ctx.lineWidth = 1.5;
       for (var i = 0; i < suggestedSites.length; i++) {
         var sp = suggestedSites[i];
         if (sp < lo || sp > hi) continue;
@@ -803,7 +807,7 @@
         ctx.lineTo(cx + triW / 2, markTop);
         ctx.lineTo(cx, markTop + triH);
         ctx.closePath();
-        ctx.fill();
+        if (committedSet.has(sp)) ctx.fill(); else ctx.stroke();
       }
       ctx.restore();
     }
@@ -1175,6 +1179,17 @@
       if (layout.isoH > 0 && cy >= layout.isoTop && cy <= layout.isoTop + layout.isoH) return;
 
       if (!inf || !inDataArea(cx, inf)) return;
+
+      // suggested-marker row: snap to the triangle rather than to the pixel column, so a
+      // click on an outlined alternative commits exactly that site
+      if (cy >= layout.scoreTop && cy <= layout.scoreTop + SCORE_MARK_H) {
+        var best = null, bestDx = 6;
+        for (var s = 0; s < suggestedSites.length; s++) {
+          var dx = Math.abs(posToX(suggestedSites[s], inf) - cx);
+          if (dx <= bestDx) { bestDx = dx; best = suggestedSites[s]; }
+        }
+        if (best !== null) { shinySetPos(inputNames.residue_click, best); return; }
+      }
       shinySetPos(inputNames.residue_click, xToPos(cx, inf));
     });
 

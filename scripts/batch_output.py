@@ -74,12 +74,14 @@ def protein_files(protein, settings, tags):
     selection = {r: {g} for r, g in guides.items()}
     geno = RB.load_genotyping(paths["geno"], sites)
     prefix = BS.name_prefix(protein)
+    # rank of the region each site came from, recorded by Review; empty for older batches
+    ranks = {int(r): int(v) for r, v in (protein.get("site_ranks") or {}).items()}
     files = []
     inserts = protein_inserts(protein, settings, tags)
     for tag, dna in inserts:
         rows = RB.select_rows(df, selection, arm_len, repair,
                               settings.get("options", {}).get("saptrap_tolerance", 0.2))
-        files += RB.build_files(rows, RB.batch_names(prefix, tag), repair, dna, tag, arm_len,
+        files += RB.build_files(rows, RB.batch_names(prefix, tag, ranks), repair, dna, tag, arm_len,
                                 settings.get("options"), genotyping=geno, df=df,
                                 region_fa=paths["region_fa"], genewise=paths["genewise"])
     status, message = _model_check(paths["tsv"])

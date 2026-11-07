@@ -457,39 +457,47 @@ def pick_in_region(region, scores, config=None):
 
 
 def pick_suggested_regions(scores, max_sites=None, min_spacing=None, config=None):
-    """The offered regions, each as start/stop plus the residue picked inside it, by position.
+    """Every equivalent-scoring region, as start/stop plus the residue picked inside it.
 
-    The count is data-driven: a protein whose best score forms two regions offers two,
-    never padded to max_sites with lower-scoring residues. Within each region the residue is
-    chosen on technical grounds only (see pick_in_region). The Results plot draws the spans;
-    everything else wants only the residue and calls pick_suggested_sites.
+    Returns them all, by position, each carrying `rank` and `chosen`. The count is
+    data-driven: a protein whose best score forms two regions offers two, never padded to
+    max_sites with lower-scoring residues. Within each region the residue is chosen on
+    technical grounds only (see pick_in_region).
+
+    `chosen` marks the ones inside max_sites — what the batch app builds reagents for. The
+    rest are still returned so the plot can show the alternatives as outlined markers; a
+    click promotes one. `rank` is the offer order, which find_regions fixes as widest region
+    first with ties broken by position. It is deliberately not random: it ends up in batch
+    reagent names, so the same scores must always produce the same name.
     """
     config = config or load_scoring_config()
     p = site_selection_params(config)
     max_sites = p["max_sites"] if max_sites is None else max_sites
     min_spacing = p["min_spacing"] if min_spacing is None else min_spacing
-    picked = []
+    out, taken = [], []
     for region in find_regions(scores, config):
-        if len(picked) >= max_sites:
-            break
         pos = pick_in_region(region, scores, config)
         # two regions can be adjacent when they satisfy different criteria at the same score;
         # offering both would spend the cap on what reads as one location, so skip to the
         # next region instead (the cap still fills if the protein has somewhere else)
-        if all(abs(pos - q["pos"]) >= min_spacing for q in picked):
-            picked.append({"start": int(region["start"]), "stop": int(region["stop"]),
-                           "pos": int(pos)})
-    return sorted(picked, key=lambda q: q["pos"])
+        crowded = any(abs(pos - q["pos"]) < min_spacing for q in taken)
+        entry = {"start": int(region["start"]), "stop": int(region["stop"]), "pos": int(pos),
+                 "rank": len(out) + 1, "chosen": not crowded and len(taken) < max_sites}
+        if entry["chosen"]:
+            taken.append(entry)
+        out.append(entry)
+    return sorted(out, key=lambda q: q["pos"])
 
 
 def pick_suggested_sites(scores, max_sites=None, min_spacing=None, config=None):
-    """One suggested site per equivalent-scoring region, as 1-based positions.
+    """The sites actually offered — one per region, capped at max_sites — as 1-based positions.
 
     Used by the Results tab (issue #32), scripts/suggest_sites.py and the proteome
-    database's scores stage.
+    database's scores stage. Regions beyond the cap are left to pick_suggested_regions.
     """
     return [q["pos"] for q in pick_suggested_regions(scores, max_sites=max_sites,
-                                                     min_spacing=min_spacing, config=config)]
+                                                     min_spacing=min_spacing, config=config)
+            if q["chosen"]]
 
 
 def score_cmap_hex(frac):

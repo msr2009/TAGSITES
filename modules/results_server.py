@@ -151,7 +151,8 @@ _ANNOTATION_SCHEMES = {
 
 @module.server
 def results_server(input, output, session, shared_json, shared_sites, shared_results_trigger=None,
-                   auto_suggest=False, loaded_path=None, site_filters=None, kept_sites=None):
+                   auto_suggest=False, loaded_path=None, site_filters=None, kept_sites=None,
+                   shared_regions=None):
     """Results tab. auto_suggest (batch app) ignores the run's saved selected_sites and selects
     freshly computed suggestions on every load, except where kept_sites(run_json_path) returns
     a list (the batch's accepted sites). loaded_path, when given, is set to the run JSON path
@@ -247,8 +248,12 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
                 else pick_suggested_regions(scores))
 
     def _suggest(scores):
-        """One site per equivalent-scoring region; n_suggested caps how many (config's if unset)."""
-        return [r["pos"] for r in _suggest_regions(scores)]
+        """The sites to commit: one per region, capped by n_suggested (config's if unset).
+
+        _suggest_regions returns every region so the plot can outline the alternatives;
+        only the chosen ones become committed sites and get reagents built.
+        """
+        return [r["pos"] for r in _suggest_regions(scores) if r["chosen"]]
 
     def _site_filter_masks(seq_len):
         """Extra mask criteria from the Site filters switches (batch app only)."""
@@ -603,6 +608,14 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
                     "scoreMaskReasons": [], "scoreMax": 1, "suggestedSites": [],
                     "suggestedRegions": []}
         regions = _suggest_regions(scores)
+        # the batch app records these so a reagent name can carry its site's rank. The run
+        # path travels with the ranks: a protein switch updates sites and ranks through
+        # different reactives, so an unkeyed dict can hand the next protein these ranks
+        if shared_regions is not None:
+            with reactive.isolate():
+                path = json_path.get()
+            shared_regions.set({"path": path,
+                                "ranks": {int(r["pos"]): int(r["rank"]) for r in regions}})
         by_pos = scores["score"]
         flags_by_pos = dict(zip(scores.index, failed_flags(scores, cfg)))
         masked_by_pos = scores["masked"]

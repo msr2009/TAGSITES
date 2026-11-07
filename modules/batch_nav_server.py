@@ -51,7 +51,8 @@ def _guide_text(row):
 
 
 @module.server
-def batch_nav_server(input, output, session, bstate, shared_json, shared_sites, loaded_path):
+def batch_nav_server(input, output, session, bstate, shared_json, shared_sites, loaded_path,
+                     shared_regions=None):
     """bstate: shared batch state; loaded_path: set by results_server when a run is loaded."""
     current = reactive.Value(None)       # key of the protein on screen
     _reagents = {}                       # key -> arm-less reagents frame (guide choices)
@@ -90,6 +91,26 @@ def batch_nav_server(input, output, session, bstate, shared_json, shared_sites, 
         return _reagents[p["key"]]
 
     # ── protein list ─────────────────────────────────────────────────────────
+    @reactive.effect
+    @reactive.event(bstate["start"])
+    def _batch_changed():
+        """Reset the nav when another batch is opened; nothing survives from the last one.
+
+        Without this the key of a protein from the previous batch stayed current. It is not
+        in the new batch, so the counter read '0 / 3' and Results went on showing that
+        protein until the first Next.
+        """
+        _reagents.clear()
+        with reactive.isolate():
+            # the sites are deliberately left alone: results_server writes them back to
+            # whatever run it last loaded, so clearing them here would empty the previous
+            # batch's selection on disk. Loading this batch's protein replaces them
+            shared_json.set("")
+            # back to None so _fill_list picks this batch's own starting protein, and so the
+            # move onto it is a change even when both batches hold the same key
+            current.set(None)
+            bstate["rev"].set(bstate["rev"].get() + 1)
+
     @reactive.effect
     def _fill_list():
         """Refresh the protein dropdown (labels carry the status for colouring)."""
@@ -163,6 +184,10 @@ def batch_nav_server(input, output, session, bstate, shared_json, shared_sites, 
         """Copy the selected sites of the loaded protein into its batch entry."""
         sites = sorted(int(s) for s in shared_sites.get())
         path = loaded_path.get()
+        # a dependency, not an isolated read: the regions are published when the plot is
+        # built, which can be after the sites arrive, and the first protein of a batch is
+        # where that order shows up most often
+        published = (shared_regions.get() or {}) if shared_regions is not None else {}
         with reactive.isolate():
             p = _protein(current.get())
             # only once Results has loaded this protein (sites still show the last one before)
@@ -173,11 +198,19 @@ def batch_nav_server(input, output, session, bstate, shared_json, shared_sites, 
             df = _reagents_df(p)
             for r, g in RB.default_guides(df, [s for s in sites if str(s) not in guides]).items():
                 guides[str(r)] = g
-            changed = sites != sorted(p.get("sites") or []) or guides != (p.get("guides") or {})
-            if not changed:
+            # rank of the region each site came from; hand-added sites have none. The ranks
+            # count only while they carry this protein's own run path, so a switch cannot
+            # stamp the previous protein's ranks onto this one
+            ranks = (published.get("ranks") or {}) if _same(published.get("path"),
+                                                            p["run_json"]) else {}
+            site_ranks = {str(s): int(ranks[s]) for s in sites if s in ranks}
+            chose = sites != sorted(p.get("sites") or []) or guides != (p.get("guides") or {})
+            if not chose and site_ranks == (p.get("site_ranks") or {}):
                 return
-            p["sites"], p["guides"] = sites, guides
-            if p.get("status") == "accepted":
+            p["sites"], p["guides"], p["site_ranks"] = sites, guides, site_ranks
+            # ranks arriving late are bookkeeping, not an edit: only a changed choice of
+            # site or guide sends an accepted protein back for another look
+            if chose and p.get("status") == "accepted":
                 p["status"] = "in_progress"
             _save()
             bstate["rev"].set(bstate["rev"].get() + 1)
