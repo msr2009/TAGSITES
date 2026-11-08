@@ -187,6 +187,11 @@ Database-wide for worm: 14,810 flagged termini — N 7,123 masked / 3,968 putati
 1. **Structure re-run**, worm only, for the ~3,057 proteins with `has_structure = 0`. Mostly
    local file checks plus some AFDB fetches; writes the models and their accession sidecars, so
    the 103 alias-recoverable proteins gain a structure and `ingest` can label them `afdb:ACC`.
+   **Kept in the plan (decided 2026-11-08):** `proteome_run.py` runs a `ProcessPoolExecutor` at
+   `--workers` (default `os.cpu_count()`), so at a second or two per protein for the fetch this is
+   tens of minutes, not hours. Time the first hundred before committing to the rest — if the AFDB
+   fetches turn out to dominate, the stage is resumable and can be cut without affecting anything
+   downstream, since every later stage works for a protein with no structure.
 2. **Secondary-structure pre-pass.** No `{id}.ss.txt` exists anywhere, but 25,569 worm and 6,055
    yeast run folders still hold their `.AF.pdb`, so `dssp_numpy.write_ss_file` regenerates all of
    them locally — no downloads, no re-running pLDDT or SASA. `build_proteome_db.py:522` already
@@ -256,10 +261,11 @@ copy has to be replaced, or the next person to open the app gets the old one.
    name on the volume and rename into place, so an interrupted transfer never leaves a truncated
    file where a working one was. Verify after the copy, not before: `proteome_db.py lookup trxr-1`
    against the NAS path, and a row count on `site_scores`.
-2. **The WORM_DB flash drive.** The portable copy of the worm database, used where Pufferfish is
-   not mounted. It is a separate copy with no sync behind it, so it goes stale silently and is the
-   step most likely to be forgotten. Same procedure: copy to a temporary name, rename into place,
-   then open the app against the drive and load one protein.
+2. **The WORM_DB flash drive.** The portable copy of the **worm** database — it does not hold
+   yeast, so the yeast rebuild has no flash-drive step and only lands on Pufferfish. It is a
+   separate copy with no sync behind it, so it goes stale silently and is the step most likely to
+   be forgotten. Same procedure: copy to a temporary name, rename into place, then open the app
+   against the drive and load one protein.
 3. **Record the build.** The database's own metadata carries `built` and `git_commit`
    (`proteome_export` copies them into every exported run's `global.proteome_db` block), so after
    the rebuild those two values are what tells a stale copy from a current one. Note them here
@@ -313,11 +319,26 @@ them, and anything needed again is re-run through the app from its sequence, whi
 user takes anyway. Yeast folders (`his3`, `leu2`, `ret1`, `ubiquitin`) can come back from the
 yeast database once that rebuild lands.
 
-Which proteins to keep is the only open part. The set should cover the cases that get tested by
-hand rather than being a sample of the proteome: a clean protein with both ends OK, a
-curated-masked terminus, a regex-only masked terminus (which under option 1 stays hard-masked), a
-protein whose gene model only warns, a multi-TM protein, and one with no structure. The hard-mask
-check table above already names candidates for most of these.
+**The set to reconstitute (decided 2026-11-08).** Chosen so each one is the protein a particular
+check is run on, rather than as a sample of the proteome. The first eight are the ones that come
+up in practice; the last three cover cases the others miss.
+
+| gene | why it is in the set |
+|---|---|
+| abl-1 | the everyday case — long, several score-equivalent regions, nothing masked at either end |
+| cha-1 | operon-resolved locus; the gene-model and isoform path |
+| unc-25 | regex-only `RAB prenylation` mask at 9.1% precision; under option 1 stays hard-masked |
+| unc-47 | multi-TM transporter; the terminus-vs-topology case, and the 10 bp guide gate at the C end |
+| exp-1 | ligand-gated channel, several TM spans |
+| sel-12 | nine-pass intramembrane protease hard-masked by a CAAX match — the other tier-1 leak |
+| unc-33 | long, many isoforms; the protein that most exercises the model selection |
+| src-1 | kinase with a domain-dense interior; checks that domain masks do not erase every region |
+| lgg-1 | the only PubMed-cited terminal annotation in the check set — tests `curated_requires_experimental` |
+| dbl-1 | the stale-`C...$`-prenylation control; the database should say the C-terminus is fine |
+| gly-8 | both termini curated-masked |
+
+Add one protein with `has_structure = 0` at export time, picked from whatever the rebuilt database
+reports; no fixed name, since step 1 changes which proteins those are.
 
 Proteins loaded through the precomputed-results card are exported from the database and are
 unaffected by any of this.
