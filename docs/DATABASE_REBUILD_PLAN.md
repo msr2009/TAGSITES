@@ -90,19 +90,31 @@ derived value with a short shelf life and no reader in the app.
   bits are what the offline analyses actually need, and the region rules can be re-applied to them
   after the fact — that is exactly how the dip-bridging measurements were run.
 
-What this means for the rebuild: keep `site_scores` in the `scores` stage, drop the `tag_sites`
-writes (both the `source = 'suggested'` rows at `build_proteome_db.py:708` and the curated rows at
-`:763`, or keep the curated ones alone if an analysis depends on them), and point
-`export_tag_site_table.py` at `site_scores` instead. If the table is kept regardless, it needs a
-`score_config_hash` column so a stale row is at least detectable.
+**Decided 2026-11-08: drop the table outright**, not just its suggested rows. The other half of
+it, `source = 'curated'`, is a thinner copy of `curated_sites` — the same published WormTagDB
+insertion sites, but only the ones that matched a protein and without the allele, `verified` flag,
+isoform note or source file. `export_tag_site_table.py`, the one script that uses this data,
+already reads `curated_sites`, and nothing anywhere reads `tag_sites`.
+
+What this means for the rebuild: keep `site_scores` in the `scores` stage, remove both `tag_sites`
+writes (`build_proteome_db.py:708` for the suggested rows, `:763` for the curated ones), drop the
+table and its index from the schema, and leave `curated_sites` exactly as it is.
 
 ## Decide first: what earns a hard mask
 
-**Settle this before the rebuild if option 3 is in play.** With `tag_sites` dropped (above), the
-only stored thing a mask policy can change is `site_scores`. Option 2 leaves the per-residue score
-untouched and so is no longer blocking — it can be adopted any time by editing the `terminus`
-block. Option 3 changes `site_scores` for ~1,039 proteins and therefore means re-running the
-`scores` stage, which is why it is cheap to decide now and expensive to revisit.
+**Decided 2026-11-08: option 1, status quo.** The rebuild carries the current masks unchanged. The
+section stays because the evidence behind it has not changed and the question will come back; what
+follows is the case as it was put, not a pending decision.
+
+With `tag_sites` dropped (above), the only stored thing a mask policy can change is `site_scores`,
+so nothing here blocks the rebuild either way: option 2 is a `terminus` config edit that can land
+at any time, and only option 3 would mean re-running the `scores` stage.
+
+**What option 1 leaves standing:** ~1,039 worm termini are hard-masked on a regex hit with no
+curated annotation behind it, and the ~250 CAAX calls the modifications re-run adds (step 3) join
+them. sel-12 and unc-25 below stay `masked`. Those termini are still reachable — the Add button
+warns and a second click tags anyway — so this is a friction cost on sites that are probably fine,
+not a block.
 
 Three kinds of evidence currently collapse into the single tier `masked`, and they are not of
 equal strength:
@@ -218,14 +230,41 @@ Database-wide for worm: 14,810 flagged termini — N 7,123 masked / 3,968 putati
    regex-only prenylation hit should likewise be demoted from tier 1 to tier 2 — a
    `curated_mask_keys` knob in the `terminus` block — is open; see **Decide first: what earns a
    hard mask** above, which must be settled before step 4.
-4. **Settle the hard-mask question** (previous section). Blocking only for option 3, which
-   changes `site_scores`; option 2 is a config change that can land before or after.
+4. **Hard-mask question: settled, option 1** (previous section). Nothing to do; the masks in force
+   are the masks the rebuild stores.
 5. **`--estimate`, then `ingest,scores` with `--update`** on a local copy of each file, then copy
    back to the NAS. SQLite locking is unreliable on the network volume, so the file is always
    assembled on local disk.
 
+**Decided 2026-11-08: worm first, yeast after.** Steps 1 to 5 run end to end for worm and are
+verified before yeast starts, so whatever the first pass teaches is not repeated twice. Yeast
+skips step 1 entirely — it has no local AFDB coverage, so the alias work inserts nothing and there
+is nothing to fetch locally — but steps 2, 3 and 5 all apply: its 6,055 `.AF.pdb` files are
+present for the secondary-structure pre-pass, and its modification rows are as stale as worm's.
+
 Disk at the time of writing: 261 GB free; worm is 5.9 GB and yeast 1.2 GB. The secondary-structure
 features table is the only material addition.
+
+## After the rebuild: where the file has to land
+
+The build assembles on local disk, so the rebuild is not finished when the stage finishes. Every
+copy has to be replaced, or the next person to open the app gets the old one.
+
+1. **Pufferfish.** Copy each rebuilt file back over the one the batch config points at
+   (`batch.config.worm_local.json` and the yeast config; `proteome_db.describe` prints the path in
+   Setup panel 0, and a batch records its database in `settings.proteome_db`). Copy to a temporary
+   name on the volume and rename into place, so an interrupted transfer never leaves a truncated
+   file where a working one was. Verify after the copy, not before: `proteome_db.py lookup trxr-1`
+   against the NAS path, and a row count on `site_scores`.
+2. **The WORM_DB flash drive.** The portable copy of the worm database, used where Pufferfish is
+   not mounted. It is a separate copy with no sync behind it, so it goes stale silently and is the
+   step most likely to be forgotten. Same procedure: copy to a temporary name, rename into place,
+   then open the app against the drive and load one protein.
+3. **Record the build.** The database's own metadata carries `built` and `git_commit`
+   (`proteome_export` copies them into every exported run's `global.proteome_db` block), so after
+   the rebuild those two values are what tells a stale copy from a current one. Note them here
+   when the rebuild runs, and check them on both the NAS and the flash drive rather than trusting
+   file dates.
 
 ## Old single-protein run folders under `data/`
 
@@ -268,19 +307,25 @@ produce a complete run folder directly.
    once the rebuild is verified. Each comes back as an ordinary run folder with every track
    current and regenerated arms, so the app loads it unchanged.
 
+**The seven non-worm, non-yeast folders go too** (`hras`, `white_20260804`, `TMEM240_20260804`,
+`eevs_20260804`, `Ppa-mbd-2`, `A0A7I4YC85_20260804`, `LHDH_worm`). No database can reconstitute
+them, and anything needed again is re-run through the app from its sequence, which is the path a
+user takes anyway. Yeast folders (`his3`, `leu2`, `ret1`, `ubiquitin`) can come back from the
+yeast database once that rebuild lands.
+
 Which proteins to keep is the only open part. The set should cover the cases that get tested by
 hand rather than being a sample of the proteome: a clean protein with both ends OK, a
-curated-masked terminus, a regex-only masked terminus (the tier-1 leak case), a protein whose
-gene model only warns, a multi-TM protein, and one with no structure. The hard-mask check table
-above already names candidates for most of these.
+curated-masked terminus, a regex-only masked terminus (which under option 1 stays hard-masked), a
+protein whose gene model only warns, a multi-TM protein, and one with no structure. The hard-mask
+check table above already names candidates for most of these.
 
 Proteins loaded through the precomputed-results card are exported from the database and are
 unaffected by any of this.
 
 ## Verification after the rebuild
 
-- `tag_sites` is gone (or holds only curated rows), and `site_scores` for a sample of proteins
-  reproduces `utils.scoring.score_tag_sites` on the same exported run folder.
+- `tag_sites` is gone, `curated_sites` is unchanged in row count, and `site_scores` for a sample
+  of proteins reproduces `utils.scoring.score_tag_sites` on the same exported run folder.
 - `sequence_aliases` is non-empty for worm and `structure_source` contains `afdb:ACC` values.
 - `features` contains a `secondary_structure` source, and the new modification motifs appear.
 - Re-running the current regex table against each stored sequence reproduces every
@@ -288,6 +333,7 @@ unaffected by any of this.
   the check that would have caught DBL-1.
 - `guides` / `site_guides` row counts are unchanged from before the rebuild.
 - `has_structure` rises by roughly 103 for worm.
-- The ten proteins in the hard-mask check table give the tiers that section predicts, under
-  whichever option was chosen — in particular sel-12 and unc-25, which move from `masked` to
-  `putative` under option 2 and stay `masked` under option 1.
+- The ten proteins in the hard-mask check table give the tiers that section predicts under option
+  1 — in particular sel-12 and unc-25, which stay `masked`.
+- Both copies carry the new build: `proteome_db.py lookup trxr-1` against the Pufferfish path and
+  against the WORM_DB flash drive, with matching `built` and `git_commit` metadata.
