@@ -178,6 +178,8 @@ def range_positions(range_df, sources, seq_len):
 _SITE_SELECTION_DEFAULTS = {
     "max_sites": 5,
     "min_spacing": 10,
+    "score_tolerance": 0.5,
+    "region_gap": 2,
     "technical_criteria": ["near_guide", "not_near_splice"],
     "cut_near_bp": 5,
     "cut_far_bp": 20,
@@ -405,31 +407,57 @@ def _criteria_signature(scores, config):
     return pd.Series(list(map(tuple, flags.to_numpy())), index=scores.index)
 
 
-def find_regions(scores, config=None):
-    """Contiguous runs of unmasked residues tied at the best score with identical biology.
+def _bridges_hole(scores, masked, a, b, top, p):
+    """Whether the sub-best residues between two tied residues still leave them one region.
 
-    Every residue in a region is an equivalent place to tag, so the choice among them is
-    technical rather than biological (see pick_in_region). Masks and any change of satisfied
-    biological criteria split a region. Returns dicts with start/stop/width/mid, widest first.
+    A plateau is jagged. Two kinds of hole are bridged, for different reasons: one whose
+    residues are within `score_tolerance` of the best score, which is graded-conservation
+    jitter over an identical set of satisfied criteria and so needs no length limit; and a
+    run of at most `region_gap` residues, which is a real relaxation over residues that did
+    lose a criterion. A masked or zero-scoring residue is never bridged at any length.
+    """
+    if b - a <= 1:
+        return True
+    run = scores.loc[a + 1:b - 1]
+    if masked.loc[a + 1:b - 1].any() or (run["score"] <= 0).any():
+        return False
+    if (run["score"] >= top - p["score_tolerance"] - 1e-9).all():
+        return True
+    return (b - a - 1) <= p["region_gap"]
+
+
+def find_regions(scores, config=None):
+    """Runs of unmasked residues tied at the best score with identical biology.
+
+    Every residue tied at the best score in a region is an equivalent place to tag, so the
+    choice among them is technical rather than biological (see pick_in_region). Masks and any
+    change of satisfied biological criteria split a region; a short dip below the best score
+    does not (see _bridges_hole), but the dipped residues are not members. Returns dicts with
+    start/stop/width/mid/members, widest first, where width counts members only.
     """
     config = config or load_scoring_config()
     if scores is None or scores.empty or "score" not in scores.columns:
         return []
+    p = site_selection_params(config)
     masked = (scores["masked"].astype(bool) if "masked" in scores.columns
               else pd.Series(False, index=scores.index))
     free = scores[(scores["score"] > 0) & (~masked)]
     if free.empty:
         return []
-    at_best = free[free["score"] >= free["score"].max()]
+    top = free["score"].max()
+    at_best = free[free["score"] >= top]
     sig = _criteria_signature(scores, config)
     pos = list(at_best.index)
-    regions, start = [], pos[0]
-    # a gap of more than one residue, or a change of criteria, ends the current region
+    regions, members = [], [int(pos[0])]
+    # a hole too wide or too deep to bridge, or a change of criteria, ends the current region
     for a, b in zip(pos, pos[1:] + [None]):
-        if b is None or b - a > 1 or sig.loc[b] != sig.loc[a]:
-            regions.append({"start": int(start), "stop": int(a), "width": int(a - start + 1),
-                            "mid": int((start + a) // 2)})
-            start = b
+        if b is None or sig.loc[b] != sig.loc[a] or not _bridges_hole(scores, masked, a, b, top, p):
+            regions.append({"start": members[0], "stop": members[-1], "width": len(members),
+                            "mid": int((members[0] + members[-1]) // 2),
+                            "members": tuple(members)})
+            members = [] if b is None else [int(b)]
+        else:
+            members.append(int(b))
     return sorted(regions, key=lambda g: (-g["width"], g["start"]))
 
 
@@ -442,7 +470,8 @@ def pick_in_region(region, scores, config=None):
     """
     p = site_selection_params(config)
     start, stop = region["start"], region["stop"]
-    centre = (start + stop) // 2
+    members = region.get("members") or tuple(range(start, stop + 1))
+    centre = min(members, key=lambda q: (abs(q - (start + stop) // 2), q))
     if "guide_distance" not in scores.columns:
         return centre
     sub = scores.loc[start:stop]
@@ -455,6 +484,8 @@ def pick_in_region(region, scores, config=None):
     idx = sub.index.to_series()
     margin = (idx - start).combine(stop - idx, min) / half
     total = p["weight_proximity"] * prox + p["weight_margin"] * margin
+    # a bridged dip keeps the region whole but is a worse place to tag, so it cannot be picked
+    total = total.where(sub.index.isin(members), float("-inf"))
     return int(total.idxmax())
 
 

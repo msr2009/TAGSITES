@@ -287,6 +287,23 @@ percentile 56 residues in 14 regions). `utils/scoring.find_regions` groups resid
 the best unmasked score **with an identical set of satisfied biological criteria**; masks and
 any change of criteria split a region, and reagent-availability criteria
 (`site_selection.technical_criteria`) are excluded so a guide appearing never splits one.
+
+That plateau is **jagged**, and short dips in it do not split a region. Two knobs bridge them
+for two different reasons. `score_tolerance` (0.5) bridges a dip whose residues satisfy exactly
+the same criteria and score a fraction of a point lower on the graded conservation term — 27.4%
+of all dips, where the equivalence a region claims is already literally true, so no length limit
+applies. `region_gap` (2) bridges a run of at most that many residues that did lose a criterion
+(mostly `small_aa_flanked`), which is a real relaxation bought for consolidation: mean regions
+6.5 → 4.7, proteins with more than five 36.6% → 27.0%. A masked or zero-scoring residue is never
+bridged at any length. Bridged residues are **not members**: they never count towards a region's
+width and `pick_in_region` can never choose one. That restriction matters — unrestricted, the
+pick lands in a dip in 9.0% of gap-2 regions and moves the offered site a median of 1 residue
+onto one that is honestly worse. Ranking regions by summed score was measured and rejected: with
+membership tied at the best score the total is identically width × best, so it is a strict no-op
+(0.0% of proteins), and counting dips into it only trades a narrow best region for a broad
+mediocre one. A `-1` point floor instead of bridging was also rejected (median regions 3 → 20).
+Both knobs feed the database's `scores` stage, so changing one means stored `tag_sites` no longer
+match what the app computes until that stage is re-run.
 `pick_suggested_sites` offers one site per region, widest first, up to `max_sites` — the count
 is data-driven and is **never** padded with lower-scoring residues to reach a fixed number
 (58% of yeast / 46% of worm proteins have fewer than three regions, so the old fixed 3 was
