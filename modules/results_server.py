@@ -552,9 +552,13 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
         else:
             saved = json_content["global"].get("selected_sites", [])
         shared_sites.set(sorted(int(s) for s in saved))
-        # a run that has no sites yet opens on its suggestions in BOTH apps, so the starting
-        # point is the one the scoring argues for; a run with saved sites keeps them
-        _suggest_pending.set(not saved)
+        # only the batch app commits suggestions on load. The single app shows them as outlined
+        # markers and commits nothing: a committed site is a decision, and the scoring basis is
+        # not settled at load time anyway, since a proteome_db run writes its run JSON at once
+        # and exports reagents on a background thread. Scoring without the reagent frame has no
+        # near_guide or not_near_splice, so the regions it finds are not the ones the finished
+        # run shows, and the stale picks used to sit frozen beside the live outlines
+        _suggest_pending.set(bool(auto_suggest and not saved))
         if loaded_path is not None:
             loaded_path.set(canon)
 
@@ -778,7 +782,7 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
 
     @reactive.effect
     def _auto_suggest():
-        """Select the suggested sites once per load of a run with none saved.
+        """Select the suggested sites once per load of a run with none saved (batch app).
 
         Runs as its own effect, not inside _do_load: site_scores() depends on the values
         _do_load writes, so reading it there would loop (see the note in _do_load).
