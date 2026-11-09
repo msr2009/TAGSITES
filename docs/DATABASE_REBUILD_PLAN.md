@@ -187,15 +187,30 @@ Database-wide for worm: 14,810 flagged termini — N 7,123 masked / 3,968 putati
 1. **Structure re-run**, worm only, for the ~3,057 proteins with `has_structure = 0`. Mostly
    local file checks plus some AFDB fetches; writes the models and their accession sidecars, so
    the 103 alias-recoverable proteins gain a structure and `ingest` can label them `afdb:ACC`.
-   **Kept in the plan (decided 2026-11-08):** `proteome_run.py` runs a `ProcessPoolExecutor` at
-   `--workers` (default `os.cpu_count()`), so at a second or two per protein for the fetch this is
-   tens of minutes, not hours. Time the first hundred before committing to the rest — if the AFDB
-   fetches turn out to dominate, the stage is resumable and can be cut without affecting anything
-   downstream, since every later stage works for a protein with no structure.
+   **Measured 2026-11-08, and moved out of the main sequence.** 100 proteins at 8 workers took
+   5m41s — 3.4 s each of wall clock at 4% CPU, entirely network-bound — and produced exactly one
+   new model. Extrapolated: **~2.9 h for the 3,057**, for the expected ~103 recoveries. Nearly
+   every protein 404s at the AFDB API and then runs a BLAST presearch that also finds nothing.
+
+   **Decided: run it separately, overnight**, after the rest of the rebuild has landed, then
+   re-run `ingest` alone to pick up the new models and their `afdb:ACC` labels. Nothing
+   downstream needs it: every later stage works for a protein with no structure. The command,
+   with the accession list taken from `has_structure = 0`:
+
+   ```bash
+   TAGSITES_BATCH_CONFIG=batch.config.worm_local.json \
+     python scripts/proteome_run.py --out-dir /Users/mattrich/tagsites_local/worm/runs/proteome_v1 \
+     --tasks plddt --accessions-file nostruct_all.txt --force --workers 16
+   ```
 2. **Secondary-structure pre-pass.** No `{id}.ss.txt` exists anywhere, but 25,569 worm and 6,055
    yeast run folders still hold their `.AF.pdb`, so `dssp_numpy.write_ss_file` regenerates all of
    them locally — no downloads, no re-running pLDDT or SASA. `build_proteome_db.py:522` already
-   ingests the file once it is there.
+   ingests the file once it is there, under the name `{id}_plddt.ss.txt` (the plddt output path
+   with `.txt` replaced, which is what `extract_from_pdb` writes).
+
+   Measured 2026-11-08: 200 folders in 9.3 s at 8 workers, CPU-bound and entirely local, so the
+   full worm run is 20–25 minutes. The pass skips a folder that already has the file, so it is
+   resumable and safe to re-run.
 3. **Modifications re-run.** Pure regex over the sequence, no network, cheap.
 
    ```bash
@@ -237,6 +252,21 @@ Database-wide for worm: 14,810 flagged termini — N 7,123 masked / 3,968 putati
    hard mask** above, which must be settled before step 4.
 4. **Hard-mask question: settled, option 1** (previous section). Nothing to do; the masks in force
    are the masks the rebuild stores.
+
+**Prerequisite found on 2026-11-08, missing from the original plan:** `ingest` cannot populate
+`sequence_aliases` by itself. `_alias_rows` copies the table out of `local_store.sqlite3`, and is
+inert when that file has none — which was the case, so a rebuild would have left this stale item
+exactly as stale as it found it, silently and with no warning. `local_store.py --build-aliases`
+has to run first.
+
+That run indexed 26,629 proteome accessions over 26,608 sequences (21 under more than one
+accession) and **no AFDB models**, because `afdb_model_path` resolves under the local reference
+directory (`/Users/mattrich/tagsites_local/worm/reference/afdb_pdbs`, absent) while the
+19,701-model tarball is on Pufferfish at `data/reference/afdb_pdbs`. The model half sets
+`has_model` and is what lets `ingest` write `structure_source = 'afdb:ACC'` — the same payload as
+step 1 — so **rebuild the alias index with the models visible during the overnight pass**, then
+re-run `ingest`. Until then `sequence_aliases` is proteome-only: non-empty and good enough for
+`find_protein`, but every `has_model` is 0.
 5. **`--estimate`, then `ingest,scores` with `--update`** on a local copy of each file, then copy
    back to the NAS. SQLite locking is unreliable on the network volume, so the file is always
    assembled on local disk.
