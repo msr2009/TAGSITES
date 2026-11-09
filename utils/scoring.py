@@ -27,6 +27,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from utils.insertions import INSERTION_SOURCE, parse_description
 from utils.results import _guess_analysis_type, _interp_cmap, _VIRIDIS
 
 # default location of the editable scoring config, next to task_definitions.json
@@ -740,7 +741,26 @@ def _handle_column_ramp(positions, params, ctx):
         return [None] * len(positions)
     series = ctx["aa_df"].set_index("pos")[col]
     low, high = params["low"], params["high"]
-    return [_ramp(series.get(p, float("nan")), low, high) for p in positions]
+    out = [_ramp(series.get(p, float("nan")), low, high) for p in positions]
+    credited = _insertion_positions(ctx, params.get("insertion"))
+    # a query insertion (conservation gap) that enough orthologs lack earns the full point
+    return [1.0 if (v != v and p in credited) else v for p, v in zip(positions, out)]
+
+
+def _insertion_positions(ctx, cfg):
+    """Positions inside query_insertion rows deep enough to count under the `insertion` knobs."""
+    rng = ctx["range_df"]
+    if not cfg or rng is None or rng.empty:
+        return set()
+    rows = rng[rng["source"] == INSERTION_SOURCE]
+    out = set()
+    for _, row in rows.iterrows():
+        depth = parse_description(row["description"])
+        # hard depth gate: too few orthologs lacking the residue is noise, not a signal
+        if depth and depth[0] >= cfg.get("min_absent", 10) \
+                and depth[1] >= cfg.get("min_absent_fraction", 0.75):
+            out.update(range(int(row["start"]), int(row["stop"]) + 1))
+    return out
 
 
 def _reagents_cache_for(ctx, column):

@@ -15,6 +15,7 @@ from config import ANALYSIS_COLORS, DOMAIN_SOURCE_COLORS, ISOFORM_CLASS_COLORS, 
 from config import PLOT_LINE_COLORS, SECONDARY_STRUCTURE_COLORS
 from scripts.task_registry import companion_path
 from scripts.paired_features import is_paired, split_paired_rows
+from utils.insertions import insertion_rows
 
 
 # keyword → short label mapping for Phobius region descriptions from EBI InterProScan5.
@@ -283,6 +284,14 @@ def load_data_from_json(json_in, type_dict):
                     params = {k: val for k, val in v.get("args", {}).items()
                               if k not in _skip and val not in ("", None)}
                     alns.append((aln_path, task, params))
+                    # query insertions (conservation -1000 gaps) as range rows, with the
+                    # ortholog depth that scoring uses to credit them
+                    if aln_path and os.path.exists(aln_path):
+                        missing = set(tmp_df.loc[tmp_df[task].isna(), "pos"])
+                        ins = insertion_rows(output_path, aln_path, missing)
+                        if ins:
+                            dat = pd.concat([dat, pd.DataFrame(ins, columns=range_cols)],
+                                            ignore_index=True)
                     # collect isoform records from all blast tasks; best candidate
                     # is selected after the loop to avoid first-task-wins ordering bias
                     iso_path = companion_path(output_path, "blast", "isoforms")
@@ -547,7 +556,8 @@ def plot_results(aa_df, range_df, title="Results Plot"):
     height = 2
     y_positions = {"Phobius": 2, "DeepTMHMM": 4, "Pfam": 6, "modification": 8,
                    "hydrophobic_patch": 10, "UniProt": 12, "UniProt_site": 14,
-                   "UniProt_disorder": 16, "secondary_structure": 18}
+                   "UniProt_disorder": 16, "secondary_structure": 18,
+                   "query_insertion": 20}
     color_map = _annotation_color_map(range_df)
 
     # opacity for hydrophobic patches scales with total patch hydrophobicity
@@ -1080,7 +1090,8 @@ def build_plot_payload(aa_df, range_df, iso_result=None, title="Results"):
     """
     y_positions = {"Phobius": 1, "DeepTMHMM": 3, "Pfam": 5, "modification": 7,
                    "hydrophobic_patch": 9, "UniProt": 11, "UniProt_site": 13,
-                   "UniProt_disorder": 15, "secondary_structure": 17}
+                   "UniProt_disorder": 15, "secondary_structure": 17,
+                   "query_insertion": 19}
 
     line_tracks = []
     data_max = -float("inf")

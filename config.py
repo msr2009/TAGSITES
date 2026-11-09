@@ -67,6 +67,7 @@ DOMAIN_SOURCE_COLORS = {
     "UniProt_site": "#8d6e63",   # lighter brown — informational features (binding site, motif, ...)
     "UniProt_disorder": "#bcaaa4",  # palest brown — disordered Regions, split out of UniProt_site
     "secondary_structure": "#d81b60",
+    "query_insertion": "#2e7d32",   # green — query residues most orthologs lack (conservation gaps)
 }
 
 # secondary structure (pLDDT task's .ss.txt companion, scripts/dssp_numpy.py): fixed colors

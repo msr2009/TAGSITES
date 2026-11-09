@@ -280,6 +280,18 @@ greyed/amber state is emitted as a `<style>` block keyed on the namespaced id in
 state is a token carrying `{run, tier, time}`, so it cannot survive a protein switch in the batch
 app, a rescoring change, or `terminus.arm_timeout_s`.
 
+**Conservation gaps are query insertions, credited only with depth**: the conservation scorer
+writes -1000 for a query residue whose alignment column is over 75% gaps, i.e. most orthologs
+have no residue there, which is where an internal tag is least likely to disrupt anything. The
+loaders read -1000 as NaN, which alone would score 0 like a well-conserved residue.
+`utils/insertions.py` recovers the ortholog counts from the `.aln` beside the `.jsd` (an
+ortholog counts as lacking a residue only inside its own aligned span, so fragments do not
+inflate it) and the loader emits `query_insertion` range rows. `low_conservation`'s `insertion`
+knobs (`min_absent` 10, `min_absent_fraction` 0.75 in `scores.config.json`) then give such a
+residue the full point, so a residue absent from 2 hits earns nothing while HIS3 (79 spanning
+orthologs lack residues 28-51) does. No `.aln`, no credit. Stored database `tag_sites` need the
+`scores` stage re-run to match.
+
 **Suggested sites are regions, not points**: the top of a protein's score is a plateau, not a
 peak — most top-scoring residues sit where the conservation ramp is clipped, so the score
 genuinely cannot rank them (worm median: 10 tied residues in 3 distinct regions; 90th

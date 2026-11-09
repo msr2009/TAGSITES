@@ -298,11 +298,12 @@
       "type": "column_ramp",
       "weight": 1,
       "label": "conservation",
-      "note": "graded: full point at SJD <= 0.635, none at >= 0.831, linear between. Failure rate climbs steadily across that range with no plateau, so the former hard cut at 0.5 sat below where anything happens and scored 0.51 the same as 0.95. Worth ~3x the fixed step on held-out log loss (a10)",
+      "note": "graded: full point at SJD <= 0.635, none at >= 0.831, linear between. Failure rate climbs steadily across that range with no plateau, so the former hard cut at 0.5 sat below where anything happens and scored 0.51 the same as 0.95. Worth ~3x the fixed step on held-out log loss (a10). A query insertion (the -1000 gap in the conservation track: most orthologs have no residue there) earns the full point once at least `min_absent` spanning orthologs lack it and they are at least `min_absent_fraction` of the orthologs spanning that column, so a shallow alignment (absent from 2 hits) earns nothing while a deep one (his3, ~100 hits) does",
       "params": {
         "analysis": "blast",
         "low": 0.635,
-        "high": 0.831
+        "high": 0.831,
+        "insertion": {"min_absent": 10, "min_absent_fraction": 0.75}
       }
     },
     {
