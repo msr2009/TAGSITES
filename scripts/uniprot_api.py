@@ -16,7 +16,9 @@ from Bio.SeqUtils.CheckSum import crc64
 
 from http_retry import request_with_retries
 
-ACCESSION_SIDECAR = "{run}.uniprot_accession.txt"  # written by structure_remote on a match
+UNIPROT_ACCESSIONS_URL = "https://rest.uniprot.org/uniprotkb/accessions"
+UNIPROT_BATCH_MAX = 1000  # UniProt rejects more than 1000 accessions per request
+ACCESSION_SIDECAR ="{run}.uniprot_accession.txt"  # written by structure_remote on a match
 
 
 def checksum_lookup_response_to_accession(resp_json):
@@ -161,10 +163,56 @@ def fetch_entry(accession):
 
 def fetch_fasta(accession):
     """Fetch a single accession's sequence as a plain string. Raises on HTTP error."""
-    resp = requests.get(f"https://rest.uniprot.org/uniprotkb/{accession}.fasta", timeout=15)
-    resp.raise_for_status()
+    resp = request_with_retries(
+        "get", f"https://rest.uniprot.org/uniprotkb/{accession}.fasta", timeout=15)
     lines = resp.text.strip().splitlines()
     return "".join(lines[1:])
+
+
+def _parse_uniprot_fasta(text):
+    """Split a multi-record UniProt FASTA into {accession: sequence} (header's |ACC| field)."""
+    out = {}
+    acc = None
+    for line in text.splitlines():
+        # a header starts a new record; sequence lines extend the current one
+        if line.startswith(">"):
+            parts = line[1:].split()[0].split("|")
+            acc = parts[1] if len(parts) > 2 else parts[0]
+            out[acc] = ""
+        elif acc is not None:
+            out[acc] += line.strip()
+    return out
+
+
+def fetch_fastas(accessions, chunk_size=UNIPROT_BATCH_MAX, deadline=None):
+    """Fetch many accessions' sequences in batched UniProt calls; return {accession: sequence}.
+
+    Accessions UniProt does not return (failures, unknown ids) are absent from the result.
+    A malformed id makes UniProt reject its whole batch (400), and a merged/secondary
+    accession comes back under its new primary id, so both fall back to per-accession fetches.
+    """
+    accs = list(dict.fromkeys(a for a in accessions if a))  # de-duplicate, keep order
+    result = {}
+    for start in range(0, len(accs), chunk_size):
+        chunk = accs[start:start + chunk_size]
+        try:
+            resp = request_with_retries(
+                "get", UNIPROT_ACCESSIONS_URL,
+                params={"accessions": ",".join(chunk), "format": "fasta"},
+                timeout=120, deadline=deadline)
+            got = _parse_uniprot_fasta(resp.text)
+        except requests.exceptions.HTTPError:
+            got = {}  # whole batch rejected: every id in it goes through the fallback below
+        for acc in chunk:
+            if acc in got:
+                result[acc] = got[acc]
+                continue
+            # missing from the batch response: single fetch follows UniProt's redirects
+            try:
+                result[acc] = fetch_fasta(acc)
+            except Exception:
+                pass
+    return result
 
 
 def _protein_name(entry):

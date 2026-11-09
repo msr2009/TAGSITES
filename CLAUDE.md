@@ -451,5 +451,5 @@ Note rsconnect only ignores `__pycache__/` at the top level, so nested ones need
 - **UCSC REST + hgdownload** (gene model by UniProt accession, chromAlias, phastCons bigWig) — `scripts/ucsc_gene_model.py`, `scripts/phastcons_track.py`
 - **NCBI Datasets + efetch** (every RefSeq transcript's exons/CDS for the gene model) — `scripts/ncbi_gene_model.py`, `scripts/ncbi_rest.py`
 - **AlphaFold DB** — `scripts/existing_AF_model.py`
-- **UniProt REST** (entry fetch + checksum lookup) — `scripts/uniprot_api.py`, used by `scripts/uniprot_features.py` and `scripts/existing_AF_model.py`
+- **UniProt REST** (entry fetch + checksum lookup + batched ortholog sequence fetch, up to 1000 accessions per call via `fetch_fastas`) — `scripts/uniprot_api.py`, used by `scripts/uniprot_features.py`, `scripts/existing_AF_model.py` and `scripts/conservation_remote.py`
 - **UniProt taxonomy** — `uniprot_species.flat.txt` (local flat file, ~1.7MB)

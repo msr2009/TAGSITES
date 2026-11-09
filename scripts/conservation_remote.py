@@ -1,7 +1,7 @@
 """
 conservation_remote.py
 
-EBI BLAST + dbfetch + Clustal Omega backend for ortholog conservation scoring
+EBI BLAST + UniProt REST + Clustal Omega backend for ortholog conservation scoring
 — moved out of blast_orthologs.py verbatim as part of the local/remote backend
 split (see scripts/providers.py). This is the default backend; a future
 conservation_local.py will search a local DIAMOND-indexed ortholog reference
@@ -13,13 +13,13 @@ Matt Rich, 9/2024 / updated 2026 — EBI REST calls via ebi_rest.py; backend-spl
 
 import json
 import sys
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from site_selection_util import read_fasta, resolve_taxids
 
 # ensure scripts/ is importable when called from the app
 sys.path.insert(0, str(Path(__file__).parent))
 import ebi_rest
+import uniprot_api
 from progress import report as _report, resolve_reporter, timed_poll_adapter
 from derive_isoforms import derive_isoforms
 
@@ -43,8 +43,7 @@ def main(fasta_in, email, workingdir, name, output,
     # imported lazily (not at module top) to avoid a load-time circular import —
     # blast_orthologs.py imports providers.py, which imports this module on demand
     from blast_orthologs import (
-        group_hits_by_species, parse_dbfetch_fasta_record,
-        format_seq_label, ensure_query_in_alignment_set,
+        group_hits_by_species, format_seq_label, ensure_query_in_alignment_set,
     )
 
     taxid = resolve_taxids(taxid, taxid_file)
@@ -146,35 +145,17 @@ def main(fasta_in, email, workingdir, name, output,
                 format_seq_label(h["acc"], h["species"]), h["hitseq"]))
     else:
         accs = [h["acc"] for _, h in ordered_hits]
-        _WORKERS = 10
-        _report(reporter,
-                f"fetching {total_hits} sequences from UniProt "
-                f"({min(_WORKERS, total_hits)} concurrent requests)…",
+        _report(reporter, f"fetching {total_hits} sequences from UniProt (batched)…",
                 stage="dbfetch")
 
-        def _fetch_one(acc):
-            """Fetch one UniProt FASTA; return (acc, header_word, seq_str) or (acc, None, None)."""
-            try:
-                raw = ebi_rest.dbfetch("uniprotkb", acc, "fasta", "raw").decode("utf-8")
-                name, seq = parse_dbfetch_fasta_record(raw)
-                return acc, name, seq
-            except Exception as e:
-                return acc, None, str(e)
-
-        fasta_dict = {}   # acc → (header_word, seq_str)
-        with ThreadPoolExecutor(max_workers=_WORKERS) as pool:
-            futures = {pool.submit(_fetch_one, acc): acc for acc in accs}
-            done = 0
-            for future in as_completed(futures):
-                done += 1
-                acc, name, result = future.result()
-                if name is None:
-                    _report(reporter, f"dbfetch failed for {acc}: {result}; skipping",
-                            stage="dbfetch", level="warning")
-                else:
-                    fasta_dict[acc] = (name, result)
-                if done % 10 == 0 or done == total_hits:
-                    _report(reporter, f"dbfetch {done}/{total_hits}", stage="dbfetch")
+        # one batched UniProt REST call per 1000 accessions
+        fetched = uniprot_api.fetch_fastas(accs)
+        fasta_dict = {acc: (acc, s) for acc, s in fetched.items()}   # acc → (name, seq_str)
+        for acc in dict.fromkeys(accs):
+            if acc not in fasta_dict:
+                _report(reporter, f"UniProt fetch failed for {acc}; skipping",
+                        stage="dbfetch", level="warning")
+        _report(reporter, f"fetched {len(fasta_dict)}/{total_hits} sequences", stage="dbfetch")
 
         for _, h in ordered_hits:
             acc = h["acc"]
