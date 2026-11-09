@@ -373,6 +373,42 @@ reports; no fixed name, since step 1 changes which proteins those are.
 Proteins loaded through the precomputed-results card are exported from the database and are
 unaffected by any of this.
 
+## What was run, 2026-11-09 (worm)
+
+Steps 2, 3 and 5 landed; step 1 is still outstanding.
+
+| step | result |
+|---|---|
+| 2 secondary structure | 25,407 `.ss.txt` written, 164 already present, 3,056 folders with no model, 0 errors, 73 s |
+| 3 modifications | 26,629 proteins, 0 failures, 7 min |
+| 4 hard mask | option 1, nothing to do |
+| 5 ingest | 28,626 proteins in 84 s, 0 parse warnings |
+| 5 scores | 28,626 proteins in 286 s, 0 parse warnings, curated 56/57 verified, wormtagdb 3,760 |
+
+Built on a copy at `/Users/mattrich/tagsites_local/build/proteome_rebuild.sqlite3` (5.99 GB), then
+installed locally with the previous file kept as `proteome.pre_rebuild.sqlite3`. **The Pufferfish
+copy was deliberately not replaced** — it is still the 2026-11-03 build, and is superseded.
+
+Measured against the old file: `secondary_structure` features 0 → 639,727; modification features
+14,597 → 15,305 (CAAX 251, KKXX 363, PTS1 134, FFAT 20, H/KDEL 15, all four new motifs present);
+`sequence_aliases` 26,629, a new table; `tag_sites` dropped; `curated_sites` 57, unchanged; every
+reagent table identical (guides 4,078,613, site_guides 66,941,447, insertion_sites 13,409,871);
+`site_scores` the same 13,769,139 rows with new values.
+
+**Two code changes the rebuild forced.** `build_proteome_db` no longer creates or writes
+`tag_sites`. And `proteome_db.get_sites` had to be repointed at `curated_sites`: it was a real
+reader of the dropped table, which the audit above missed, and `lookup` raised `no such table`
+until it was fixed. Dropping the table from an updated copy is also not automatic — `--update`
+leaves a table the code no longer writes, so the 85,564 stale rows were dropped by hand.
+
+Deferred to the overnight pass: step 1, the alias index rebuilt with the AFDB models visible, a
+second `ingest`, and then the Pufferfish copy.
+
+The flash drive was rebuilt anyway rather than waiting: `proteome_v1.zip` 4.9 GB / 497,591 files
+(excluding both backup databases), a new sha256 verified after the write, `reference/`'s
+`local_store.sqlite3` replaced with the alias-bearing one, and `setup.sh`'s `DB_BYTES` updated to
+5,991,444,480. It will need rebuilding again after the overnight pass.
+
 ## Verification after the rebuild
 
 - `tag_sites` is gone, `curated_sites` is unchanged in row count, and `site_scores` for a sample
