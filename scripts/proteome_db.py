@@ -254,9 +254,20 @@ def get_scores(pid, config_id=1, conn=None):
 
 
 def get_sites(pid, conn=None):
-    """Suggested (and curated) tag sites for a protein."""
-    return query("SELECT pos, source, rank, config_id FROM tag_sites WHERE pid = ? "
-                 "ORDER BY source, rank", (pid,), conn)
+    """Published tag sites for a protein, from curated_sites.
+
+    Suggested sites are deliberately NOT stored: they follow the scoring config and the region
+    rules, so a stored copy goes stale on every change to either. The app recomputes them from
+    the scores frame on load (utils.scoring.pick_suggested_sites).
+    """
+    return query("SELECT pos, gene, allele, verified, note FROM curated_sites WHERE pid = ? "
+                 "ORDER BY pos", (pid,), conn)
+
+
+def get_wormtagdb(wb_gene, conn=None):
+    """FP tag records of a WormBase gene: strain, allele, fluor, location, residue (internal only)."""
+    return query("SELECT * FROM wormtagdb WHERE wb_gene = ? ORDER BY tag_location, allele",
+                 (wb_gene,), conn)
 
 
 def get_isoforms(pid, conn=None):
@@ -408,8 +419,8 @@ def _summary(pid, conn):
         lines.append("  features: " + ", ".join("{} {}".format(k, v) for k, v in counts.items()))
     sites = get_sites(pid, conn=conn)
     if not sites.empty:
-        lines.append("  suggested tag sites: " + ", ".join(
-            "{} (#{})".format(r.pos, r.rank) for r in sites.itertuples()))
+        lines.append("  published tag sites: " + ", ".join(
+            "{} ({})".format(r.pos, r.allele or "no allele") for r in sites.itertuples()))
     status = get_status(pid, conn=conn)
     if not status.empty:
         lines.append("  last run: {}".format(status.iloc[0]["status"]))

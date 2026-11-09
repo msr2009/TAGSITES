@@ -7,8 +7,9 @@ simple lookup: scripts/proteome_db.py reads it. Tables:
 
   ingest   proteins, wb_transcripts, features, residues, conservation_summary,
            isoforms, isoform_spans, run_status, meta
-  scores   score_configs, site_scores, tag_sites  (the app's own scorer, so values match
-           the app exactly; suggested sites via utils.scoring.pick_suggested_sites)
+  scores   score_configs, site_scores, curated_sites  (the app's own scorer, so values
+           match the app exactly; suggested sites are NOT stored - the app recomputes them
+           from site_scores on load, and a stored copy only goes stale)
   reagents regions, insertion_sites, guides, site_guides, edits, genotyping_primers,
            reagent_status  (normalised so the four ~1 kb arm columns are never stored;
            arms are regenerated from the genome, see proteome_db.regenerate_arms)
@@ -76,8 +77,8 @@ TASKS = list(SUFFIX)
 # table -> (what its size scales with in the estimate)
 SCALES_WITH = {
     "proteins": "proteins", "conservation_summary": "proteins", "isoforms": "proteins",
-    "isoform_spans": "proteins", "run_status": "proteins", "tag_sites": "proteins",
-    "curated_sites": "fixed",
+    "isoform_spans": "proteins", "run_status": "proteins",
+    "curated_sites": "fixed", "wormtagdb": "fixed",
     "regions": "proteins", "guides": "proteins", "edits": "proteins",
     "reagent_status": "proteins",
     "features": "residues", "residues": "residues", "site_scores": "residues",
@@ -89,7 +90,7 @@ SCALES_WITH = {
 STAGE_TABLES = {
     "ingest": ["proteins", "wb_transcripts", "features", "residues", "conservation_summary",
                "isoforms", "isoform_spans", "run_status", "meta", "sequence_aliases"],
-    "scores": ["score_configs", "site_scores", "tag_sites", "curated_sites"],
+    "scores": ["score_configs", "site_scores", "curated_sites", "wormtagdb"],
     "reagents": ["regions", "insertion_sites", "guides", "site_guides", "edits",
                  "genotyping_primers", "reagent_status"],
 }
@@ -127,11 +128,12 @@ SCHEMA = {
     "site_scores": """CREATE TABLE site_scores (
         config_id INTEGER, pid INTEGER, pos INTEGER, score INTEGER, masked INTEGER,
         bits INTEGER, missing INTEGER, PRIMARY KEY (config_id, pid, pos)) WITHOUT ROWID""",
-    "tag_sites": """CREATE TABLE tag_sites (
-        pid INTEGER, pos INTEGER, source TEXT, rank INTEGER, config_id INTEGER)""",
     "curated_sites": """CREATE TABLE curated_sites (
         pid INTEGER, wb_gene TEXT, gene TEXT, allele TEXT, pos INTEGER, verified INTEGER,
         note TEXT, source TEXT)""",
+    "wormtagdb": """CREATE TABLE wormtagdb (
+        wb_gene TEXT, gene TEXT, strain TEXT, allele TEXT, fluor TEXT, other_tags TEXT,
+        tag_location TEXT, tag_residue INTEGER, pid INTEGER, note TEXT)""",
     "regions": """CREATE TABLE regions (
         pid INTEGER PRIMARY KEY, transcript_id TEXT, chrom TEXT, start INTEGER, stop INTEGER,
         strand TEXT, flank_5p INTEGER, flank_3p INTEGER)""",
@@ -174,8 +176,9 @@ INDEXES = [
     "CREATE INDEX idx_features_pid ON features(pid, track)",
     "CREATE INDEX idx_features_desc ON features(track, description)",
     "CREATE INDEX idx_isospans_pid ON isoform_spans(pid, iso_idx)",
-    "CREATE INDEX idx_tag_sites_pid ON tag_sites(pid)",
     "CREATE INDEX idx_guides_pid ON guides(pid)",
+    "CREATE INDEX idx_wormtagdb_gene ON wormtagdb(wb_gene)",
+    "CREATE INDEX idx_wormtagdb_pid ON wormtagdb(pid)",
     "CREATE INDEX idx_aliases_acc ON sequence_aliases(accession)",
 ]
 # per-protein child tables, for delete-then-insert on --update
@@ -183,7 +186,7 @@ CHILD_TABLES = {
     # run_status is not listed: it is rewritten by INSERT OR REPLACE before parsing starts,
     # so deleting it here would remove the row that was just written
     "ingest": ["features", "residues", "conservation_summary", "isoforms", "isoform_spans"],
-    "scores": ["site_scores", "tag_sites"],
+    "scores": ["site_scores"],
     "reagents": ["regions", "insertion_sites", "guides", "site_guides",
                  "genotyping_primers", "reagent_status"],
 }
@@ -216,6 +219,8 @@ def db_config():
         "max_workers": int(full.get("batch_run", {}).get("max_workers") or os.cpu_count() or 4),
         "ref_dir": ref,
         "wb_fasta": _abs(full.get("reference_data", {}).get("protein_fasta", "")),
+        "wormtagdb_notes": _abs(cfg.get("wormtagdb_notes", "data/wormtagdb_allele_notes.json")),
+        "wormtagdb_strains": _abs(cfg["wormtagdb_strains"]) if cfg.get("wormtagdb_strains") else None,
         "curated_sites": [str(_abs(x)) for x in
                           cfg.get("curated_sites", ["data/internal_batch_sites.json"])],
     }
@@ -426,10 +431,10 @@ def _reagents_frame(job):
 
 
 def _score_protein(job, files):
-    """Tag-site scores and suggested sites for one protein via the app's own scorer."""
+    """Per-residue tag-site scores for one protein via the app's own scorer."""
     from config import RESULTS_TYPE_DICT
     from utils.results import load_data_from_json
-    from utils.scoring import pick_suggested_sites, score_tag_sites
+    from utils.scoring import score_tag_sites
 
     tasks = {}
     for task in ("blast", "plddt", "scores", "domains", "modifications", "uniprot"):
@@ -458,8 +463,7 @@ def _score_protein(job, files):
                 bits |= 1 << i
         rows.append((int(pos), int(round(float(rec["score"]) * SCALE["score"])),
                      int(bool(rec["masked"])), bits, missing))
-    suggested = [(p, r + 1) for r, p in enumerate(pick_suggested_sites(scores))]
-    return rows, suggested
+    return rows
 
 
 def parse_protein(job):
@@ -470,7 +474,7 @@ def parse_protein(job):
     """
     t_start = time.time()
     out = {"pid": job["pid"], "errors": [], "features": [], "residues": [], "summary": None,
-           "isoforms": [], "spans": [], "site_scores": [], "suggested": [], "seconds": 0.0}
+           "isoforms": [], "spans": [], "site_scores": [], "seconds": 0.0}
     folder, pid_ = Path(job["folder"]), job["id"]
     ok = {t: job["tasks"].get(t) == "ok" for t in TASKS}
     path = {t: str(folder / (pid_ + SUFFIX[t])) for t in TASKS}
@@ -554,7 +558,7 @@ def parse_protein(job):
         files = {t: path[t] for t in TASKS if ok[t]}
         files["topology"] = job.get("topology_file")
         try:
-            out["site_scores"], out["suggested"] = _score_protein(job, files)
+            out["site_scores"] = _score_protein(job, files)
         except Exception as e:
             out["errors"].append("scoring: {}: {}".format(type(e).__name__, e))
     out["seconds"] = time.time() - t_start
@@ -697,8 +701,6 @@ def write_result(conn, res, stage_set, config_id):
     if "scores" in stage_set:
         conn.executemany("INSERT INTO site_scores VALUES (?,?,?,?,?,?,?)",
                          [(config_id, pid, *r) for r in res["site_scores"]])
-        conn.executemany("INSERT INTO tag_sites VALUES (?,?,?,?,?)",
-                         [(pid, pos, "suggested", rank, config_id) for pos, rank in res["suggested"]])
 
 
 def register_scores_config(conn):
@@ -731,7 +733,6 @@ def load_curated_sites(conn, proteins, paths):
         if p.get("wb_gene"):
             by_gene.setdefault(p["wb_gene"], []).append(p)
     conn.execute("DELETE FROM curated_sites")
-    conn.execute("DELETE FROM tag_sites WHERE source = 'curated'")
     n_ok = n_all = 0
     for path in paths:
         if not Path(path).exists():
@@ -751,10 +752,54 @@ def load_curated_sites(conn, proteins, paths):
             conn.execute("INSERT INTO curated_sites VALUES (?,?,?,?,?,?,?,?)",
                          (pid, e.get("wormbase_id"), e.get("gene"), e.get("allele"), site,
                           int(hit is not None), e.get("isoform"), Path(path).name))
-            if hit:
-                conn.execute("INSERT INTO tag_sites VALUES (?,?,?,?,?)",
-                             (pid, site, "curated", None, None))
     return n_ok, n_all
+
+
+def load_wormtagdb(conn, path, notes_path=None):
+    """FP-tagged WormTagDB strain records with tag location and, for internal tags, the residue.
+
+    One row per distinct (gene, strain, allele, fluor, other tags, location). tag_residue and
+    pid come from curated_sites (same WormBase gene, allele among the record's alleles) and are
+    NULL when the tag is not internal or its site has not been annotated. `note` carries the
+    remark from the allele-notes JSON (e.g. a GFP::KASH chimera), keyed by gene and allele.
+    """
+    import pandas as pd
+
+    conn.execute("DELETE FROM wormtagdb")
+    if not path or not Path(path).exists():
+        return 0
+    df = pd.read_csv(path, keep_default_na=False)
+    strip = lambda col: df[col].str.replace(r"<[^>]+>", "", regex=True).str.strip()
+    df["gene"], df["wbid"] = strip("Gene"), strip("WormBase ID")
+    df["Strain"] = strip("Strain")
+    df = df.rename(columns={"Other tags": "other", "Tag Location": "location"})
+    df = df[~df.Fluor.isin(["", "NA"])]
+    # curated residues keyed by (WormBase gene, allele); only matched (verified) sites carry a pid
+    curated = {}
+    for wb, allele, pos, pid in conn.execute(
+            "SELECT wb_gene, allele, pos, pid FROM curated_sites"):
+        curated.setdefault((wb, allele), (pos, pid))
+    notes = {}
+    if notes_path and Path(notes_path).exists():
+        for e in json.load(open(notes_path)):
+            notes[(e["wormbase_id"], e["allele"])] = e["note"]
+    seen, rows = set(), []
+    for r in df.itertuples():
+        none = lambda v: None if v in ("", "NA") else v
+        key = (r.wbid, r.gene, none(r.Strain), none(r.Allele), r.Fluor, none(r.other), r.location)
+        if key in seen:
+            continue
+        seen.add(key)
+        pos = pid = None
+        # tag residue is only defined for internal tags
+        if r.location == "Internal":
+            for allele in (r.Allele if r.Allele != "NA" else "").split(","):
+                if (r.wbid, allele.strip()) in curated:
+                    pos, pid = curated[(r.wbid, allele.strip())]
+                    break
+        rows.append(key + (pos, pid, notes.get((r.wbid, r.Allele))))
+    conn.executemany("INSERT INTO wormtagdb VALUES (?,?,?,?,?,?,?,?,?,?)", rows)
+    return len(rows)
 
 
 def write_status(conn, proteins, status):
@@ -898,15 +943,20 @@ def build_core(conn, proteins, wb, status, cfg, stages, workers, update=False, e
     config_id, scores_config = (None, None)
     if "scores" in stages:
         config_id, scores_config = register_scores_config(conn)
-        n_ok, n_all = load_curated_sites(conn, everyone or proteins, cfg["curated_sites"])
-        print("[build_proteome_db] curated tag sites: {}/{} verified against sequence".format(
-            n_ok, n_all), flush=True)
     conn.commit()
     topo_dir = cfg["ref_dir"] / "topology_cache"
     jobs = make_jobs(proteins, status, cfg, stages, scores_config, topo_dir)
     # never fewer chunks than workers, or a small run leaves most of the pool idle
     chunk = max(1, min(cfg["chunk_size"], -(-len(jobs) // workers)))
     errors = run_parse(conn, jobs, stages, workers, chunk, config_id, update)
+    if "scores" in stages:
+        # after the parse, so a reparse cannot race the curated rows written here
+        n_ok, n_all = load_curated_sites(conn, everyone or proteins, cfg["curated_sites"])
+        print("[build_proteome_db] curated tag sites: {}/{} verified against sequence".format(
+            n_ok, n_all), flush=True)
+        n_tag = load_wormtagdb(conn, cfg["wormtagdb_strains"], cfg["wormtagdb_notes"])
+        print("[build_proteome_db] wormtagdb: {} FP tag records".format(n_tag), flush=True)
+        conn.commit()
     return errors, time.time() - t0
 
 
@@ -1297,10 +1347,30 @@ def gate(cfg, args):
         sys.exit("Re-run with --yes to build.")
 
 
+def build_wormtagdb(cfg):
+    """Reload only the wormtagdb table in the finished file (no protein is reparsed)."""
+    work = cfg["build_dir"] / "proteome_building.sqlite3"
+    cfg["build_dir"].mkdir(parents=True, exist_ok=True)
+    shutil.copy(cfg["path"], work)
+    conn = connect_build(work)
+    create_schema(conn, ["wormtagdb"])
+    n = load_wormtagdb(conn, cfg["wormtagdb_strains"], cfg["wormtagdb_notes"])
+    create_indexes(conn)
+    conn.commit()
+    conn.close()
+    tmp = cfg["path"].with_suffix(".sqlite3.tmp")
+    shutil.copy(work, tmp)
+    os.replace(tmp, cfg["path"])
+    work.unlink(missing_ok=True)
+    print("wormtagdb: {} FP tag records written to {}".format(n, cfg["path"]))
+
+
 def build(args, cfg, proteins, wb, status):
     """Build or update the database for the requested stages."""
     if args.stage == "reagents":
         return build_reagents(args, cfg)
+    if args.stage == "wormtagdb":
+        return build_wormtagdb(cfg)
     subset = bool(args.limit or args.accessions)
     everyone = proteins
     if args.accessions:
@@ -1343,7 +1413,7 @@ def main(argv=None):
     p.add_argument("--estimate", action="store_true",
                    help="sample, measure and project the database size; build nothing large")
     p.add_argument("--stage", default="all", choices=["all", "core", "ingest", "scores",
-                                                      "reagents"])
+                                                      "reagents", "wormtagdb"])
     p.add_argument("--update", action="store_true",
                    help="refresh only the selected proteins in the existing database")
     p.add_argument("--yes", action="store_true", help="confirm a full build after --estimate")
