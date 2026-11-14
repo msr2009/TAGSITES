@@ -87,7 +87,7 @@
 
   /* ── Layout constants (CSS px, drawn in DPR-scaled ctx) ───────────────────── */
 
-  var LEFT_GUTTER  = 62;   // y-axis labels
+  var LEFT_GUTTER  = 72;   // y-axis labels
   var RIGHT_GUTTER = 14;
   var TOP_GUTTER   = 6;    // top margin
   var SCORE_FILL_H = 24;   // score heatmap bar height (excludes marker margin)
@@ -97,7 +97,7 @@
   var SCORE_MARK_H = 8;    // top margin reserved for suggested-site triangle markers
   var SCORE_H      = SCORE_FILL_H + SCORE_MARK_H;   // total row height (fill + marker margin)
   var LEGEND_ROW_H = 22;   // one legend row; the band wraps to as many rows as it needs
-  var LEGEND_FONT  = "10px sans-serif";
+  var LEGEND_FONT  = "12px sans-serif";
   var PANEL_GAP    = 8;    // gap between panels
 
   // The line, annotations, and isoform panes are content-driven with minimum heights;
@@ -391,7 +391,7 @@
     ctx.save();
     ctx.translate(11, top + h / 2);
     ctx.rotate(-Math.PI / 2);
-    ctx.font         = "11px sans-serif";
+    ctx.font         = "13px sans-serif";
     ctx.textAlign    = "center";
     ctx.textBaseline = "middle";
     ctx.fillStyle    = "#666";
@@ -419,7 +419,7 @@
     var yTicks = [0, 0.25, 0.5, 0.75, 1.0].filter(function (v) { return v <= yMax + 1e-9; });
     ctx.textAlign    = "right";
     ctx.textBaseline = "middle";
-    ctx.font         = "10px sans-serif";
+    ctx.font         = "12px sans-serif";
     ctx.fillStyle    = "#666";
     yTicks.forEach(function (yv) {
       var py = top + h - (yv - yMin) / ySpan * h;
@@ -510,7 +510,7 @@
     // row labels and subtle separators
     ctx.textAlign    = "right";
     ctx.textBaseline = "middle";
-    ctx.font         = "10px sans-serif";
+    ctx.font         = "12px sans-serif";
     ctx.fillStyle    = "#777";
     activeRows.forEach(function (name) {
       var py = top + h - (dynYPos[name] - dynYMin) / ySpan * h;
@@ -633,7 +633,7 @@
 
       // row label in the left gutter
       ctx.fillStyle    = iso.isQuery ? "#333" : "#888";
-      ctx.font         = (iso.isQuery ? "bold " : "") + "9px sans-serif";
+      ctx.font         = (iso.isQuery ? "bold " : "") + "11px sans-serif";
       ctx.textAlign    = "right";
       ctx.textBaseline = "middle";
       var label = iso.label.length > 12 ? iso.label.slice(0, 11) + "…" : iso.label;
@@ -786,7 +786,7 @@
 
     // row label in the left gutter, matching the sequence strip's style
     ctx.fillStyle    = "#777";
-    ctx.font         = "10px sans-serif";
+    ctx.font         = "12px sans-serif";
     ctx.textAlign    = "right";
     ctx.textBaseline = "middle";
     ctx.fillText("Score", LEFT_GUTTER - 6, top + h / 2);
@@ -904,7 +904,7 @@
 
     // row label in the left gutter, matching the score row's style
     ctx.fillStyle    = "#777";
-    ctx.font         = "10px sans-serif";
+    ctx.font         = "12px sans-serif";
     ctx.textAlign    = "right";
     ctx.textBaseline = "middle";
     ctx.fillText("Sequence", LEFT_GUTTER - 6, top + LETTER_H / 2);
@@ -963,7 +963,7 @@
     // auto-spaced position ticks (labels ≥ 45px apart)
     var step = niceInterval(Math.ceil(45 / Math.max(cellW, 0.1)));
     ctx.fillStyle    = "#777";
-    ctx.font         = "10px sans-serif";
+    ctx.font         = "12px sans-serif";
     ctx.textAlign    = "center";
     ctx.textBaseline = "middle";
     var firstTick = Math.ceil(r[0] / step) * step;
