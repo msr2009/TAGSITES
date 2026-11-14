@@ -1,4 +1,5 @@
 from shiny import ui
+from config import EBI_HEALTH_BANNER
 from modules.setup_ui import setup_ui
 from modules.progress_ui import progress_ui
 from modules.results_ui import results_ui
@@ -25,8 +26,9 @@ app_ui = ui.page_fluid(
         "border-color:#0a58ca;"
         "}"
     ),
-    # EBI health warning (rendered by server.py only while EBI misbehaves)
-    ui.output_ui("ebi_banner"),
+    # EBI health warning (rendered by server.py only while EBI misbehaves);
+    # off unless config.EBI_HEALTH_BANNER
+    *([ui.output_ui("ebi_banner")] if EBI_HEALTH_BANNER else []),
     ui.navset_card_tab(
         ui.nav_panel("(1) Setup Analyses", setup_ui("setup"), value="setup"),
         ui.nav_panel("(2) Run Analyses", progress_ui("progress"), value="progress"),

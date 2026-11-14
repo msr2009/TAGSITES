@@ -19,6 +19,7 @@ from utils.bundle import is_bundle_zip, extract_and_rebase
 _ROOT = Path(__file__).parent
 sys.path.insert(0, str(_ROOT / "scripts"))
 import ebi_health
+from config import EBI_HEALTH_BANNER
 
 
 def app_server(input, output, session):
@@ -124,55 +125,57 @@ def app_server(input, output, session):
     reagents_server("reagents", shared_json=shared_values, shared_sites=shared_sites)
 
     # ── EBI health banner ──────────────────────────────────────────────────────
-    # latest ebi_health verdict; set only when level or problems change, so the
-    # banner does not re-render (and un-dismiss) on every poll
-    ebi_state = reactive.Value(None)
+    # gated by config.EBI_HEALTH_BANNER; when off, nothing here runs or probes EBI
+    if EBI_HEALTH_BANNER:
+        # latest ebi_health verdict; set only when level or problems change, so the
+        # banner does not re-render (and un-dismiss) on every poll
+        ebi_state = reactive.Value(None)
 
-    async def _refresh_ebi(force=False):
-        """Fetch the (process-wide cached) EBI verdict off the event loop."""
-        try:
-            res = await asyncio.to_thread(ebi_health.check, force)
-        except Exception:
-            return
-        old = ebi_state.get()
-        # skip no-op updates: same level and same problem list
-        if old is None or (old["level"], old["problems"]) != (res["level"], res["problems"]):
-            ebi_state.set(res)
+        async def _refresh_ebi(force=False):
+            """Fetch the (process-wide cached) EBI verdict off the event loop."""
+            try:
+                res = await asyncio.to_thread(ebi_health.check, force)
+            except Exception:
+                return
+            old = ebi_state.get()
+            # skip no-op updates: same level and same problem list
+            if old is None or (old["level"], old["problems"]) != (res["level"], res["problems"]):
+                ebi_state.set(res)
 
-    @reactive.effect
-    async def _poll_ebi():
-        """Re-read the EBI verdict every minute (network only when the cache expires)."""
-        reactive.invalidate_later(60)
-        await _refresh_ebi()
+        @reactive.effect
+        async def _poll_ebi():
+            """Re-read the EBI verdict every minute (network only when the cache expires)."""
+            reactive.invalidate_later(60)
+            await _refresh_ebi()
 
-    @reactive.effect
-    @reactive.event(input.ebi_recheck)
-    async def _recheck_ebi():
-        """Force a fresh EBI probe from the banner's Check-again button."""
-        await _refresh_ebi(force=True)
-        res = ebi_state.get()
-        if res and res["level"] == "ok":
-            ui.notification_show("EBI services are working normally.", duration=4)
+        @reactive.effect
+        @reactive.event(input.ebi_recheck)
+        async def _recheck_ebi():
+            """Force a fresh EBI probe from the banner's Check-again button."""
+            await _refresh_ebi(force=True)
+            res = ebi_state.get()
+            if res and res["level"] == "ok":
+                ui.notification_show("EBI services are working normally.", duration=4)
 
-    @render.ui
-    def ebi_banner():
-        """Warning strip above the tabs while EBI is slow, impaired, blocking or down."""
-        res = ebi_state.get()
-        if not res or res["level"] == "ok":
-            return ui.span()
-        cls = "alert-info" if res["level"] == "slow" else (
-            "alert-warning" if res["level"] == "degraded" else "alert-danger")
-        return ui.div(
-            ui.tags.strong("⚠ " + ebi_health.summary(res)),
-            ui.tags.ul(*[ui.tags.li(p) for p in res["problems"]],
-                       style="margin:4px 0 4px 0;"),
-            ui.input_action_button("ebi_recheck", "Check again",
-                                   class_="btn-sm btn-outline-secondary"),
-            ui.tags.button(type="button", class_="btn-close",
-                           **{"data-bs-dismiss": "alert", "aria-label": "Close"}),
-            class_=f"alert {cls} alert-dismissible",
-            style="margin:6px 0;padding:8px 40px 8px 12px;font-size:0.9em;",
-        )
+        @render.ui
+        def ebi_banner():
+            """Warning strip above the tabs while EBI is slow, impaired, blocking or down."""
+            res = ebi_state.get()
+            if not res or res["level"] == "ok":
+                return ui.span()
+            cls = "alert-info" if res["level"] == "slow" else (
+                "alert-warning" if res["level"] == "degraded" else "alert-danger")
+            return ui.div(
+                ui.tags.strong("⚠ " + ebi_health.summary(res)),
+                ui.tags.ul(*[ui.tags.li(p) for p in res["problems"]],
+                           style="margin:4px 0 4px 0;"),
+                ui.input_action_button("ebi_recheck", "Check again",
+                                       class_="btn-sm btn-outline-secondary"),
+                ui.tags.button(type="button", class_="btn-close",
+                               **{"data-bs-dismiss": "alert", "aria-label": "Close"}),
+                class_=f"alert {cls} alert-dismissible",
+                style="margin:6px 0;padding:8px 40px 8px 12px;font-size:0.9em;",
+            )
 
     @render.download_button(filename="tagsites-app.zip", media_type="application/zip")
     def download_app():

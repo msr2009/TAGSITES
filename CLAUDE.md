@@ -60,8 +60,8 @@ scripts/                # core analysis executables
   http_retry.py               # shared bounded-retry + wall-clock-deadline wrapper around
                               # requests; used by ebi_rest.py and the genomic-fetch clients
   ebi_health.py               # ~1 s EBI probe (GET /parameters + empty POST /run, no job
-                              # created) -> ok/slow/degraded/blocked/down; cached app-wide,
-                              # drives the banner above the tabs; CLI exits 1 when unusable
+                              # created) -> ok/slow/degraded/blocked/down; CLI exits 1 when
+                              # unusable. App banner off (config.EBI_HEALTH_BANNER = False)
   fetch_genomic_sequence.py   # genomic-sequence auto-fetch: ncbi_rest.py -> ucsc_rest.py ->
                               # ensembl_rest.py, first success wins (ensembl.config.json sources)
   cds_check.py                # gene-model gate: translates the model's CDS and compares it to

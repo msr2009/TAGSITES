@@ -82,6 +82,10 @@ SECONDARY_STRUCTURE_COLORS = {
 # may carry either or both; see utils/results.py and utils/tag_filters.py
 TOPOLOGY_SOURCES = ("Phobius", "DeepTMHMM")
 
+# EBI health banner above the main tabs (scripts/ebi_health.py). Off: the app never
+# probes EBI on its own; the check stays available as `python scripts/ebi_health.py`
+EBI_HEALTH_BANNER = False
+
 # isoform classification colors (constitutive → green, intermediate → amber, unique → red)
 ISOFORM_CLASS_COLORS = {
     "constitutive": "#00c020",
