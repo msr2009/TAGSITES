@@ -53,6 +53,38 @@ def get_status(base_url, job_id):
     return resp.text.strip()
 
 
+# EBI's status endpoint asks its own SLURM REST API about the job; when that internal API
+# rate-limits EBI (HTTP 429, "Maximum 10 requests/second"), EBI wraps it in a plain HTTP 400
+# with a SlurmException body. Seen 2026-11-14 on ncbiblast and iprscan5 alike, persisting for
+# a lone manual request, so it is EBI-wide load rather than our polling rate. The job itself
+# is unaffected, so this means "status unknown right now", not "bad request".
+_BACKEND_BUSY_MARKERS = ("SlurmException", "rate_limit_exceeded")
+
+
+def _backend_busy(exc):
+    """True when an HTTPError is EBI's wrapped internal rate-limit error, not a real 400."""
+    resp = getattr(exc, "response", None)
+    if resp is None or resp.status_code != 400:
+        return False
+    try:
+        body = resp.text or ""
+    except Exception:
+        return False
+    return any(m in body for m in _BACKEND_BUSY_MARKERS)
+
+
+def _status_or_none(base_url, job_id):
+    """Job status string, or None while EBI's backend is rate-limited (try again later)."""
+    try:
+        return get_status(base_url, job_id)
+    except requests.exceptions.HTTPError as exc:
+        if _backend_busy(exc):
+            print(f"EBI status for {job_id} unavailable (EBI backend rate-limited); "
+                  f"will poll again", file=sys.stderr)
+            return None
+        raise
+
+
 def fetch_result(base_url, job_id, result_type):
     """GET one result type for a finished job; return raw bytes."""
     resp = _request_with_retries("get", f"{base_url}/result/{job_id}/{result_type}", timeout=120)
@@ -129,10 +161,13 @@ def run_job(base_url, params, poll_cb=None, poll_interval=5, backoff=1.5, max_in
 
     interval = poll_interval
     elapsed = 0.0
+    current = "QUEUED"
     while True:
         time.sleep(interval)
         elapsed += interval
-        current = get_status(base_url, job_id)
+        # an unreadable status (EBI backend rate-limited) keeps the last known one;
+        # max_wait still bounds how long that can go on
+        current = _status_or_none(base_url, job_id) or current
         if poll_cb:
             poll_cb(job_id, current)
         if current == "FINISHED":
@@ -159,7 +194,10 @@ def resume_job(base_url, job_id, result_type):
     Use this to reattach to a job submitted in an earlier session instead of
     resubmitting it from scratch.
     """
-    status = get_status(base_url, job_id)
+    status = _status_or_none(base_url, job_id)
+    # EBI's backend is rate-limited: the job is still there, just unreadable for now
+    if status is None:
+        return "pending", "RUNNING"
     if status == "FINISHED":
         return "finished", fetch_result(base_url, job_id, result_type)
     if status in {"QUEUED", "RUNNING"}:
