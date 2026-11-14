@@ -364,11 +364,33 @@ def setup_ui():
                             style="font-size:0.8rem; font-weight:400; color:#6c757d; margin-left:0.75rem;"),
                 ),
 
+                # plain-language summary of the default set (task cards live in Advanced)
+                ui.div(
+                    ui.tags.p(ui.tags.strong("By default, the following analyses will be run:"),
+                              style="margin-bottom:0.2rem;"),
+                    ui.tags.ol(
+                        ui.tags.li(ui.tags.strong("Conservation"),
+                                   " — BLAST orthologs in Swiss-Prot (broad) and in the "
+                                   "organism's taxonomic order (narrow); per-residue conservation."),
+                        ui.tags.li(ui.tags.strong("Structure"),
+                                   " — AlphaFold model: pLDDT confidence, solvent accessibility, "
+                                   "secondary structure."),
+                        ui.tags.li(ui.tags.strong("Domains"), " — InterPro / Pfam domain calls."),
+                        ui.tags.li(ui.tags.strong("Annotations"),
+                                   " — curated UniProt features (modified residues, lipidation, "
+                                   "topology, binding sites) plus motif-based modification sites."),
+                        style="margin-bottom:0.2rem; padding-left:1.2rem;",
+                    ),
+                    ui.tags.small("Open Advanced below to view or change these.",
+                                  class_="text-muted"),
+                    style="font-size:0.85rem; margin-bottom:0.5rem;",
+                ),
+
                 # advanced: manual task building, presets, and run-JSON upload —
                 # the default analysis set below covers most users
                 ui.tags.details(
                     ui.tags.summary(
-                        "Advanced — add or load analyses",
+                        "Advanced — view, edit, add or load analyses",
                         style=(
                             "font-size:0.85rem; font-weight:600; cursor:pointer; "
                             "padding:0.35rem 0.5rem; color:#212529; user-select:none;"
@@ -428,15 +450,15 @@ def setup_ui():
                                 ),
                             ),
                         ),
+
+                        # the task cards: one per analysis that will run, parameters editable
+                        ui.output_ui("task_cards"),
                     ),
                     style=(
                         "border:1px solid #adb5bd; border-radius:4px; "
                         "margin-bottom:0.5rem; background:#f8f9fa;"
                     ),
                 ),
-
-                # dynamically rendered task accordion
-                ui.output_ui("task_cards"),
 
                 # Off-target screening is the slowest step in a run: two EBI blastn
                 # jobs, and a repeat-rich locus (collagens) can take ~10 min for the

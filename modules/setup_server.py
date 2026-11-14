@@ -1696,7 +1696,7 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
 
         if not current_tasks:
             return ui.p(
-                "No analyses — open Advanced to add one.",
+                "No analyses — add one above or load a saved set.",
                 style="color:#6c757d; margin-top:0.4rem; font-size:0.8rem;",
             )
 
