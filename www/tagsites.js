@@ -1571,11 +1571,12 @@
     if (runTitleEl) runTitleEl.textContent = plotTitle;
     plotYMax      = 1.0;
     lineTracks    = msg.lineTracks    || [];
-    // sliding-window property scores and hydrophobicity lines clutter the default view —
-    // start them hidden (SASA stays on); a click on the legend brings any back
+    // only conservation (blast) and pLDDT lines start visible; SASA, phastCons, property
+    // scores and hydrophobicity start hidden — a click on the legend brings any back.
+    // Matching uses the raw column id; tr.name is the display label.
     var defaultHidden = lineTracks
-      .map(function (tr) { return tr.name; })
-      .filter(function (n) { return /_scores$/.test(n) || /_hydro$/.test(n); });
+      .filter(function (tr) { return !/_(blast|plddt)$/.test(tr.id || tr.name); })
+      .map(function (tr) { return tr.name; });
     rangeFeatures = msg.rangeFeatures || [];
     seqArray      = (msg.seq || "").split("");
     scoreTrack    = msg.scoreTrack    || [];
