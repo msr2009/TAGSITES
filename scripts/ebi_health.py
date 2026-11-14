@@ -12,6 +12,13 @@ per TTL. ebi_rest also calls note() when a real job hits trouble (a submission
 refused, the status backend rate-limited), and those recent observations are
 folded into the verdict.
 
+The empty POST runs on a much slower clock than the GETs: an address under a
+fair-use block should not keep knocking, even with requests that create no job,
+in case EBI counts the attempts. It re-runs every SUBMIT_TTL_BLOCKED_S while
+blocked, every SUBMIT_TTL_S otherwise (a real refused job still flags a new
+block at once via note()), and on check(force=True) no more than once per
+SUBMIT_MIN_GAP_S, so repeated "Check again" clicks cannot hammer EBI.
+
 Levels: "ok", "slow" (reachable but sluggish), "degraded" (some services or the
 status backend misbehaving), "blocked" (submissions refused), "down" (unreachable).
 
@@ -34,7 +41,10 @@ PROBE_EMAIL = "tagsites-healthcheck@example.org"
 TIMEOUT_S = 10  # per probe request
 SLOW_S = 4.0  # a /parameters call slower than this counts as sluggish
 TTL_OK_S = 300  # re-probe a healthy EBI every 5 min
-TTL_BAD_S = 60  # re-probe sooner while something is wrong
+TTL_BAD_S = 60  # re-probe sooner while something is wrong (GETs only)
+SUBMIT_TTL_S = 1800  # empty-POST re-test while not blocked
+SUBMIT_TTL_BLOCKED_S = 900  # empty-POST re-test while blocked
+SUBMIT_MIN_GAP_S = 60  # floor between empty POSTs, even when forced
 NOTE_WINDOW_S = 900  # job-time observations older than this are dropped
 
 _LEVEL_RANK = {"ok": 0, "slow": 1, "degraded": 2, "blocked": 3, "down": 4}
@@ -42,12 +52,16 @@ _LEVEL_RANK = {"ok": 0, "slow": 1, "degraded": 2, "blocked": 3, "down": 4}
 _lock = threading.Lock()
 _cache = {"at": 0.0, "result": None}
 _notes = {}  # kind -> (time, detail)
+_submit = {"at": 0.0, "accepting": None, "detail": ""}  # last empty-POST outcome
 
 
 def note(kind, detail=""):
     """Record a problem a real EBI job ran into (kind: 'blocked' or 'status_busy')."""
     with _lock:
         _notes[kind] = (time.time(), detail)
+        # a refused real job is a fresh submission test: no need to probe for it
+        if kind == "blocked":
+            _submit.update(at=time.time(), accepting=False, detail=detail)
         # a fresh observation makes the cached verdict stale
         _cache["at"] = 0.0
 
@@ -91,12 +105,33 @@ def _probe_submission():
     return None, f"HTTP {r.status_code}"
 
 
-def probe():
-    """Run both probes now (uncached) and return the verdict dict."""
+def _submission_due(force):
+    """True when the empty-POST test should run now (see module docstring)."""
+    with _lock:
+        at, accepting = _submit["at"], _submit["accepting"]
+    since = time.time() - at
+    # never tested: always test once
+    if at == 0.0:
+        return True
+    if since < SUBMIT_MIN_GAP_S:
+        return False
+    if force:
+        return True
+    return since > (SUBMIT_TTL_BLOCKED_S if accepting is False else SUBMIT_TTL_S)
+
+
+def probe(test_submission=True):
+    """Run the GET probes (and the empty POST if asked) now; return the verdict dict."""
     with concurrent.futures.ThreadPoolExecutor(len(SERVICES) + 1) as pool:
-        sub_future = pool.submit(_probe_submission)
+        sub_future = pool.submit(_probe_submission) if test_submission else None
         params = list(pool.map(_probe_parameters, SERVICES))
-        accepting, sub_detail = sub_future.result()
+        # record a fresh submission test; otherwise reuse the last one
+        if sub_future is not None:
+            accepting, sub_detail = sub_future.result()
+            with _lock:
+                _submit.update(at=time.time(), accepting=accepting, detail=sub_detail)
+        with _lock:
+            accepting, sub_detail = _submit["accepting"], _submit["detail"]
 
     failed = [(s, err) for s, _, err in params if err]
     slow = [(s, dt) for s, dt, err in params if not err and dt > SLOW_S]
@@ -166,7 +201,7 @@ def check(force=False):
     ttl = TTL_OK_S if cached and cached["level"] == "ok" else TTL_BAD_S
     # re-probe when forced, never probed, or the cached verdict has expired
     if force or cached is None or time.time() - at > ttl:
-        cached = probe()
+        cached = probe(test_submission=_submission_due(force))
         with _lock:
             _cache["result"], _cache["at"] = cached, time.time()
     return _merge_notes(cached)
