@@ -644,7 +644,7 @@ def progress_server(input, output, session, shared_json, shared_results_trigger,
         @reactive.effect
         @reactive.event(shared_autostart)
         async def _auto_launch():
-            """Auto-start all tasks after Setup's Save Analysis triggers this bump."""
+            """Auto-start all tasks after Setup's Save and Run triggers this bump."""
             # working_dir/run_name are reactive.Values left over from whatever run
             # was loaded before — they can be non-empty from a *prior* run, so
             # truthiness alone isn't enough. Wait until _parse_json has actually

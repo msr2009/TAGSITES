@@ -1238,7 +1238,7 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
 
     @reactive.calc
     def _missing_requirements():
-        """Labels for the required fields for Save Analysis that aren't filled in yet."""
+        """Labels for the required fields for Save and Run that aren't filled in yet."""
         has_sequence = (
             bool(input.input_file())
             or _selected_hit() is not None
@@ -1257,7 +1257,7 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
 
     @reactive.calc
     def _ready():
-        """True when all required fields for Save Analysis are present."""
+        """True when all required fields for Save and Run are present."""
         return not _missing_requirements()
 
     @reactive.effect
@@ -1467,7 +1467,7 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
                          or providers.region_from_annotation())
         note = " (no genomic sequence: reagent design will be skipped)" if no_region else ""
         if input.save_analysis() == 0:
-            return f"Ready — click Save Analysis to write the run configuration.{note}"
+            return f"Ready — click Save and Run to write the run configuration and start the analyses.{note}"
         return f"Saved → {input.working_dir()}{input.run_name()}.run.json"
 
     @render.text

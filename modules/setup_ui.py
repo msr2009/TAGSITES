@@ -478,7 +478,7 @@ def setup_ui():
 
         # ── Sticky save bar ───────────────────────────────────────────────────
         ui.div(
-            ui.input_action_button("save_analysis", "5 · 💾 Save Analysis",
+            ui.input_action_button("save_analysis", "5 · 💾 Save and Run",
                 disabled=True, class_="btn-success btn-sm"),
             ui.output_text("save_status"),
             style="display:flex; align-items:center; gap:0.75rem;",

@@ -190,7 +190,7 @@ That's it. The task now:
 ### Verifying
 
 1. Launch the app: `conda activate tagsites && python app_modular.py`
-2. Add a task of type `my_analysis`, configure it, and click **Save Analysis**.
+2. Add a task of type `my_analysis`, configure it, and click **Save and Run**.
 3. Confirm the written JSON has `{"type": "my_analysis", "args": {...}}` — no tooltips, no choices, no global keys copied in.
 4. Run it from the Progress tab and confirm output loads in Results.
 5. Run the same JSON through the CLI: `python scripts/run_tag_sites_from_json.py -i path/to/run.json` and confirm identical output.
