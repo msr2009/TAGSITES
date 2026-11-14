@@ -104,8 +104,8 @@
   // only the legend/score/sequence rows above have fixed heights.
   var MIN_LINE_H   = 80;   // line panel minimum (continuous tracks)
   var LINE_TRACK_H = 40;   // notional per-track height, scales the line panel with track count
-  var MIN_FEAT_H   = 80;   // annotations panel minimum (range features)
-  var FEAT_ROW_H   = 34;   // per-active-row height inside the annotations panel
+  var MIN_FEAT_H   = 120;  // annotations panel minimum (range features)
+  var FEAT_ROW_H   = 42;   // per-active-row height inside the annotations panel
   var ISO_ROW_H    = 26;   // per-isoform row height inside the isoform pane
   var ISO_PAD      = 10;   // top+bottom padding inside the isoform pane
   var PANE_LABEL_H = 18;   // space reserved above each dynamic pane for its title
