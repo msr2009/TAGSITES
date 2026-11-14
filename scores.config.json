@@ -364,6 +364,17 @@
         "sources": ["modification"],
         "include_descriptions": ["myristoylation", "palmitoylation", "prenylation"]
       }
+    },
+    {
+      "key": "not_in_uniprot_site",
+      "type": "range_absent",
+      "weight": 1,
+      "label": "not a UniProt modified residue",
+      "note": "1 pt if the residue is not a curated UniProt modified residue (phosphorylation, C-terminal amidation, cofactor attachment such as PLP / pantetheine / lipoyl / FAD, N-terminal acetylation, lysine acylation, methylation, cysteine methyl ester, hydroxylation, ...), predicted or PubMed-cited alike. Before this the UniProt_site source was display-only, so a curated phosphoserine could tie for the best internal site (issue #78). Appended last so the database's criterion bitmask keeps its positions",
+      "params": {
+        "sources": ["UniProt_site"],
+        "include_descriptions": ["Modified residue:"]
+      }
     }
   ]
 }
