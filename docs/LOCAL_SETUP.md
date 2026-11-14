@@ -18,7 +18,7 @@ depending only on which config file it is started with.
 | Domains | `scan` | EBI InterProScan | Pfam-A HMMs (~2.5 GB) |
 | Structure (pLDDT/SASA source) | `bulk` | UniProt checksum lookup, EBI BLAST, AFDB fetch | AFDB proteome PDBs (~3.8 GB) |
 | Gene model + genomic region | `bulk` (under `genewise`) | EBI Genewise and the genomic-region upload | Ensembl genome + GFF3 (~60 MB) |
-| Conservation (BLAST tasks) | `local` | EBI BLAST + Clustal Omega | Swiss-Prot + Rhabditida TrEMBL DIAMOND databases (~1.8 GB) |
+| Conservation (BLAST tasks) | `local` | EBI BLAST + FAMSA (EBI Clustal Omega fallback) | Swiss-Prot + Rhabditida TrEMBL DIAMOND databases (~1.8 GB) |
 | Off-target / primer screens | `local` | UCSC BLAT / EBI blastn | BLAST+ genome database (~55 MB) |
 
 The `genewise: bulk` mode runs no Genewise. CDS exons are read from the GFF3, cut from the

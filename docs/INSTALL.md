@@ -65,7 +65,7 @@ Missing `diamond`, `mafft`, `pyhmmer` or `blastn` does not affect the web-servic
 
 | Item | Needed for | Where |
 |---|---|---|
-| E-mail address | Every EBI job (BLAST, InterPro, Genewise, Clustal). The Setup tab requires one even where no EBI job is submitted. | Setup tab, `Email` field |
+| E-mail address | Every EBI job (BLAST, InterPro, Genewise, and Clustal when the FAMSA alignment falls back to it). The Setup tab requires one even where no EBI job is submitted. | Setup tab, `Email` field |
 | UCSC BLAT API key | Fast off-target screening through UCSC BLAT when no local BLAST+ database exists | `ucsc.local.json` (`{"api_key": "..."}`, gitignored). Without it the screen falls back to EBI blastn. |
 | DeepTMHMM checkout | Topology prediction for database builds only (separate academic license) | `deeptmhmm` block of the config ([BUILD_LOCAL_DATABASE.md](BUILD_LOCAL_DATABASE.md)) |
 

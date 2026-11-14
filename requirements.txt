@@ -25,5 +25,6 @@ xmltramp2
 ridgeplot
 reportlab
 primer3-py
+pyfamsa==0.5.3.post1  # ortholog alignment (scripts/famsa_align.py); 0.7.0's Linux wheel needs glibc 2.34, 0.5.3.post1 is manylinux2014
 pyBigWig               # full-precision phastCons from UCSC's bigWig over HTTP (scripts/phastcons_track.py); optional: without it the track uses UCSC's byte-quantized REST values
 kaleido==0.2.1

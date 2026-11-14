@@ -45,6 +45,8 @@ scripts/                # core analysis executables
   blast_orthologs.py          # NCBI BLAST homolog search
   extract_from_pdb.py         # pLDDT + SASA from AlphaFold PDB, plus helix/strand ranges
                               # ({output}.ss.txt, source secondary_structure)
+  famsa_align.py              # in-process ortholog alignment (pyfamsa); conservation_remote.py
+                              # falls back to an EBI Clustal Omega job when it is missing or raises
   dssp_numpy.py               # DSSP-style 3-state secondary structure from backbone coords:
                               # numpy port of pydssp (MIT), no torch/einops, O(L^2) bits.
                               # 99.4% agreement with AFDB mmCIF's DSSP 4 over 19 models
@@ -398,12 +400,14 @@ at startup. When adding code, run the app and check the startup log for
 ## Environment
 
 Key dependencies: `shiny`, `biopython`, `plotly`, `pandas`, `numpy`, `scipy`, `matplotlib`,
-`requests`, `primer3-py`, `pyhmmer` (local Pfam scanning), `reportlab` (alignment PDFs), and
+`requests`, `primer3-py`, `pyfamsa` (ortholog alignment, pinned 0.5.3.post1 for its
+manylinux2014 wheel), `pyhmmer` (local Pfam scanning), `reportlab` (alignment PDFs), and
 `rs3` + `lightgbm` (RS3 guide scoring). `diamond`, `mafft` and `pybigwig` are used only by the
 batch-mode local backends (pyBigWig also gives full-precision phastCons remotely when present).
 `python scripts/reference_data.py --only ucsc` fetches the bulk UCSC files (~170 MB for ce11).
-No local bioinformatics binaries are required for the interactive app — Clustal Omega, BLAST,
-Genewise, and InterPro all run via the EBI REST API.
+No local bioinformatics binaries are required for the interactive app — BLAST, Genewise and
+InterPro run via the EBI REST API; ortholog alignment runs in-process with pyfamsa, with EBI
+Clustal Omega only as a fallback.
 
 ### ⚠️ Version pinning — read before adding any dependency
 

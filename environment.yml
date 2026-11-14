@@ -41,5 +41,6 @@ dependencies:
   - pip:
     - ridgeplot
     - kaleido==0.2.1
+    - pyfamsa==0.5.3.post1  # scripts/famsa_align.py — ortholog alignment (pinned to match requirements.txt)
     - rs3                 # Rule Set 3 guide scoring (scripts/guide_efficiency.py)
     - rsconnect-python    # deploys the app to shinyapps.io (rsconnect-python/TAGSITES.json)

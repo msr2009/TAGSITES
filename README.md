@@ -41,8 +41,9 @@ This is probably sufficient for most use-cases.
 
 ## Quick start (local app, web services for analyses)
 
-Requires an internet connection. BLAST, Clustal Omega, InterPro and Genewise run through the EBI
-REST API, so no local bioinformatics tools are needed.
+Requires an internet connection. BLAST, InterPro and Genewise run through the EBI REST API, and
+orthologs are aligned in-process with pyfamsa (EBI Clustal Omega as fallback), so no local
+bioinformatics tools are needed.
 
 ### 1. Get the code
 

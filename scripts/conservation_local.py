@@ -65,6 +65,10 @@ sys.path.insert(0, str(Path(__file__).parent))
 from progress import report as _report, resolve_reporter
 from providers import _load_config as _load_batch_config
 from derive_isoforms import derive_isoforms
+from famsa_align import mask_residues, restore_residues
+
+# MAFFT rejects selenocysteine (U); it aligns as C and is restored afterwards
+_MAFFT_MASK = {"U": "C"}
 
 _STITLE_OS_RE = re.compile(r"OS=(.*?)\s+OX=")
 
@@ -235,38 +239,6 @@ def _run_diamond_blastp(query_fasta, db_entries, n, evalue, workdir, threads=Non
     return next(iter(by_query.values()), [])
 
 
-def _mask_selenocysteine(fasta_text):
-    """Replace U with C in sequence lines of a FASTA string; headers are untouched."""
-    return "\n".join(ln if ln.startswith(">") else ln.replace("U", "C")
-                     for ln in fasta_text.split("\n"))
-
-
-def _restore_selenocysteine(aln_path, fasta_str_list):
-    """Put U back into an alignment wherever the pre-MAFFT sequence had one."""
-    # ungapped residue indices that were U, per record (MAFFT keeps input order)
-    u_sites = [{i for i, c in enumerate(rec.split("\n", 1)[1].replace("\n", "")) if c == "U"}
-               for rec in fasta_str_list]
-    if not any(u_sites):
-        return
-    out, rec_idx, resi = [], -1, 0
-    for ln in open(aln_path).read().split("\n"):
-        if ln.startswith(">"):
-            rec_idx, resi = rec_idx + 1, 0
-            out.append(ln)
-            continue
-        chars = []
-        for c in ln:
-            # gaps do not advance the residue index; only real residues are checked against u_sites
-            if c != "-":
-                if rec_idx < len(u_sites) and resi in u_sites[rec_idx]:
-                    c = "U"
-                resi += 1
-            chars.append(c)
-        out.append("".join(chars))
-    with open(aln_path, "w") as f:
-        f.write("\n".join(out))
-
-
 def main(fasta_in, email, workingdir, name, output,
          n, evalue, db, length_percent,
          align_full_seqs, taxid, clients_folder, exclude_paralogs,
@@ -372,7 +344,7 @@ def main(fasta_in, email, workingdir, name, output,
         # MAFFT rejects selenocysteine (U), so it aligns a U -> C copy and U is restored after
         mafft_in_path = f"{out_prefix}.mafft_in.fasta"
         with open(mafft_in_path, "w") as f:
-            f.write(_mask_selenocysteine("".join(fasta_str_list)))
+            f.write(mask_residues("".join(fasta_str_list), _MAFFT_MASK))
         try:
             with open(aln_path, "w") as aln_out:
                 # --thread 1 keeps MAFFT single-threaded so batch workers stay within the thread cap
@@ -380,7 +352,7 @@ def main(fasta_in, email, workingdir, name, output,
                                check=True, stdout=aln_out)
         finally:
             os.remove(mafft_in_path)
-        _restore_selenocysteine(aln_path, fasta_str_list)
+        restore_residues(aln_path, fasta_str_list, _MAFFT_MASK)
         _report(reporter, f"Alignment written → {aln_path}", stage="align")
 
     ###########################

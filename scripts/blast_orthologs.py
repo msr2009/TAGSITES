@@ -3,7 +3,8 @@ blast_orthologs.py
 
 CLI entry point for ortholog conservation scoring. The actual search +
 alignment is delegated to a backend resolved by scripts/providers.py —
-scripts/conservation_remote.py (EBI BLAST + dbfetch + Clustal Omega) by
+scripts/conservation_remote.py (EBI BLAST + dbfetch + FAMSA, EBI Clustal Omega
+fallback) by
 default, or a local DIAMOND/MAFFT lookup when batch.config.json sets
 backends.conservation to a local mode. With no config file present this
 always resolves to "remote", so the Shiny app's behavior here is unchanged.
@@ -110,8 +111,8 @@ def main(fasta_in, email, workingdir, name, output,
          taxid_file=None, min_perfect_len=40,
          report=None, job_id_cb=None, resume_job_ids=None):
     """Run ortholog conservation scoring via the configured backend (EBI BLAST
-    + Clustal Omega by default: BLAST → filter hits → fetch full seqs →
-    clustalo → JSD scoring); same signature/return value as before the
+    + FAMSA by default: BLAST → filter hits → fetch full seqs →
+    FAMSA, clustalo fallback → JSD scoring); same signature/return value as before the
     backend split.
 
     job_id_cb(index, jid), when given, is called with the EBI job ID for the

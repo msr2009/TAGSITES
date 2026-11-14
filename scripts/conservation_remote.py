@@ -1,12 +1,15 @@
 """
 conservation_remote.py
 
-EBI BLAST + UniProt REST + Clustal Omega backend for ortholog conservation scoring
+EBI BLAST + UniProt REST + FAMSA backend for ortholog conservation scoring
 — moved out of blast_orthologs.py verbatim as part of the local/remote backend
-split (see scripts/providers.py). This is the default backend; a future
-conservation_local.py will search a local DIAMOND-indexed ortholog reference
-set and align with MAFFT instead of submitting queued EBI jobs, emitting the
-same .aln/.jsd/.isoforms.json files consumed by the rest of the pipeline.
+split (see scripts/providers.py). This is the default backend; conservation_local.py
+searches a local DIAMOND-indexed ortholog reference set and aligns with MAFFT
+instead, emitting the same .aln/.jsd/.isoforms.json files.
+
+Orthologs are aligned in-process with pyfamsa (famsa_align.py), which saves one
+EBI job per BLAST task; an EBI Clustal Omega job runs only when pyfamsa is
+missing or raises.
 
 Matt Rich, 9/2024 / updated 2026 — EBI REST calls via ebi_rest.py; backend-split 2026
 """
@@ -24,12 +27,26 @@ from progress import report as _report, resolve_reporter, timed_poll_adapter
 from derive_isoforms import derive_isoforms
 
 
+def _align_famsa(fasta_str_list, aln_path, reporter):
+    """Align in-process with pyfamsa; True on success, False (with a warning) to fall back."""
+    _report(reporter, f"Aligning {len(fasta_str_list)} sequences with FAMSA…", stage="align")
+    try:
+        import famsa_align
+        famsa_align.align(fasta_str_list, aln_path)
+    except Exception as e:  # noqa: BLE001 — any failure, incl. ImportError, falls back to clustalo
+        _report(reporter, f"FAMSA alignment failed ({type(e).__name__}: {e}); "
+                "falling back to EBI Clustal Omega", stage="align", level="warning")
+        return False
+    _report(reporter, f"Alignment written → {aln_path}", stage="align")
+    return True
+
+
 def main(fasta_in, email, workingdir, name, output,
          n, evalue, db, length_percent,
          align_full_seqs, taxid, clients_folder, exclude_paralogs,
          taxid_file=None, min_perfect_len=40,
          report=None, job_id_cb=None, resume_job_ids=None):
-    """Run BLAST → filter hits → fetch full seqs → clustalo → JSD scoring.
+    """Run BLAST → filter hits → fetch full seqs → FAMSA (clustalo fallback) → JSD scoring.
 
     job_id_cb(index, jid), when given, is called with the EBI job ID for the
     (single) BLAST submission this task makes, tagged as index 0.
@@ -182,10 +199,10 @@ def main(fasta_in, email, workingdir, name, output,
         fasta_str_list, input_match, seq_name, seq)
 
     ###########################
-    # ALIGN WITH CLUSTAL OMEGA (via EBI REST)
+    # ALIGN WITH FAMSA (in-process), EBI CLUSTAL OMEGA AS FALLBACK
     ###########################
 
-    # write the multi-sequence FASTA that will be submitted to clustalo
+    # write the multi-sequence FASTA that is aligned
     fasta_out_path = f"{out_prefix}.fasta"
     with open(fasta_out_path, "w") as fasta_out:
         fasta_out.write("".join(fasta_str_list))
@@ -193,11 +210,15 @@ def main(fasta_in, email, workingdir, name, output,
     aln_path = f"{out_prefix}.aln"
 
     if len(fasta_str_list) <= 1:
-        # clustalo requires ≥2 sequences; fall back to copying input as alignment
-        _report(reporter, "only one sequence; skipping Clustal, copying input as .aln", stage="align")
+        # aligners need ≥2 sequences; fall back to copying input as alignment
+        _report(reporter, "only one sequence; skipping alignment, copying input as .aln",
+                stage="align")
         with open(aln_path, "w") as f:
             f.write("".join(fasta_str_list))
+    elif _align_famsa(fasta_str_list, aln_path, reporter):
+        pass
     else:
+        # FAMSA unavailable or failed: EBI Clustal Omega job
         with open(fasta_out_path) as f:
             fasta_content = f.read()
 
