@@ -25,6 +25,8 @@ app_ui = ui.page_fluid(
         "border-color:#0a58ca;"
         "}"
     ),
+    # EBI health warning (rendered by server.py only while EBI misbehaves)
+    ui.output_ui("ebi_banner"),
     ui.navset_card_tab(
         ui.nav_panel("(1) Setup Analyses", setup_ui("setup"), value="setup"),
         ui.nav_panel("(2) Run Analyses", progress_ui("progress"), value="progress"),

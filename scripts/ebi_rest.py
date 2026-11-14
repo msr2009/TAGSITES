@@ -19,6 +19,7 @@ from pathlib import Path
 import requests  # noqa: F401
 
 sys.path.insert(0, str(Path(__file__).parent))
+import ebi_health
 import http_retry
 
 # canonical base URLs for each EBI REST service
@@ -43,7 +44,19 @@ _request_with_retries = http_retry.request_with_retries
 
 def submit(base_url, params):
     """POST params to {base_url}/run; return the jobId string."""
-    resp = _request_with_retries("post", f"{base_url}/run", data=params, timeout=60)
+    try:
+        resp = _request_with_retries("post", f"{base_url}/run", data=params, timeout=60)
+    except requests.exceptions.HTTPError as exc:
+        # surface EBI's own reason ("temporarily blocked ...", a bad parameter) instead
+        # of a bare "400 Client Error"; a fair-use block also feeds the app's EBI banner
+        body = getattr(exc.response, "text", "") or ""
+        desc = ebi_health.error_description(body)
+        if ebi_health.is_block_message(body):
+            ebi_health.note("blocked", desc)
+        if desc:
+            raise requests.exceptions.HTTPError(
+                f"{exc} — EBI says: {desc}", response=exc.response) from exc
+        raise
     return resp.text.strip()
 
 
@@ -79,6 +92,7 @@ def _status_or_none(base_url, job_id):
         return get_status(base_url, job_id)
     except requests.exceptions.HTTPError as exc:
         if _backend_busy(exc):
+            ebi_health.note("status_busy")
             print(f"EBI status for {job_id} unavailable (EBI backend rate-limited); "
                   f"will poll again", file=sys.stderr)
             return None
