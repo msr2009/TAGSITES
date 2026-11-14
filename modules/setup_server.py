@@ -323,7 +323,8 @@ def _fetch_isoforms(canonical_acc, base_hit):
         safe_id = iso_acc.replace("-", "_")              # safe Shiny input ID
         hit = dict(base_hit)
         hit.update(accession=iso_acc, isoform=rec["isoform"],
-                    isoform_name=rec["isoform_name"], safe_id=safe_id)
+                    isoform_name=rec["isoform_name"], safe_id=safe_id,
+                    is_canonical=rec["is_canonical"] and base_hit.get("is_canonical", True))
         if not rec["is_canonical"]:
             # non-canonical isoform: sequence differs from base_hit; AFDB covers canonical only
             hit.update(sequence=rec["sequence"], length=str(len(rec["sequence"])),
@@ -1036,6 +1037,13 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
 
         base_hits.sort(key=_hit_sort_key)
 
+        # canonical = the Swiss-Prot entry of its gene; unreviewed entries of a gene that has
+        # one (Ensembl-derived TrEMBL fragments, e.g. RACK1's D6R*/H0Y*) are non-canonical.
+        # A gene with no reviewed entry has no marked canonical, so all of its hits stay.
+        reviewed_genes = {(h["gene"].lower(), h["taxid"]) for h in base_hits if h["reviewed"]}
+        for h in base_hits:
+            h["is_canonical"] = h["reviewed"] or (h["gene"].lower(), h["taxid"]) not in reviewed_genes
+
         # expand curated isoforms (entries with ALTERNATIVE PRODUCTS comment, e.g. TP53).
         # One network call per hit, so the whole loop goes off the event loop in a
         # single hop rather than 25 separate round trips blocking the app.
@@ -1108,7 +1116,11 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
 
         # apply display filters
         afdb_only = input.uniprot_afdb_only()
-        hits = [h for h in all_hits if not afdb_only or h["has_afdb"]]
+        show_noncanonical = input.uniprot_show_noncanonical()
+        # a hit without the flag (direct accession fetch) is its own canonical sequence
+        hits = [h for h in all_hits
+                if (not afdb_only or h["has_afdb"])
+                and (show_noncanonical or h.get("is_canonical", True))]
 
         hidden = len(all_hits) - len(hits)
         if not hits:

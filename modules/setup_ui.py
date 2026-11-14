@@ -142,7 +142,7 @@ _STYLE = """
         margin-bottom: 0.3rem;
     }
     .uniprot-filter-row .shiny-input-container {
-        margin-bottom: 0 !important; font-size: 0.78rem;
+        margin-bottom: 0 !important; font-size: 0.78rem; width: auto !important;
     }
     .uniprot-filter-row .form-check-label { font-size: 0.78rem; }
 
@@ -267,6 +267,8 @@ def setup_ui():
                     ui.div(
                         ui.input_checkbox("uniprot_afdb_only",
                             "Has AFDB structure", value=True),
+                        ui.input_checkbox("uniprot_show_noncanonical",
+                            "Non-canonical isoforms", value=False),
                         class_="uniprot-filter-row",
                     ),
                     # hit cards rendered dynamically
