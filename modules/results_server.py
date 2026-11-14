@@ -43,11 +43,6 @@ def _safe_id(s):
     return re.sub(r'[^A-Za-z0-9]', '_', str(s))
 
 
-def _job_label(col, analysis):
-    """Strip the trailing '_<analysis>' suffix from a task column name, e.g. 'BROAD_blast' -> 'BROAD'."""
-    suffix = "_" + analysis
-    return col[:-len(suffix)] if col.lower().endswith(suffix) else col
-
 # pLDDT 4-band legend items (values stored 0-1 after /100 at load time)
 _PLDDT_LEGEND = [
     {"color": "#0053D6", "label": "Very high (≥0.90)"},
@@ -58,7 +53,7 @@ _PLDDT_LEGEND = [
 
 
 def _build_colors_and_legend(track, task_name, scheme, aa_df, range_df, seq_len, hex_color,
-                             iso_result=None):
+                             iso_result=None, track_names=None):
     """Single entry point: compute per-residue structure colors AND the matching legend.
 
     Returns (colors, legend) where legend is a dict ready for JSON serialization,
@@ -117,7 +112,7 @@ def _build_colors_and_legend(track, task_name, scheme, aa_df, range_df, seq_len,
         vmin, vmax = ("polar", "hydrophobic") if cmap is _BWR else (0, 1)
         if cmap is _VIRIDIS:
             vmax = f"≥{BLAST_CMAP_MAX}"
-        legend = {"type": "gradient", "label": task_name, "vmin": vmin, "vmax": vmax,
+        legend = {"type": "gradient", "label": (track_names or {}).get(task_name, task_name), "vmin": vmin, "vmax": vmax,
                   "cmap": cmap_name}
 
     return colors, legend
@@ -490,12 +485,12 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
                     other_cols.append((col, "Hydrophobic exposure"))
                 else:
                     other_cols.append((col, col))
-            for label, cols in (("BLAST", blast_cols), ("pLDDT", plddt_cols)):
-                for col in cols:
-                    job = _job_label(col, _guess_analysis_type(col))
-                    choices[col] = label if len(cols) == 1 else f"{label} ({job})"
-            for col, name in other_cols:
-                choices[col] = name
+            # same labels as the plot legend (utils.results.track_display_names)
+            names = meta.get("track_names", {})
+            for col in blast_cols + plddt_cols:
+                choices[col] = names.get(col, col)
+            for col, fallback in other_cols:
+                choices[col] = names.get(col, fallback)
         if range_df is not None and not range_df.empty:
             if not range_df[range_df["source"].isin(DOMAIN_STRUCT_SOURCES)].empty:
                 choices["__domains__"] = "Domains"
@@ -676,7 +671,8 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
         restrictions apply from the start (the batch app's Setup site filters). See
         _push_rescore for the incremental path on later edits.
         """
-        payload = build_plot_payload(aa_df, range_df, iso_result=iso_result, title=title)
+        payload = build_plot_payload(aa_df, range_df, iso_result=iso_result, title=title,
+                                     track_names=meta.get("track_names"))
         payload["seq"] = meta.get("query_seq", "")
         payload["inputs"] = _input_names()
 
@@ -900,6 +896,7 @@ def results_server(input, output, session, shared_json, shared_sites, shared_res
             track, task_name, scheme,
             aa_data.get(), range_data.get(), seq_len, hex_color,
             iso_result=_visible_iso_result(),
+            track_names=(meta or {}).get("track_names"),
         )
         if colors is None:
             return

@@ -1910,10 +1910,15 @@ def setup_server(input, output, session, shared_json, shared_autostart=None):
                 args["pdb"] = pdb_path if use_supplied_pdb else ""
                 # always inject the resolved taxid so AFDB lookup can filter by organism
                 args["taxid"] = organism_taxid()
-            task_entries.append(
-                build_task_entry(task["id"], task["name"], args,
-                                 task_output_suffix(task["name"]), wd, rn)
-            )
+            entry = build_task_entry(task["id"], task["name"], args,
+                                     task_output_suffix(task["name"]), wd, rn)
+            if task["name"] == "blast":
+                # clade name of the search scope, so Results can label the track
+                scope = next((e["name"] for e in _lineage()
+                              if e["taxid"] == str(args.get("taxid", ""))), "")
+                if scope:
+                    entry[task["id"]]["scope_name"] = scope
+            task_entries.append(entry)
 
         # ── build reagents entry or warn ──────────────────────────────────────
         reagents_entry = None

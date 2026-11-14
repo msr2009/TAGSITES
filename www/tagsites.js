@@ -96,7 +96,8 @@
   var SEQ_H        = SEQ_MARK_H + SCORE_FILL_H + SEQ_TICK_H;   // markers + letters (= score bar height) + axis numbers
   var SCORE_MARK_H = 8;    // top margin reserved for suggested-site triangle markers
   var SCORE_H      = SCORE_FILL_H + SCORE_MARK_H;   // total row height (fill + marker margin)
-  var LEGEND_H     = 22;   // fixed-height legend band between line and feature panels
+  var LEGEND_ROW_H = 22;   // one legend row; the band wraps to as many rows as it needs
+  var LEGEND_FONT  = "10px sans-serif";
   var PANEL_GAP    = 8;    // gap between panels
 
   // The line, annotations, and isoform panes are content-driven with minimum heights;
@@ -215,6 +216,25 @@
     });
   }
 
+  // Lay legend items out left to right, wrapping to a new row when one would overflow.
+  // Returns {items: [{tr, x, row, w}], rows}; x is relative to the data area's left edge.
+  var _legendMeasureCtx = null;
+  function legendLayout(dataW) {
+    if (!_legendMeasureCtx) _legendMeasureCtx = document.createElement("canvas").getContext("2d");
+    var mctx = _legendMeasureCtx;
+    mctx.font = LEGEND_FONT;
+    var SWATCH_W = 14, GAP = 4, ITEM_PAD = 10, LEFT_PAD = 8;
+    var x = LEFT_PAD, row = 0, items = [];
+    lineTracks.forEach(function (tr) {
+      var w = SWATCH_W + GAP + mctx.measureText(tr.name).width + ITEM_PAD;
+      // wrap unless this item is already the first on its row
+      if (x + w > dataW - LEFT_PAD && x > LEFT_PAD) { row += 1; x = LEFT_PAD; }
+      items.push({ tr: tr, x: x, row: row, w: w });
+      x += w;
+    });
+    return { items: items, rows: lineTracks.length ? row + 1 : 1 };
+  }
+
   // Compute panel boundary + height positions (all in CSS px, top-down).
   //
   // The line, annotations, and isoform panes are content-driven with minimum heights;
@@ -222,6 +242,10 @@
   // than the sum of natural heights, the line panel absorbs the extra space so the
   // canvas is never under-filled.
   function getPanelLayout(cssH) {
+    var canvasEl = document.getElementById("ts_plot_div");
+    var cssW = canvasEl && canvasEl.clientWidth > 0 ? canvasEl.clientWidth : 800;
+    var legend = legendLayout(Math.max(cssW - LEFT_GUTTER - RIGHT_GUTTER, 1));
+    var legendH = legend.rows * LEGEND_ROW_H;
     var lineH = Math.max(MIN_LINE_H, lineTracks.length * LINE_TRACK_H);
     var featH = Math.max(MIN_FEAT_H, activeFeatRows().length * FEAT_ROW_H);
     var isoH  = (isoIsoforms.length > 1 || isoHidden > 0)
@@ -231,7 +255,7 @@
     var nGaps = isoH > 0 ? 5 : 4;
     // each dynamic pane (line/feat/iso) reserves PANE_LABEL_H above it for its title
     var nLabels = 2 + (isoH > 0 ? 1 : 0);
-    var naturalTotal = TOP_GUTTER + PANE_LABEL_H * nLabels + lineH + LEGEND_H + featH + isoH
+    var naturalTotal = TOP_GUTTER + PANE_LABEL_H * nLabels + lineH + legendH + featH + isoH
       + SCORE_H + SEQ_H + PANEL_GAP * nGaps;
     var slack = Math.max(cssH - naturalTotal, 0);
     lineH += slack;  // give any leftover canvas height to the line panel
@@ -239,7 +263,7 @@
     var lineLabelTop = TOP_GUTTER;
     var lineTop   = lineLabelTop + PANE_LABEL_H;
     var legendTop = lineTop + lineH + PANEL_GAP;
-    var featLabelTop = legendTop + LEGEND_H + PANEL_GAP;
+    var featLabelTop = legendTop + legendH + PANEL_GAP;
     var featTop   = featLabelTop + PANE_LABEL_H;
     var isoLabelTop = featTop + featH + PANEL_GAP;
     var isoTop    = isoH > 0 ? isoLabelTop + PANE_LABEL_H : isoLabelTop;
@@ -250,7 +274,8 @@
       lineTop:   lineTop,
       lineH:     lineH,
       legendTop: legendTop,
-      legendH:   LEGEND_H,
+      legendH:   legendH,
+      legend:    legend,
       featLabelTop: featLabelTop,
       featTop:   featTop,
       featH:     featH,
@@ -705,7 +730,7 @@
 
   function drawLegendBand(ctx, inf, layout) {
     var top = layout.legendTop;
-    var h   = LEGEND_H;
+    var h   = layout.legendH;
 
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(LEFT_GUTTER, top, inf.dataW, h);
@@ -713,19 +738,17 @@
     legendHitBoxes = [];
     if (lineTracks.length === 0) return;
 
-    var SWATCH_W = 14, SWATCH_H = 3, GAP = 4, ITEM_PAD = 10, LEFT_PAD = 8;
-    var cy = top + h / 2;
-    var cx = LEFT_GUTTER + LEFT_PAD;
-    var rightEdge = LEFT_GUTTER + inf.dataW - LEFT_PAD;
-
-    ctx.font         = "10px sans-serif";
+    var SWATCH_W = 14, SWATCH_H = 3, GAP = 4;
+    ctx.font         = LEGEND_FONT;
     ctx.textBaseline = "middle";
     ctx.textAlign    = "left";
 
-    lineTracks.forEach(function (tr) {
-      var textW = ctx.measureText(tr.name).width;
-      var itemW = SWATCH_W + GAP + textW + ITEM_PAD;
-      if (cx + itemW > rightEdge) return;
+    // positions come from legendLayout(), so the band height and the items always agree
+    layout.legend.items.forEach(function (it) {
+      var tr = it.tr;
+      var cx = LEFT_GUTTER + it.x;
+      var rowTop = top + it.row * LEGEND_ROW_H;
+      var cy = rowTop + LEGEND_ROW_H / 2;
 
       var hidden = hiddenTracks.has(tr.name);
       ctx.globalAlpha = hidden ? 0.3 : 1.0;
@@ -744,8 +767,8 @@
 
       ctx.globalAlpha = 1;
 
-      legendHitBoxes.push({ name: tr.name, x0: cx, y0: top, x1: cx + itemW, y1: top + h });
-      cx += itemW;
+      legendHitBoxes.push({ name: tr.name, x0: cx, y0: rowTop, x1: cx + it.w,
+                            y1: rowTop + LEGEND_ROW_H });
     });
   }
 
@@ -1009,7 +1032,7 @@
     var layout = getPanelLayout(inf.cssH);
 
     // no tooltip over the legend band
-    if (cy >= layout.legendTop && cy <= layout.legendTop + LEGEND_H) { hideTooltip(); return; }
+    if (cy >= layout.legendTop && cy <= layout.legendTop + layout.legendH) { hideTooltip(); return; }
 
     var lines  = ["Position: " + pos];
 
@@ -1156,7 +1179,7 @@
       var cy     = e.clientY - rect.top;
       var inf    = getCanvasInfo();
       var layout = getPanelLayout(inf ? inf.cssH : 520);
-      var inLegend = inf && cy >= layout.legendTop && cy <= layout.legendTop + LEGEND_H;
+      var inLegend = inf && cy >= layout.legendTop && cy <= layout.legendTop + layout.legendH;
       canvas.style.cursor = inLegend ? "pointer" : "crosshair";
       updateTooltip(e);
     });
@@ -1179,10 +1202,10 @@
       var layout = getPanelLayout(inf ? inf.cssH : 520);
 
       // legend click → toggle track visibility
-      if (cy >= layout.legendTop && cy <= layout.legendTop + LEGEND_H) {
+      if (cy >= layout.legendTop && cy <= layout.legendTop + layout.legendH) {
         for (var i = 0; i < legendHitBoxes.length; i++) {
           var box = legendHitBoxes[i];
-          if (cx >= box.x0 && cx <= box.x1) {
+          if (cx >= box.x0 && cx <= box.x1 && cy >= box.y0 && cy <= box.y1) {
             if (hiddenTracks.has(box.name)) hiddenTracks.delete(box.name);
             else hiddenTracks.add(box.name);
             render();
@@ -1219,7 +1242,7 @@
       var inf    = getCanvasInfo();
       var layout = getPanelLayout(inf ? inf.cssH : 520);
 
-      if (cy >= layout.legendTop && cy <= layout.legendTop + LEGEND_H) return;
+      if (cy >= layout.legendTop && cy <= layout.legendTop + layout.legendH) return;
 
       // isoform row: hide it (the query row does nothing, and never resets zoom)
       if (layout.isoH > 0 && cy >= layout.isoTop && cy <= layout.isoTop + layout.isoH) {

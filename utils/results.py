@@ -443,7 +443,44 @@ def load_run_metadata(json_in):
         "query_seq": query_seq,
         "pdb_path": pdb_path,
         "seq_len": len(query_seq),
+        "track_names": track_display_names(j),
     }
+
+
+def track_display_names(j):
+    """Map each continuous-track column of a run JSON to one label shared by plot, Color-by and legend."""
+    names = {}
+    for task, v in j.get("tasks", {}).items():
+        analysis = v.get("type", "")
+        args = v.get("args", {})
+        job = _job_label(task, analysis)
+        if analysis == "blast":
+            # Swiss-Prot searches are named for the database, scoped searches for their clade
+            if "swissprot" in str(args.get("db", "")).lower():
+                scope = "Swiss-Prot"
+            else:
+                scope = v.get("scope_name") or job
+            names[task] = f"Conservation ({scope})"
+        elif analysis == "plddt":
+            names[task] = "Structure confidence (pLDDT)"
+            names[task + "_sasa"] = "Solvent accessibility (rSASA)"
+            names[task + "_hydro"] = "Hydrophobic exposure"
+        elif analysis == "reagents":
+            names["PHASTCONS_phastcons"] = "phastCons"
+    # two tracks that resolve to one label (e.g. two pLDDT jobs) keep their job name apart
+    counts = {}
+    for label in names.values():
+        counts[label] = counts.get(label, 0) + 1
+    for col, label in list(names.items()):
+        if counts[label] > 1:
+            names[col] = f"{label} [{_job_label(col, _guess_analysis_type(col))}]"
+    return names
+
+
+def _job_label(col, analysis):
+    """Strip the trailing '_<analysis>' suffix from a task column name, e.g. 'BROAD_blast' -> 'BROAD'."""
+    suffix = "_" + analysis
+    return col[:-len(suffix)] if col.lower().endswith(suffix) else col
 
 
 def load_reagents_df(json_in):
@@ -1082,7 +1119,7 @@ def residue_colors_for_isoforms(iso_result, seq_len):
     return colors, legend_items
 
 
-def build_plot_payload(aa_df, range_df, iso_result=None, title="Results"):
+def build_plot_payload(aa_df, range_df, iso_result=None, title="Results", track_names=None):
     """Serialize plot data for the native canvas renderer (tagsites_set_plot message).
 
     Returns a dict with lineTracks, rangeFeatures, isoformPane, and title, ready for
@@ -1099,7 +1136,8 @@ def build_plot_payload(aa_df, range_df, iso_result=None, title="Results"):
         colors = assign_task_colors(aa_df)
         for col in aa_df.columns[1:]:  # skip 'pos'
             vals = [None if pd.isna(v) else float(v) for v in aa_df[col]]
-            line_tracks.append({"name": col, "color": colors.get(col, "#888888"), "values": vals})
+            line_tracks.append({"id": col, "name": (track_names or {}).get(col, col),
+                                "color": colors.get(col, "#888888"), "values": vals})
             col_max = aa_df[col].dropna().max()
             if pd.notna(col_max):
                 data_max = max(data_max, float(col_max))
