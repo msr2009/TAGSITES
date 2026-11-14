@@ -34,7 +34,7 @@
 #ts_plot_div {
   display: block;
   width: 100%;
-  min-height: 760px;  /* actual height is set inline by tagsites.js (content-driven panes) */
+  /* height is set inline by tagsites.js (fitted to the window) */
   cursor: crosshair;
   user-select: none;
 }
@@ -109,7 +109,7 @@
 #ts-viewer-container {
   width: 100%;
   flex: 1;          /* fill remaining height after color-by buttons */
-  min-height: 420px;
+  min-height: 315px;
   position: relative;
   background: #ffffff;
   border: 1px solid #ddd;
@@ -489,7 +489,7 @@
   position: relative;
   width: 100%;
   flex: 1;          /* grow to fill .ts-main-left after the toolbar */
-  min-height: 760px;
+  min-height: 0;
 }
 
 

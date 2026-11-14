@@ -100,14 +100,19 @@
   var LEGEND_FONT  = "12px sans-serif";
   var PANEL_GAP    = 8;    // gap between panels
 
-  // The line, annotations, and isoform panes are content-driven with minimum heights;
-  // only the legend/score/sequence rows above have fixed heights.
-  var MIN_LINE_H   = 80;   // line panel minimum (continuous tracks)
-  var LINE_TRACK_H = 40;   // notional per-track height, scales the line panel with track count
-  var MIN_FEAT_H   = 120;  // annotations panel minimum (range features)
-  var FEAT_ROW_H   = 42;   // per-active-row height inside the annotations panel
-  var ISO_ROW_H    = 26;   // per-isoform row height inside the isoform pane
-  var ISO_PAD      = 10;   // top+bottom padding inside the isoform pane
+  // The line, annotations, and isoform panes are content-driven and scale with the window:
+  // each sizing knob runs from a compact value (small laptop) to a full value (large monitor),
+  // interpolated by one shared factor. Legend/score/sequence rows and pane titles stay fixed.
+  var PANE_SIZES = {
+    lineMin:   { lo: 60, hi: 80 },   // line panel minimum (continuous tracks)
+    lineTrack: { lo: 24, hi: 40 },   // notional per-track height of the line panel
+    featMin:   { lo: 96, hi: 120 },  // annotations panel minimum (range features)
+    featRow:   { lo: 32, hi: 42 },   // per-active-row height inside the annotations panel
+    isoRow:    { lo: 18, hi: 26 },   // per-isoform row height inside the isoform pane
+  };
+  var MAX_PLOT_H   = 760;  // tallest the canvas grows; extra over the full layout goes to the line panel
+  var WINDOW_MARGIN = 12;  // space kept free below the sites row when fitting to the window
+  var ISO_PAD      = 8;    // top+bottom padding inside the isoform pane
   var PANE_LABEL_H = 18;   // space reserved above each dynamic pane for its title
 
   /* ── ClustalX residue text colors ──────────────────────────────────────────── */
@@ -241,22 +246,69 @@
   // the legend band, score row, and sequence strip stay fixed. If the canvas is taller
   // than the sum of natural heights, the line panel absorbs the extra space so the
   // canvas is never under-filled.
+  // Dynamic pane heights at interpolation factor t (0 = compact, 1 = full).
+  function paneHeights(t) {
+    function k(name) { var s = PANE_SIZES[name]; return s.lo + t * (s.hi - s.lo); }
+    var showIso = isoIsoforms.length > 1 || isoHidden > 0;
+    return {
+      lineH: Math.max(k("lineMin"), lineTracks.length * k("lineTrack")),
+      featH: Math.max(k("featMin"), activeFeatRows().length * k("featRow")),
+      isoH:  showIso ? isoIsoforms.length * k("isoRow") + ISO_PAD : 0,
+    };
+  }
+
+  // Fixed (non-scaling) height: margins, pane titles, legend, score, sequence, gaps.
+  function fixedPlotHeight(legendH, hasIso) {
+    // 5 gaps: line→legend, legend→feat, feat→iso (if present), iso/feat→score, score→seq
+    var nGaps = hasIso ? 5 : 4;
+    // each dynamic pane (line/feat/iso) reserves PANE_LABEL_H above it for its title
+    var nLabels = 2 + (hasIso ? 1 : 0);
+    return TOP_GUTTER + PANE_LABEL_H * nLabels + legendH + SCORE_H + SEQ_H + PANEL_GAP * nGaps;
+  }
+
+  // Natural canvas heights at the compact (min) and full (base) pane sizes.
+  function plotHeightBounds() {
+    var canvasEl = document.getElementById("ts_plot_div");
+    var cssW = canvasEl && canvasEl.clientWidth > 0 ? canvasEl.clientWidth : 800;
+    var legendH = legendLayout(Math.max(cssW - LEFT_GUTTER - RIGHT_GUTTER, 1)).rows * LEGEND_ROW_H;
+    var lo = paneHeights(0), hi = paneHeights(1);
+    var fixed = fixedPlotHeight(legendH, lo.isoH > 0);
+    return {
+      min:  fixed + lo.lineH + lo.featH + lo.isoH,
+      base: fixed + hi.lineH + hi.featH + hi.isoH,
+    };
+  }
+
+  // Canvas height that fits plot + sites row in the window, clamped to [min, max].
+  function targetPlotHeight(canvasEl) {
+    var b = plotHeightBounds();
+    var maxH = Math.max(b.base, MAX_PLOT_H);
+    // hidden tab: no geometry to measure; the next visible render corrects it
+    if (!canvasEl || canvasEl.offsetParent === null) return maxH;
+    // page-relative top, so scrolling never changes the result
+    var top = canvasEl.getBoundingClientRect().top + window.scrollY;
+    var sitesRow = document.querySelector(".ts-sites-row");
+    var below = sitesRow ? sitesRow.offsetHeight : 0;
+    var avail = window.innerHeight - top - below - WINDOW_MARGIN;
+    return Math.round(Math.min(Math.max(avail, b.min), maxH));
+  }
+
   function getPanelLayout(cssH) {
     var canvasEl = document.getElementById("ts_plot_div");
     var cssW = canvasEl && canvasEl.clientWidth > 0 ? canvasEl.clientWidth : 800;
     var legend = legendLayout(Math.max(cssW - LEFT_GUTTER - RIGHT_GUTTER, 1));
     var legendH = legend.rows * LEGEND_ROW_H;
-    var lineH = Math.max(MIN_LINE_H, lineTracks.length * LINE_TRACK_H);
-    var featH = Math.max(MIN_FEAT_H, activeFeatRows().length * FEAT_ROW_H);
-    var isoH  = (isoIsoforms.length > 1 || isoHidden > 0)
-      ? isoIsoforms.length * ISO_ROW_H + ISO_PAD : 0;
+    var lo = paneHeights(0), hi = paneHeights(1);
+    var fixed = fixedPlotHeight(legendH, lo.isoH > 0);
+    var minTotal  = fixed + lo.lineH + lo.featH + lo.isoH;
+    var baseTotal = fixed + hi.lineH + hi.featH + hi.isoH;
+    // shared interpolation factor from the canvas height: compact at/below min, full at/above base
+    var t = baseTotal > minTotal ? (cssH - minTotal) / (baseTotal - minTotal) : 1;
+    t = Math.min(Math.max(t, 0), 1);
+    var p = paneHeights(t);
+    var lineH = p.lineH, featH = p.featH, isoH = p.isoH;
 
-    // 5 gaps: line→legend, legend→feat, feat→iso (if present), iso/feat→score, score→seq
-    var nGaps = isoH > 0 ? 5 : 4;
-    // each dynamic pane (line/feat/iso) reserves PANE_LABEL_H above it for its title
-    var nLabels = 2 + (isoH > 0 ? 1 : 0);
-    var naturalTotal = TOP_GUTTER + PANE_LABEL_H * nLabels + lineH + legendH + featH + isoH
-      + SCORE_H + SEQ_H + PANEL_GAP * nGaps;
+    var naturalTotal = fixed + lineH + featH + isoH;
     var slack = Math.max(cssH - naturalTotal, 0);
     lineH += slack;  // give any leftover canvas height to the line panel
 
@@ -304,12 +356,11 @@
   }
 
   function render() {
-    // set the canvas's CSS height to fit its content-driven panes before measuring —
-    // getPanelLayout(0) reports the natural total height with zero slack.
+    // set the canvas's CSS height to fit the window (between compact and full pane sizes)
+    // before measuring; getPanelLayout then derives pane heights from that height.
     var canvasEl = document.getElementById("ts_plot_div");
     if (canvasEl) {
-      var naturalH = getPanelLayout(0).naturalTotal;
-      canvasEl.style.height = naturalH + "px";
+      canvasEl.style.height = targetPlotHeight(canvasEl) + "px";
     }
 
     var inf = getCanvasInfo();
@@ -1258,7 +1309,31 @@
     });
   }
 
-  window.addEventListener("resize", function () { render(); });
+  // re-fit to the window on resize, at most once per animation frame
+  var resizePending = false;
+  window.addEventListener("resize", function () {
+    if (resizePending) return;
+    resizePending = true;
+    requestAnimationFrame(function () { resizePending = false; render(); });
+  });
+
+  // re-fit when the plot becomes visible (tab switch: width 0 → full); width only, so the
+  // canvas's own height changes never re-trigger it
+  if (window.ResizeObserver) {
+    var plotWrapW = -1;
+    var plotWrapObserver = new ResizeObserver(function (entries) {
+      var w = Math.round(entries[0].contentRect.width);
+      if (w === plotWrapW) return;
+      plotWrapW = w;
+      if (w > 0) render();
+    });
+    var observePlotWrap = function () {
+      var wrap = document.getElementById("ts-plot-wrap");
+      if (wrap) plotWrapObserver.observe(wrap);
+      else setTimeout(observePlotWrap, 250);  // UI not built yet
+    };
+    observePlotWrap();
+  }
 
   /* ── 3Dmol viewer ──────────────────────────────────────────────────────────── */
 
