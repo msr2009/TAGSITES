@@ -61,7 +61,11 @@ scripts/                # core analysis executables
                               # requests; used by ebi_rest.py and the genomic-fetch clients
   ebi_health.py               # ~1 s EBI probe (GET /parameters + empty POST /run, no job
                               # created) -> ok/slow/degraded/blocked/down; CLI exits 1 when
-                              # unusable. App banner off (config.EBI_HEALTH_BANNER = False)
+                              # unusable. App banner off unless TAGSITES_EBI_BANNER=1.
+                              # EBI answers "temporarily blocked" to placeholder emails
+                              # (example.org/.com): the POST runs only with a real email
+                              # (Setup's Email field, else TAGSITES_EBI_PROBE_EMAIL / --email),
+                              # cached per email
   fetch_genomic_sequence.py   # genomic-sequence auto-fetch: ncbi_rest.py -> ucsc_rest.py ->
                               # ensembl_rest.py, first success wins (ensembl.config.json sources)
   cds_check.py                # gene-model gate: translates the model's CDS and compares it to

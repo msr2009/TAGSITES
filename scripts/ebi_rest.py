@@ -52,7 +52,13 @@ def submit(base_url, params):
         body = getattr(exc.response, "text", "") or ""
         desc = ebi_health.error_description(body)
         if ebi_health.is_block_message(body):
-            ebi_health.note("blocked", desc)
+            # EBI gives a placeholder email (example.org, ...) the same refusal: that is
+            # the submitter's address, not a fair-use block on the server
+            if ebi_health._usable_email(params.get("email")) is None:
+                desc += (" (EBI sends this for placeholder addresses such as example.org;"
+                         " enter a real email address)")
+            else:
+                ebi_health.note("blocked", desc, email=params.get("email"))
         if desc:
             raise requests.exceptions.HTTPError(
                 f"{exc} — EBI says: {desc}", response=exc.response) from exc

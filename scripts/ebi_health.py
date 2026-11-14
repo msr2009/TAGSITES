@@ -4,8 +4,14 @@ Two probes, both free of fair-use cost (neither creates a job), ~1 s in total:
   1. GET {service}/parameters for every service the app uses: reachability + latency.
   2. POST an EMPTY form to clustalo/run. EBI rejects it either way, but the reason
      tells the two cases apart: a validation error means submissions are accepted,
-     "temporarily blocked from submitting" means this host's IP is under EBI's
-     fair-use block (seen 2026-11-14: every service refused, HTTP 400).
+     "temporarily blocked from submitting" means EBI refuses this submitter.
+
+The empty POST needs a REAL email (TAGSITES_EBI_PROBE_EMAIL, or --email on the CLI);
+without one it is skipped and only the GET probes and real-job observations count.
+EBI answers "temporarily blocked" to any reserved placeholder domain (example.org,
+example.com, ...) whatever the IP, so a placeholder probe email reports a block that
+does not exist. That false positive was shipped on 2026-11-14; such addresses are
+now refused here (_usable_email).
 
 check() caches its verdict process-wide, so every Shiny session shares one probe
 per TTL. ebi_rest also calls note() when a real job hits trouble (a submission
@@ -27,6 +33,7 @@ CLI:  python scripts/ebi_health.py   (exit 0 when ok/slow, 1 otherwise)
 
 import argparse
 import concurrent.futures
+import os
 import re
 import sys
 import threading
@@ -36,7 +43,22 @@ import requests
 
 REST = "https://www.ebi.ac.uk/Tools/services/rest"
 SERVICES = ("ncbiblast", "iprscan5", "clustalo", "genewise")
-PROBE_EMAIL = "tagsites-healthcheck@example.org"
+# reserved / placeholder domains EBI treats as blocked submitters (see docstring)
+_RESERVED_EMAIL = re.compile(
+    r"@(?:[^@]*\.)?(?:example\.(?:org|com|net)|invalid|test|localhost)$", re.IGNORECASE
+)
+
+
+def _usable_email(email):
+    """The email if it can probe EBI meaningfully, else None (missing or placeholder)."""
+    email = (email or "").strip()
+    if "@" not in email or _RESERVED_EMAIL.search(email):
+        return None
+    return email
+
+
+# submission-probe email; None disables the empty-POST test
+PROBE_EMAIL = _usable_email(os.environ.get("TAGSITES_EBI_PROBE_EMAIL"))
 
 TIMEOUT_S = 10  # per probe request
 SLOW_S = 4.0  # a /parameters call slower than this counts as sluggish
@@ -50,18 +72,22 @@ NOTE_WINDOW_S = 900  # job-time observations older than this are dropped
 _LEVEL_RANK = {"ok": 0, "slow": 1, "degraded": 2, "blocked": 3, "down": 4}
 
 _lock = threading.Lock()
-_cache = {"at": 0.0, "result": None}
+_cache = {"at": 0.0, "result": None}  # GET-probe verdict, shared by every email
 _notes = {}  # kind -> (time, detail)
-_submit = {"at": 0.0, "accepting": None, "detail": ""}  # last empty-POST outcome
+_submit = {}  # email -> {"at", "accepting", "detail"}: last empty-POST outcome per email
 
 
-def note(kind, detail=""):
+def note(kind, detail="", email=None):
     """Record a problem a real EBI job ran into (kind: 'blocked' or 'status_busy')."""
     with _lock:
         _notes[kind] = (time.time(), detail)
-        # a refused real job is a fresh submission test: no need to probe for it
-        if kind == "blocked":
-            _submit.update(at=time.time(), accepting=False, detail=detail)
+        # a refused real job is a fresh submission test for its email: no need to probe
+        if kind == "blocked" and _usable_email(email):
+            _submit[_usable_email(email)] = {
+                "at": time.time(),
+                "accepting": False,
+                "detail": detail,
+            }
         # a fresh observation makes the cached verdict stale
         _cache["at"] = 0.0
 
@@ -90,10 +116,10 @@ def _probe_parameters(service):
         return service, time.time() - t0, type(exc).__name__
 
 
-def _probe_submission():
+def _probe_submission(email):
     """(accepting, detail) from an empty POST to clustalo/run; accepting is None if unknown."""
     try:
-        r = requests.post(f"{REST}/clustalo/run", data={"email": PROBE_EMAIL}, timeout=TIMEOUT_S)
+        r = requests.post(f"{REST}/clustalo/run", data={"email": email}, timeout=TIMEOUT_S)
     except requests.RequestException as exc:
         return None, type(exc).__name__
     desc = error_description(r.text)
@@ -105,33 +131,25 @@ def _probe_submission():
     return None, f"HTTP {r.status_code}"
 
 
-def _submission_due(force):
-    """True when the empty-POST test should run now (see module docstring)."""
+def _submission_due(email, force):
+    """True when the empty-POST test for this email should run now (see module docstring)."""
     with _lock:
-        at, accepting = _submit["at"], _submit["accepting"]
-    since = time.time() - at
-    # never tested: always test once
-    if at == 0.0:
+        last = _submit.get(email)
+    # never tested with this email: test once
+    if last is None:
         return True
+    since = time.time() - last["at"]
     if since < SUBMIT_MIN_GAP_S:
         return False
     if force:
         return True
-    return since > (SUBMIT_TTL_BLOCKED_S if accepting is False else SUBMIT_TTL_S)
+    return since > (SUBMIT_TTL_BLOCKED_S if last["accepting"] is False else SUBMIT_TTL_S)
 
 
-def probe(test_submission=True):
-    """Run the GET probes (and the empty POST if asked) now; return the verdict dict."""
-    with concurrent.futures.ThreadPoolExecutor(len(SERVICES) + 1) as pool:
-        sub_future = pool.submit(_probe_submission) if test_submission else None
+def probe():
+    """Run the GET probes now (uncached); return the reachability verdict dict."""
+    with concurrent.futures.ThreadPoolExecutor(len(SERVICES)) as pool:
         params = list(pool.map(_probe_parameters, SERVICES))
-        # record a fresh submission test; otherwise reuse the last one
-        if sub_future is not None:
-            accepting, sub_detail = sub_future.result()
-            with _lock:
-                _submit.update(at=time.time(), accepting=accepting, detail=sub_detail)
-        with _lock:
-            accepting, sub_detail = _submit["accepting"], _submit["detail"]
 
     failed = [(s, err) for s, _, err in params if err]
     slow = [(s, dt) for s, dt, err in params if not err and dt > SLOW_S]
@@ -147,27 +165,33 @@ def probe(test_submission=True):
             + ")."
         )
     else:
-        if accepting is False:
-            level = "blocked"
-            problems.append(
-                "EBI is refusing new jobs from this server: "
-                + (sub_detail or "temporarily blocked")
-            )
         if failed:
-            level = max(level, "degraded", key=_LEVEL_RANK.get)
+            level = "degraded"
             problems.append("Not responding: " + ", ".join(f"{s} ({e})" for s, e in failed) + ".")
         if slow:
             level = max(level, "slow", key=_LEVEL_RANK.get)
             problems.append(
                 "Slow to respond: " + ", ".join(f"{s} ({dt:.1f} s)" for s, dt in slow) + "."
             )
-    return {
-        "level": level,
-        "problems": problems,
-        "latency_s": latency,
-        "accepting": accepting,
-        "checked_at": time.time(),
-    }
+    return {"level": level, "problems": problems, "latency_s": latency, "checked_at": time.time()}
+
+
+def _add_submission(result, email):
+    """Fold the email's last empty-POST outcome into a verdict (returns a new dict)."""
+    out = dict(result, problems=list(result["problems"]), accepting=None, email=email)
+    if email is None:
+        return out
+    with _lock:
+        last = dict(_submit.get(email) or {})
+    out["accepting"] = last.get("accepting")
+    if last.get("accepting") is False and out["level"] != "down":
+        out["level"] = "blocked"
+        out["problems"].insert(
+            0,
+            f"EBI is refusing new jobs for {email}: "
+            + (last.get("detail") or "temporarily blocked"),
+        )
+    return out
 
 
 def _merge_notes(result):
@@ -194,17 +218,28 @@ def _merge_notes(result):
     return out
 
 
-def check(force=False):
-    """Cached verdict: {'level', 'problems', 'latency_s', 'accepting', 'checked_at'}."""
+def check(force=False, email=None):
+    """Cached verdict: {'level', 'problems', 'latency_s', 'accepting', 'email', 'checked_at'}.
+
+    email: the submitter to test (e.g. the app's Email field); falls back to
+    TAGSITES_EBI_PROBE_EMAIL. Placeholder or missing -> the submission test is skipped
+    and 'accepting' is None.
+    """
+    email = _usable_email(email) or PROBE_EMAIL
     with _lock:
         cached, at = _cache["result"], _cache["at"]
     ttl = TTL_OK_S if cached and cached["level"] == "ok" else TTL_BAD_S
-    # re-probe when forced, never probed, or the cached verdict has expired
+    # re-run the GETs when forced, never probed, or the cached verdict has expired
     if force or cached is None or time.time() - at > ttl:
-        cached = probe(test_submission=_submission_due(force))
+        cached = probe()
         with _lock:
             _cache["result"], _cache["at"] = cached, time.time()
-    return _merge_notes(cached)
+    # the empty POST runs on its own, slower, per-email clock
+    if email and _submission_due(email, force):
+        accepting, detail = _probe_submission(email)
+        with _lock:
+            _submit[email] = {"at": time.time(), "accepting": accepting, "detail": detail}
+    return _merge_notes(_add_submission(cached, email))
 
 
 def summary(result):
@@ -213,7 +248,7 @@ def summary(result):
         "ok": "EBI services are working normally.",
         "slow": "EBI services are responding slowly; analyses may take longer than usual.",
         "degraded": "EBI services are partly impaired; some analyses may fail or stall.",
-        "blocked": "EBI is not accepting new jobs from this server; EBI-backed "
+        "blocked": "EBI is not accepting new jobs; EBI-backed "
         "analyses (BLAST, InterPro, Clustal Omega, Genewise) will fail.",
         "down": "EBI services are unreachable; EBI-backed analyses will fail.",
     }[result["level"]]
@@ -222,12 +257,26 @@ def summary(result):
 
 def main():
     """CLI: print the verdict and exit non-zero when EBI is not usable."""
-    argparse.ArgumentParser(description=__doc__.splitlines()[0]).parse_args()
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument(
+        "--email",
+        help="real email for the submission probe "
+        "(default: TAGSITES_EBI_PROBE_EMAIL; omitted -> probe skipped)",
+    )
+    args = ap.parse_args()
+    # a placeholder would report a false block: refuse it instead of probing
+    if args.email and _usable_email(args.email) is None:
+        ap.error(f"{args.email!r} is a placeholder address; EBI answers it as blocked")
     t0 = time.time()
-    res = check(force=True)
+    res = check(force=True, email=args.email)
     print(f"[{res['level'].upper()}] {summary(res)}")
     for p in res["problems"]:
         print(f"  - {p}")
+    if res["email"] is None:
+        print("  submission test skipped: no real email (pass --email to run it)")
+    else:
+        verdict = {True: "accepted", False: "refused"}.get(res["accepting"], "unknown")
+        print(f"  submissions for {res['email']}: {verdict}")
     lat = res["latency_s"]
     print(
         f"  probe took {time.time() - t0:.1f} s"

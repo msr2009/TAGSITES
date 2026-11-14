@@ -5,6 +5,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 import zipfile
 from pathlib import Path
 
@@ -131,21 +132,43 @@ def app_server(input, output, session):
         # banner does not re-render (and un-dismiss) on every poll
         ebi_state = reactive.Value(None)
 
+        # the Setup module's inputs ("setup-email" is not a valid id at the root scope)
+        _setup_input = session.make_scope("setup").input
+
+        def _setup_email():
+            """The Setup tab's Email field (also filled from a loaded run JSON), or ''."""
+            with reactive.isolate():
+                return _setup_input["email"]() if "email" in _setup_input else ""
+
         async def _refresh_ebi(force=False):
             """Fetch the (process-wide cached) EBI verdict off the event loop."""
             try:
-                res = await asyncio.to_thread(ebi_health.check, force)
+                res = await asyncio.to_thread(ebi_health.check, force, _setup_email())
             except Exception:
                 return
             old = ebi_state.get()
-            # skip no-op updates: same level and same problem list
-            if old is None or (old["level"], old["problems"]) != (res["level"], res["problems"]):
+            # skip no-op updates: same level, problems and submission result
+            key = ("level", "problems", "accepting", "email")
+            if old is None or [old.get(k) for k in key] != [res.get(k) for k in key]:
                 ebi_state.set(res)
 
         @reactive.effect
         async def _poll_ebi():
             """Re-read the EBI verdict every minute (network only when the cache expires)."""
             reactive.invalidate_later(60)
+            await _refresh_ebi()
+
+        @reactive.effect
+        async def _ebi_email_changed():
+            """Test submissions once a real email is entered (debounced against typing)."""
+            email = _setup_input["email"]() if "email" in _setup_input else ""
+            # placeholder or half-typed: nothing to test yet
+            if not ebi_health._usable_email(email) or "." not in email.split("@")[-1]:
+                return
+            await asyncio.sleep(1.5)
+            # still typing: a later run of this effect handles the final address
+            if _setup_email() != email:
+                return
             await _refresh_ebi()
 
         @reactive.effect
@@ -161,8 +184,25 @@ def app_server(input, output, session):
         def ebi_banner():
             """Warning strip above the tabs while EBI is slow, impaired, blocking or down."""
             res = ebi_state.get()
-            if not res or res["level"] == "ok":
+            if not res:
                 return ui.span()
+            # green strip for a healthy EBI (the banner is opt-in, so showing OK is wanted)
+            if res["level"] == "ok":
+                lat = res.get("latency_s")
+                checked = time.strftime("%H:%M:%S", time.localtime(res["checked_at"]))
+                return ui.div(
+                    ui.tags.strong("✓ " + ebi_health.summary(res)),
+                    (f" Accepting jobs for {res['email']}: "
+                     f"{({True: 'yes', False: 'no'}).get(res.get('accepting'), 'unknown')}"
+                     if res.get("email") else
+                     " Job submission not tested yet (enter an email in Setup).")
+                    + (f" · slowest service {lat:.2f} s" if lat is not None else "")
+                    + f" · checked {checked} ",
+                    ui.input_action_button("ebi_recheck", "Check again",
+                                           class_="btn-sm btn-outline-secondary"),
+                    class_="alert alert-success",
+                    style="margin:6px 0;padding:8px 12px;font-size:0.9em;",
+                )
             cls = "alert-info" if res["level"] == "slow" else (
                 "alert-warning" if res["level"] == "degraded" else "alert-danger")
             return ui.div(

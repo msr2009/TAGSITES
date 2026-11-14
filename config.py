@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 import sys
 
@@ -82,9 +83,11 @@ SECONDARY_STRUCTURE_COLORS = {
 # may carry either or both; see utils/results.py and utils/tag_filters.py
 TOPOLOGY_SOURCES = ("Phobius", "DeepTMHMM")
 
-# EBI health banner above the main tabs (scripts/ebi_health.py). Off: the app never
-# probes EBI on its own; the check stays available as `python scripts/ebi_health.py`
-EBI_HEALTH_BANNER = False
+# EBI health banner above the main tabs (scripts/ebi_health.py). Off by default: the
+# app never probes EBI on its own; the check stays available as
+# `python scripts/ebi_health.py`. TAGSITES_EBI_BANNER=1 turns it on for one launch
+# (local use; shinyapps.io never sets it)
+EBI_HEALTH_BANNER = os.environ.get("TAGSITES_EBI_BANNER") == "1"
 
 # isoform classification colors (constitutive → green, intermediate → amber, unique → red)
 ISOFORM_CLASS_COLORS = {
