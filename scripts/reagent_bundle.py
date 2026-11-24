@@ -249,8 +249,8 @@ def oligos_tsv(rows, names, repair, insert, opts):
             if opts["pcr_rev_ext"]:
                 rev = opts["pcr_rev_ext"] + rev
             notes = "fallback=True" if meta["used_fallback"] else ""
-            lines.append("{}_F\t{}\t{}".format(base, fwd, notes))
-            lines.append("{}_R\t{}\t{}".format(base, rev, notes))
+            lines.append("{}_amp_F\t{}\t{}".format(base, fwd, notes))
+            lines.append("{}_amp_R\t{}\t{}".format(base, rev, notes))
     return "\n".join(lines) + "\n" if len(lines) > 1 else None
 
 
@@ -273,27 +273,57 @@ def saptrap_tsv(rows, names, arm_len, opts):
     return tsv_text, gb_pairs
 
 
-def genotyping_tsv(results, df):
-    """[name]_genotyping-primers.tsv from {residue: {amplicon_type: primer dict}}, or None."""
+# genotyping pair -> short label used in primer names and displays, in display order
+GENO_LABELS = {"external": "gt-ext", "5p_junction": "gt-5j", "3p_junction": "gt-3j"}
+GENO_TITLES = {"external": "External (spans insert)", "5p_junction": "5′ junction",
+               "3p_junction": "3′ junction"}
+
+
+def genotyping_primer_lines(primers, stem):
+    """One dict per primer ({stem}_{pair}_{F|R}) with a note where a sequence is reused."""
+    lines = []
+    for atype, label in GENO_LABELS.items():
+        p = (primers or {}).get(atype)
+        if not p:
+            continue
+        for side, key in (("F", "fwd"), ("R", "rev")):
+            lines.append({
+                "name": "{}_{}_{}".format(stem, label, side), "pair": atype, "side": side,
+                "sequence": p[key + "_seq"], "tm": float(p[key + "_tm"]),
+                "product_size": int(p["product_size"]), "note": "",
+            })
+    # group identical sequences so each reused primer names the others that share it
+    by_seq = {}
+    for line in lines:
+        by_seq.setdefault(line["sequence"], []).append(line["name"])
+    for line in lines:
+        others = [n for n in by_seq[line["sequence"]] if n != line["name"]]
+        # a note only where the same oligo would be ordered twice
+        if others:
+            line["note"] = "duplicate: same sequence as " + ", ".join(others)
+    return lines
+
+
+def genotyping_tsv(results, df, names, rows):
+    """[name]_genotyping-primers.tsv, one primer per line, from {residue: {pair: primer}}."""
     if not results:
         return None
-    lines = ["residue_index\tamino_acid\tamplicon_type\tfwd_seq\tfwd_tm\trev_seq\trev_tm"
-             "\tproduct_size"]
+    lines = ["name\tsequence\tpair\ttm\tproduct_size\tguides\tnotes"]
     for rid in sorted(results):
-        primers = results[rid]
-        if not primers:
+        if not results[rid]:
             continue
         aa = ""
         if df is not None:
             match = df[df["residue_index"] == rid]
             if not match.empty:
                 aa = str(match.iloc[0]["amino_acid"])
-        for amplicon_type, p in primers.items():
-            lines.append("{}\t{}\t{}\t{}\t{:.2f}\t{}\t{:.2f}\t{}".format(
-                rid, aa, amplicon_type,
-                p["fwd_seq"], p["fwd_tm"], p["rev_seq"], p["rev_tm"],
-                int(p["product_size"]),
-            ))
+        site = {"amino_acid": aa, "residue_index": rid}
+        # guides of this site, so each primer line points at the guide(s) it goes with
+        guides = ",".join(names["guide"](r) for r, _, _ in rows if int(r["residue_index"]) == rid)
+        for ln in genotyping_primer_lines(results[rid], names["arm"](site)):
+            lines.append("{}\t{}\t{}\t{:.2f}\t{}\t{}\t{}".format(
+                ln["name"], ln["sequence"], ln["pair"], ln["tm"],
+                ln["product_size"], guides, ln["note"]))
     return "\n".join(lines) + "\n" if len(lines) > 1 else None
 
 
@@ -363,7 +393,7 @@ def build_files(rows, names, repair, insert, tag, arm_len, opts=None, genotyping
     zn = names["zip"]
     files = [("{}_homology-arms.tsv".format(zn), ha_tsv(rows, names)),
              ("{}_guides.tsv".format(zn), guides_tsv(rows, names))]
-    geno = genotyping_tsv(genotyping, df)
+    geno = genotyping_tsv(genotyping, df, names, rows)
     if geno:
         files.append(("{}_genotyping-primers.tsv".format(zn), geno))
     # plasmid mode gets SapTrap oligos; ssODN/amplicon get repair oligos

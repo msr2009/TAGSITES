@@ -903,7 +903,9 @@ def reagents_server(input, output, session, shared_json, shared_sites):
 
             guide_divs = _build_guide_divs(site_rows, rid, content, recut)
             genotyping_div = _build_genotyping_div(
-                genotyping_results.get().get(rid), len(_insert_seq())
+                genotyping_results.get().get(rid), len(_insert_seq()),
+                RB.single_names(run_name.get() or 'run', _insert_tag_name())["arm"](
+                    {"amino_acid": aa, "residue_index": rid}),
             )
 
             panels.append(
@@ -977,12 +979,6 @@ def reagents_server(input, output, session, shared_json, shared_sites):
         parts.append('</code>')
         return ''.join(parts)
 
-    _AMPLICON_LABELS = {
-        "external": "External (spans insert)",
-        "5p_junction": "5′ junction",
-        "3p_junction": "3′ junction",
-    }
-
     def _amplicon_warning(amps):
         """Warn that a primer pair is predicted to amplify a duplicated locus too."""
         if not amps:
@@ -997,44 +993,46 @@ def reagents_server(input, output, session, shared_json, shared_sites):
             class_="ts-warn",
         )
 
-    def _build_genotyping_div(primers, insert_len):
-        """Site-level genotyping-primer display; empty span if none designed yet.
+    def _build_genotyping_div(primers, insert_len, stem):
+        """Site-level genotyping-primer display, one primer per line; empty span if none.
 
-        The external pair binds outside the insert on both sides, so the same
-        primers amplify a shorter product on the WT allele (no insert) than on
-        the edited allele — showing both sizes is the whole point of a
-        genotyping PCR (band-size shift confirms the insertion).  Junction
-        pairs have no WT equivalent (the internal primer doesn't exist in WT
-        template), so only product size is shown for those.
+        Each primer is named {stem}_{pair}_{F|R}; a sequence shared by two pairs is
+        flagged on every line that uses it. The external pair binds outside the insert,
+        so it gives a WT and an edited product size; junction pairs only exist on the
+        edited allele.
         """
         if not primers:
             return ui.span()
+        lines = RB.genotyping_primer_lines(primers, stem)
         rows = []
-        for amplicon_type in ("external", "5p_junction", "3p_junction"):
-            p = primers.get(amplicon_type)
+        for ln in lines:
+            # flat label/value siblings, matching the param-grid 2-column pattern
+            rows.append(ui.div(ln["name"], class_="param-label"))
+            rows.append(ui.div(
+                ui.tags.code(ln["sequence"]),
+                ui.span(" Tm {:.1f}".format(ln["tm"]), style="color:#6c757d"),
+                # amber (the .ts-warn text color) marks a primer shared with another pair
+                ui.span(" — same as " + ln["note"].split("same sequence as ")[1],
+                        style="color:#856404;") if ln["note"] else ui.span(),
+                class_="param-value",
+            ))
+        # per-pair product sizes and spurious-product warnings, once per pair
+        for atype in RB.GENO_LABELS:
+            p = primers.get(atype)
             if not p:
                 continue
-            if amplicon_type == "external":
-                wt_size = int(p["product_size"]) - insert_len
-                size_text = "{} bp (WT) vs. {} bp (+insert)".format(wt_size, int(p["product_size"]))
+            size = int(p["product_size"])
+            if atype == "external":
+                size_text = "{} bp (WT) vs. {} bp (+insert)".format(size - insert_len, size)
             else:
-                size_text = "{} bp".format(int(p["product_size"]))
-            # flat label/value siblings — matches the param-grid 2-column pattern
-            # used by meta_cells in _build_guide_divs (a wrapping div per pair
-            # would collapse into a single grid cell instead of two columns).
-            rows.append(ui.div(_AMPLICON_LABELS[amplicon_type], class_="param-label"))
+                size_text = "{} bp".format(size)
+            rows.append(ui.div(RB.GENO_TITLES[atype], class_="param-label"))
             rows.append(ui.div(
-                ui.tags.code("F: {} (Tm {:.1f})".format(p["fwd_seq"], p["fwd_tm"])),
-                ui.br(),
-                ui.tags.code("R: {} (Tm {:.1f})".format(p["rev_seq"], p["rev_tm"])),
-                ui.span(" — product: " + size_text, style="color:#6c757d"),
-                # A spurious product needs BOTH primers in one duplicated locus, so this
-                # fires only on a predicted amplicon, not on a lone primer in a repeat
+                ui.span("product: " + size_text, style="color:#6c757d"),
+                # a spurious product needs BOTH primers in one duplicated locus
                 _amplicon_warning(p.get("offtarget_amplicons") or []),
                 class_="param-value",
             ))
-        if not rows:
-            return ui.span()
         return ui.div(
             ui.div("Genotyping primers", class_="fw-semibold", style="margin-bottom:0.3rem;"),
             ui.div(*rows, class_="param-grid"),
