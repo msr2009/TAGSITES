@@ -19,9 +19,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 from reagent_sequences import (
     annotate_region_spans,
     ascii_diagram,
+    build_custom_pcr_primers,
     check_recut_risk,
     design_genotyping_primers,
     design_pcr_primers,
+    strip_phos,
     truncate_arms,
     truncate_arms_with_tolerance,
 )
@@ -324,11 +326,35 @@ def reagents_server(input, output, session, shared_json, shared_sites):
 
     # ── arm length validation ─────────────────────────────────────────────────
 
+    def _effective_arm_len():
+        """The arm length in force for the current repair type.
+
+        Amplicon takes its arm length from its own Basic/Advanced tabs (the
+        card's box is hidden for it); in Advanced the two primers can differ, so
+        the longer governs what is truncated and written, and each oligo then
+        takes its own. Every other repair type uses the card's box.
+        """
+        try:
+            repair = input.repair_type()
+        except Exception:
+            repair = ""
+        if repair == "amplicon":
+            if _pcr_mode() == "advanced":
+                try:
+                    return max(int(input.pcr_fwd_arm()), int(input.pcr_rev_arm()))
+                except Exception:
+                    pass
+            try:
+                return int(input.pcr_arm())
+            except Exception:
+                pass
+        return int(input.arm_length())
+
     @reactive.calc
     def _arm_ok():
-        """True when the requested arm_length <= stored arm length."""
+        """True when the requested arm length <= stored arm length."""
         try:
-            return int(input.arm_length()) <= stored_arm_len.get()
+            return _effective_arm_len() <= stored_arm_len.get()
         except Exception:
             return False
 
@@ -413,15 +439,19 @@ def reagents_server(input, output, session, shared_json, shared_sites):
 
         Cached per (sites_df, arm_length, repair_type) — does not re-run on
         checkbox changes. Returns dict {guide_id: {left, right, diagram,
-        used_fallback}} or {} on error. used_fallback reflects whichever
-        primer-design path applies to the current repair_type (amplicon or
-        SapTrap long-arm); False for repair types with no primer3 step.
+        used_fallback, custom_primers}} or {} on error. used_fallback reflects
+        whichever primer-design path applies to the current repair_type
+        (amplicon or SapTrap long-arm); False for repair types with no primer3
+        step, including advanced amplicon mode, which designs nothing.
+        custom_primers carries the supplied-primer oligos in that mode, since
+        their per-side arms differ from the tab's single arm length; None
+        otherwise.
         """
         df = sites_df()
         if df is None or not _arm_ok():
             return {}
         try:
-            arm_len = int(input.arm_length())
+            arm_len = _effective_arm_len()
         except Exception:
             return {}
         try:
@@ -447,6 +477,7 @@ def reagents_server(input, output, session, shared_json, shared_sites):
             gid = str(row["guide_id"])
             used_fallback = False
             primer_tm = None   # Tm target (°C) of the primer-design path in use
+            custom_primers = None   # advanced amplicon mode: the supplied-primer oligos
             try:
                 wt_left_src, wt_right_src, wt_is_true = _wt_arms_for_row(row)
 
@@ -468,7 +499,27 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                                      insert_seq=insert if repair == "ssodn" else None,
                                      wt_is_true=wt_is_true)
 
-                if repair == "amplicon" and insert:
+                if repair == "amplicon" and insert and _pcr_mode() == "advanced":
+                    # the supplied primers are used as given; arms come off the
+                    # stored arms so each side can exceed the tab's arm length
+                    opts = _bundle_opts()
+                    if opts["pcr_fwd_primer"] and opts["pcr_rev_primer"]:
+                        (_, fwd_seq), (_, rev_seq), custom_meta = build_custom_pcr_primers(
+                            str(row["left_arm"]), str(row["right_arm"]),
+                            opts["pcr_fwd_primer"], opts["pcr_rev_primer"],
+                            opts["pcr_fwd_arm"], opts["pcr_rev_arm"],
+                            opts["pcr_fwd_phos"], opts["pcr_rev_phos"],
+                            left_arm_wt=wt_left_src if wt_is_true else None,
+                            right_arm_wt=wt_right_src if wt_is_true else None,
+                        )
+                        custom_primers = {
+                            "fwd": RB.prepend_ext(fwd_seq, opts["pcr_fwd_ext"]),
+                            "rev": RB.prepend_ext(rev_seq, opts["pcr_rev_ext"]),
+                            "fwd_arm": custom_meta["fwd_arm"],
+                            "rev_arm": custom_meta["rev_arm"],
+                            "arm_extended": custom_meta["arm_extended"],
+                        }
+                elif repair == "amplicon" and insert:
                     tm = 60.0
                     try:
                         tm = float(input.pcr_tm())
@@ -509,6 +560,7 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                 "left": left, "right": right, "diagram": diag,
                 "left_bp": len(left), "right_bp": len(right), "arm_len": arm_len,
                 "used_fallback": used_fallback, "primer_tm": primer_tm,
+                "custom_primers": custom_primers,
             }
         return result
 
@@ -726,6 +778,24 @@ def reagents_server(input, output, session, shared_json, shared_sites):
         )
 
     @render.ui
+    def arm_length_box_style():
+        """Hide the card's arm-length box for amplicon.
+
+        Emitted as CSS rather than by re-rendering the input: an input_numeric
+        rebuilt from @render.ui loses its current value, and every other repair
+        type reads it. Keyed on the wrapper's class, not an id — Shiny namespaces
+        only input/output ids, so a plain ui.div(id=...) inside a module renders
+        the bare id and a session.ns() selector would never match it.
+        """
+        try:
+            repair = input.repair_type()
+        except Exception:
+            repair = ""
+        if repair != "amplicon":
+            return ui.span()
+        return ui.tags.style(".arm-length-box { display: none; }")
+
+    @render.ui
     def repair_options():
         """Repair-type-specific options block rendered server-side."""
         repair = input.repair_type()
@@ -744,14 +814,55 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                     "dropdown above — it's used as the PCR template.",
                     class_="ts-warn",
                 ))
+            # Basic and Advanced are tabs of one navset, so the selected tab is the
+            # mode (input.pcr_mode) and switching tabs re-renders no inputs
+            children.append(ui.div(ui.navset_tab(
+                    ui.nav_panel(
+                        "Basic",
+                        ui.p("Both binding regions are designed from the template above.",
+                             class_="section-hint"),
+                        ui.input_numeric(
+                            "pcr_arm",
+                            label_with_tip(
+                                "Homology arm length (bp)",
+                                "Arm added to both primers, and the arm length written "
+                                "to the homology-arm TSV. An arm is extended past this "
+                                "length when a recut-blocking mutation sits farther out.",
+                            ),
+                            value=_ARM_DEFAULTS.get("amplicon", 45), min=10, max=2000,
+                        ),
+                        ui.input_numeric("pcr_tm", "Primer binding Tm target (°C)",
+                                         value=60, min=40, max=80),
+                        ui.input_checkbox(
+                            "pcr_phos",
+                            "5′ phosphorylate one primer (lambda-exo single-strand "
+                            "degradation)",
+                            value=False,
+                        ),
+                        value="basic",
+                    ),
+                    ui.nav_panel(
+                        "Advanced",
+                        ui.p("Each primer is used as given and its homology arm is sized "
+                             "on its own, so two primers of different length can still be "
+                             "ordered at one total length. Both are checked against the "
+                             "template.", class_="section-hint"),
+                        ui.div(
+                            ui.div("", class_="pcr-head"),
+                            ui.div("Sequence (5′→3′)", class_="pcr-head"),
+                            ui.div("Homology arm length", class_="pcr-head"),
+                            ui.div("5′ phosphorylate?", class_="pcr-head"),
+                            *_pcr_primer_row("fwd", "Forward primer"),
+                            *_pcr_primer_row("rev", "Reverse primer"),
+                            class_="pcr-grid",
+                        ),
+                        ui.output_ui("pcr_binding_report"),
+                        value="advanced",
+                    ),
+                    id="pcr_mode",
+                    selected="basic",
+            ), class_="pcr-tabs"))
             children += [
-                ui.input_numeric("pcr_tm", "Primer binding Tm target (°C)",
-                                 value=60, min=40, max=80),
-                ui.input_checkbox(
-                    "pcr_phos",
-                    "5′ phosphorylate one primer (lambda-exo single-strand degradation)",
-                    value=False,
-                ),
                 ui.hr(style="margin: 0.5rem 0;"),
                 ui.p("Optional 5′ extensions (e.g. Gibson assembly overhangs, "
                      "restriction sites, SapI tails). Prepended to the arm overhang.",
@@ -817,6 +928,94 @@ def reagents_server(input, output, session, shared_json, shared_sites):
 
         return ui.span()   # ha: no extra options
 
+    def _pcr_primer_row(side, label):
+        """One grid row for a supplied primer: label, sequence, arm + live total, phos.
+
+        Returned as a tuple of four cells rather than a div, so the four columns
+        line up across both rows of the enclosing .pcr-grid. The column headers
+        carry the names, so the inputs themselves are label-less.
+        """
+        return (
+            ui.div(label, class_="pcr-row-label"),
+            ui.input_text(
+                "pcr_{}_primer".format(side), None, value="",
+                placeholder="anneals to the {} strand of the template".format(
+                    "top" if side == "fwd" else "bottom"),
+            ),
+            ui.div(
+                ui.input_numeric("pcr_{}_arm".format(side), None,
+                                 value=40, min=10, max=2000),
+                ui.output_ui("pcr_{}_total".format(side), inline=True),
+                class_="pcr-arm-cell",
+            ),
+            ui.div(ui.input_checkbox("pcr_{}_phos".format(side), None, value=False)),
+        )
+
+    def _pcr_total_text(side):
+        """'<n> nt total' beside one primer's arm-length box (arm + binding sequence)."""
+        opts = _bundle_opts()
+        primer = strip_phos(opts["pcr_{}_primer".format(side)])
+        arm = int(opts["pcr_{}_arm".format(side)] or 0)
+        if not primer:
+            return ui.span("{} bp arm".format(arm), class_="pcr-total")
+        return ui.span("{} nt total".format(arm + len(primer)), class_="pcr-total")
+
+    @render.ui
+    def pcr_fwd_total():
+        """Live total length beside the forward primer's arm-length box."""
+        return _pcr_total_text("fwd")
+
+    @render.ui
+    def pcr_rev_total():
+        """Live total length beside the reverse primer's arm-length box."""
+        return _pcr_total_text("rev")
+
+    @render.ui
+    def pcr_binding_report():
+        """Per-primer length arithmetic and template-binding verdict."""
+        opts = _bundle_opts()
+        insert = _insert_seq()
+        if not (opts["pcr_fwd_primer"] or opts["pcr_rev_primer"]):
+            return ui.div("Enter both primers to check them against the template.",
+                          class_="section-hint")
+        verdicts = RB.primer_verdicts(insert, opts) if insert else None
+        rows = []
+        for side, label in (("fwd", "Forward"), ("rev", "Reverse")):
+            primer = strip_phos(opts["pcr_{}_primer".format(side)])
+            if not primer:
+                rows.append(ui.div("✖ {} primer: no sequence entered.".format(label),
+                                   class_="ts-error"))
+                continue
+            if verdicts is None:
+                continue
+            verdict = verdicts[side]
+            if not verdict["found"]:
+                rows.append(ui.div("✖ {}: {}.".format(label, verdict["reason"]),
+                                   class_="ts-error"))
+                continue
+            where = "binds template {}–{} ({} strand), {} mismatch{}, Tm {:.1f} °C".format(
+                verdict["start"] + 1, verdict["end"], verdict["strand"],
+                verdict["mismatches"], "" if verdict["mismatches"] == 1 else "es",
+                verdict["tm"])
+            rows.append(ui.div(
+                "{} {}: {}.".format("✔" if verdict["acceptable"] else "✖", label, where),
+                class_="section-hint" if verdict["acceptable"] else "ts-err"))
+            if not verdict["acceptable"]:
+                rows.append(ui.div("   {}.".format(verdict["reason"]), class_="ts-error"))
+            if verdict["unmatched_5p"]:
+                rows.append(ui.div(
+                    "   {} nt 5′ tail not in the template (overhang).".format(
+                        verdict["unmatched_5p"]), class_="section-hint"))
+            if verdict["omitted_bases"]:
+                rows.append(ui.div(
+                    "⚠ {} primer binds {} nt inside the template — the amplicon omits "
+                    "those tag bases.".format(label, verdict["omitted_bases"]),
+                    class_="ts-warn"))
+        if insert is None or not insert:
+            rows.append(ui.div("⚠ No template to check against — set the insert sequence.",
+                               class_="ts-warn"))
+        return ui.div(*rows)
+
     @render.ui
     def ssodn_len_warning():
         """Warn if the total ssODN length exceeds the 200 nt IDT synthesis limit."""
@@ -840,7 +1039,7 @@ def reagents_server(input, output, session, shared_json, shared_sites):
         if _arm_ok():
             return ui.span()
         try:
-            arm_len = int(input.arm_length())
+            arm_len = _effective_arm_len()
         except Exception:
             arm_len = "?"
         return ui.div(
@@ -1099,6 +1298,23 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                 ) if cached.get("used_fallback", False) else ui.span()
             )
 
+            # advanced amplicon mode: show the two oligos as they will be ordered,
+            # since their arms differ from each other and from the tab's arm length
+            custom = cached.get("custom_primers")
+            if custom:
+                custom_primer_display = ui.div(
+                    ui.div("Supplied-primer oligos ({} bp 5′ arm / {} bp 3′ arm)".format(
+                        custom["fwd_arm"], custom["rev_arm"]), class_="section-hint"),
+                    ui.tags.pre("F  {}\nR  {}".format(custom["fwd"], custom["rev"]),
+                                style="font-size:0.72rem;white-space:pre-wrap;"
+                                      "word-break:break-all;margin:0.2rem 0;"),
+                    ui.div("⚠ An arm was extended past its requested length to keep a "
+                           "recut-blocking mutation, so the total exceeds the target.",
+                           class_="ts-warn") if custom["arm_extended"] else None,
+                )
+            else:
+                custom_primer_display = ui.span()
+
             # per-guide plasmid-specific warnings (shown inline in the guide card)
             plasmid_warnings = []
             try:
@@ -1180,6 +1396,7 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                 arm_clip_warning,
                 recut_warning,
                 primer_fallback_warning,
+                custom_primer_display,
                 arm_sapi_display,
                 diagram_content,
                 ui.div(*meta_cells, class_="param-grid mt-2"),
@@ -1228,7 +1445,23 @@ def reagents_server(input, output, session, shared_json, shared_sites):
         return divs
 
     def _download_buttons(loc):
-        """Single download button per location; produces a ZIP of all reagent files."""
+        """Download button per location, or the reasons the primers can't be used.
+
+        A supplied primer that does not anneal to the template is an input error,
+        not a score: the oligo table would be wrong, so the download is withheld
+        until it is fixed. Guide and site availability are untouched.
+        """
+        errors = _amplicon_errors()
+        if errors:
+            return ui.div(
+                ui.div(
+                    ui.tags.strong("Supplied PCR primers can't be used — no download."),
+                    *[ui.div(e) for e in errors],
+                    ui.div("Fix the primers above, or switch to Basic primer design.",
+                           class_="section-hint"),
+                    class_="ts-error",
+                ),
+            )
         return ui.div(
             ui.download_button(
                 "download_sequences_{}".format(loc),
@@ -1240,7 +1473,7 @@ def reagents_server(input, output, session, shared_json, shared_sites):
     def _selected_rows():
         """(row, left_arm, right_arm) for each selected guide, truncated to the arm length."""
         try:
-            arm_len = int(input.arm_length())
+            arm_len = _effective_arm_len()
         except Exception:
             return []
         try:
@@ -1262,6 +1495,21 @@ def reagents_server(input, output, session, shared_json, shared_sites):
             name = 'Custom'
         return RB.tag_label(name)
 
+    def _pcr_mode():
+        """'basic' or 'advanced' — the amplicon primer mode (basic when unset)."""
+        try:
+            return input.pcr_mode() or "basic"
+        except Exception:
+            return "basic"
+
+    def _amplicon_errors():
+        """Reasons the supplied amplicon primers can't be used ([] when they can)."""
+        try:
+            repair = input.repair_type()
+        except Exception:
+            return []
+        return RB.amplicon_errors(repair, _insert_seq(), _bundle_opts())
+
     def _bundle_opts():
         """The repair-specific inputs as reagent_bundle options (defaults where unset)."""
         opts = dict(RB.OPTION_DEFAULTS)
@@ -1270,6 +1518,14 @@ def reagents_server(input, output, session, shared_json, shared_sites):
             "pcr_phos": lambda: input.pcr_phos(),
             "pcr_fwd_ext": lambda: input.pcr_fwd_ext().strip().upper(),
             "pcr_rev_ext": lambda: input.pcr_rev_ext().strip().upper(),
+            "pcr_mode": _pcr_mode,
+            "pcr_arm": lambda: int(input.pcr_arm()),
+            "pcr_fwd_primer": lambda: input.pcr_fwd_primer().strip().upper(),
+            "pcr_rev_primer": lambda: input.pcr_rev_primer().strip().upper(),
+            "pcr_fwd_arm": lambda: int(input.pcr_fwd_arm()),
+            "pcr_rev_arm": lambda: int(input.pcr_rev_arm()),
+            "pcr_fwd_phos": lambda: bool(input.pcr_fwd_phos()),
+            "pcr_rev_phos": lambda: bool(input.pcr_rev_phos()),
             "saptrap_tm": lambda: float(input.saptrap_tm()),
             "saptrap_tolerance": lambda: float(input.saptrap_arm_tolerance()) / 100.0,
             "saptrap_genbank": lambda: bool(input.saptrap_genbank()),
@@ -1288,7 +1544,7 @@ def reagents_server(input, output, session, shared_json, shared_sites):
         rn = run_name.get() or 'run'
         tag = _insert_tag_name()
         try:
-            arm_len = int(input.arm_length())
+            arm_len = _effective_arm_len()
         except Exception:
             arm_len = None
         files = RB.build_files(

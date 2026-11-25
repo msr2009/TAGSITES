@@ -37,7 +37,10 @@ from genbank_export import (  # noqa: E402
 )
 from plasmid_assembly import OLIGO_MAX, build_saptrap_site  # noqa: E402
 from reagent_sequences import (  # noqa: E402
+    PHOS_TAG,
+    build_custom_pcr_primers,
     build_ssodn,
+    check_primer_binding,
     design_pcr_primers,
     load_tags,
     reconstruct_wt_arms,
@@ -50,9 +53,94 @@ TAGS_PATH = Path(__file__).parent.parent / "tables" / "tags.tsv"
 # arm-length defaults by repair type (the Reagents tab's defaults)
 ARM_DEFAULTS = {"ha": 1000, "ssodn": 45, "amplicon": 45, "plasmid": 57}
 
-# defaults for the repair-specific options the Reagents tab exposes as inputs
+# defaults for the repair-specific options the Reagents tab exposes as inputs.
+# pcr_mode "basic" designs both binding regions from the template (the original
+# behaviour); "advanced" takes the user's own primers, one arm length and one 5'
+# phosphate choice per primer. Everything outside the Reagents tab leaves
+# pcr_mode at "basic", so the CLI and batch paths are unaffected.
 OPTION_DEFAULTS = {"pcr_tm": 60.0, "pcr_phos": False, "pcr_fwd_ext": "", "pcr_rev_ext": "",
+                   "pcr_mode": "basic", "pcr_arm": None,
+                   "pcr_fwd_primer": "", "pcr_rev_primer": "",
+                   "pcr_fwd_arm": 45, "pcr_rev_arm": 45,
+                   "pcr_fwd_phos": False, "pcr_rev_phos": False,
+                   "pcr_max_mismatch": 0,
                    "saptrap_tm": 60.0, "saptrap_tolerance": 0.2, "saptrap_genbank": False}
+
+# which strand of the insert template each supplied primer must anneal to
+PCR_PRIMER_STRANDS = {"fwd": "+", "rev": "-"}
+
+
+def primer_verdicts(insert, opts):
+    """{'fwd': verdict, 'rev': verdict} from check_primer_binding for advanced mode."""
+    return {
+        side: check_primer_binding(
+            opts.get("pcr_{}_primer".format(side), ""), insert or "",
+            max_mismatch=int(opts.get("pcr_max_mismatch", 0)),
+            expect_strand=strand,
+        )
+        for side, strand in PCR_PRIMER_STRANDS.items()
+    }
+
+
+def amplicon_errors(repair, insert, opts, verdicts=None):
+    """Reasons the advanced amplicon primers can't be used ([] when they can).
+
+    Consulted by both the Reagents tab (to replace the download button with the
+    reasons) and oligos_tsv (which refuses to emit), so the two cannot disagree.
+    Only advanced mode can fail here: basic mode designs its own primers and
+    always returns [].
+    """
+    if repair != "amplicon" or opts.get("pcr_mode") != "advanced":
+        return []
+    if not insert:
+        return ["No insert sequence — the tag DNA is the PCR template."]
+    verdicts = verdicts or primer_verdicts(insert, opts)
+    errors = []
+    for side, label in (("fwd", "Forward"), ("rev", "Reverse")):
+        verdict = verdicts[side]
+        if not verdict["acceptable"]:
+            errors.append("{} primer: {}.".format(label, verdict["reason"]))
+    return errors
+
+
+def prepend_ext(seq, ext):
+    """Add a 5' extension, keeping a /5Phos/ modifier at the very 5' end.
+
+    /5Phos/ is an IDT modifier, not a base, so an extension prepended ahead of
+    it would order the ordered oligo wrongly.
+    """
+    if not ext:
+        return seq
+    if seq.startswith(PHOS_TAG):
+        return PHOS_TAG + ext + seq[len(PHOS_TAG):]
+    return ext + seq
+
+
+def oligo_length(seq):
+    """Length of an oligo in bases, ignoring a /5Phos/ modifier."""
+    return len(seq[len(PHOS_TAG):] if seq.startswith(PHOS_TAG) else seq)
+
+
+def primer_note(seq, arm_len, primer_len, verdict):
+    """notes-column text for one supplied primer: where it binds and how long it is.
+
+    total is arm + binding sequence; an optional 5' extension is reported
+    separately rather than folded into it.
+    """
+    total = arm_len + primer_len
+    parts = ["match={}-{}({})".format(verdict["start"] + 1, verdict["end"], verdict["strand"]),
+             "mm={}".format(verdict["mismatches"]),
+             "tm={:.1f}".format(verdict["tm"]),
+             "arm={}".format(arm_len),
+             "total={}".format(total)]
+    ext = oligo_length(seq) - total
+    if ext:
+        parts.append("ext={}".format(ext))
+    if verdict["unmatched_5p"]:
+        parts.append("tail={}".format(verdict["unmatched_5p"]))
+    if verdict["omitted_bases"]:
+        parts.append("omits={}nt".format(verdict["omitted_bases"]))
+    return " ".join(parts)
 
 
 def load_tag_table(path=TAGS_PATH):
@@ -240,14 +328,47 @@ def oligos_tsv(rows, names, repair, insert, opts):
         if repair == "ssodn":
             seq, _, _ = build_ssodn(left, right, insert, cut, ins, True)
             lines.append("{}_repair\t{}\t".format(base, seq))
-        elif repair == "amplicon" and insert:
-            (_, fwd), (_, rev), meta = design_pcr_primers(
-                left, right, insert, opts["pcr_tm"], opts["pcr_phos"], cut, ins
+        elif repair == "amplicon" and insert and opts.get("pcr_mode") == "advanced":
+            errors = amplicon_errors(repair, insert, opts)
+            if errors:
+                raise ValueError("Supplied PCR primers can't be used: " + " ".join(errors))
+            # sized from the stored arms rather than the arms select_rows
+            # truncated, so a per-primer arm may exceed the tab's arm length
+            # without changing the arms written to the homology-arm TSV
+            wt_left, wt_right, wt_is_true = wt_arms_for_row(row)
+            (_, fwd), (_, rev), meta = build_custom_pcr_primers(
+                str(row["left_arm"]), str(row["right_arm"]),
+                opts["pcr_fwd_primer"], opts["pcr_rev_primer"],
+                opts["pcr_fwd_arm"], opts["pcr_rev_arm"],
+                opts["pcr_fwd_phos"], opts["pcr_rev_phos"],
+                left_arm_wt=wt_left if wt_is_true else None,
+                right_arm_wt=wt_right if wt_is_true else None,
             )
-            if opts["pcr_fwd_ext"]:
-                fwd = opts["pcr_fwd_ext"] + fwd
-            if opts["pcr_rev_ext"]:
-                rev = opts["pcr_rev_ext"] + rev
+            fwd = prepend_ext(fwd, opts["pcr_fwd_ext"])
+            rev = prepend_ext(rev, opts["pcr_rev_ext"])
+            verdicts = primer_verdicts(insert, opts)
+            for side, suffix, seq in (("fwd", "F", fwd), ("rev", "R", rev)):
+                lines.append("{}_amp_{}\t{}\t{}".format(
+                    base, suffix, seq,
+                    primer_note(seq, meta["{}_arm".format(side)],
+                                len(meta["{}_bind".format(side)]), verdicts[side])))
+
+        elif repair == "amplicon" and insert:
+            # the Reagents tab's Basic tab carries its own arm length; when it is
+            # unset (CLI, batch) the arms arrive already truncated by select_rows
+            amp_left, amp_right = left, right
+            if opts.get("pcr_arm"):
+                wt_left, wt_right, wt_is_true = wt_arms_for_row(row)
+                amp_left, amp_right = truncate_arms(
+                    str(row["left_arm"]), str(row["right_arm"]), int(opts["pcr_arm"]),
+                    left_arm_wt=wt_left if wt_is_true else None,
+                    right_arm_wt=wt_right if wt_is_true else None,
+                )
+            (_, fwd), (_, rev), meta = design_pcr_primers(
+                amp_left, amp_right, insert, opts["pcr_tm"], opts["pcr_phos"], cut, ins
+            )
+            fwd = prepend_ext(fwd, opts["pcr_fwd_ext"])
+            rev = prepend_ext(rev, opts["pcr_rev_ext"])
             notes = "fallback=True" if meta["used_fallback"] else ""
             lines.append("{}_amp_F\t{}\t{}".format(base, fwd, notes))
             lines.append("{}_amp_R\t{}\t{}".format(base, rev, notes))

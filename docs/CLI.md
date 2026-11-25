@@ -67,6 +67,15 @@ python scripts/reagent_bundle.py \
 ZIP holds the guide, oligo, genotyping and (for SapTrap) plasmid TSVs plus annotated GenBank
 records.
 
+For `amplicon`, `scripts/reagent_sequences.py` designs both primer binding regions from
+`--pcr_template` by default. Supplying `--pcr_fwd_primer` and `--pcr_rev_primer` instead uses
+those sequences as given, with `--pcr_fwd_arm` / `--pcr_rev_arm` sizing each homology arm on its
+own — the way to order two primers of different length at one total length. Each supplied primer
+is checked against the template first (`--pcr_max_mismatch`, 0 by default) and the run exits
+rather than writing oligos when one does not anneal; `--pcr_fwd_phos` / `--pcr_rev_phos`
+phosphorylate either primer independently. The Reagents tab exposes the same thing as the
+amplicon panel's Advanced mode.
+
 ## 4. Proteome-scale analysis and the database
 
 These need local backends and reference data. The full procedure, with sizes and checks, is in

@@ -73,6 +73,37 @@ _STYLE = """
         white-space: pre; margin-top: 0.4rem; margin-bottom: 0.4rem;
     }
 
+    /* Basic/Advanced tabs of the amplicon panel. Scoped to .pcr-tabs so the main
+       app's own tab bar is untouched; the active tab takes the same light blue as
+       the card headers, which the default grey-on-white nav barely distinguishes. */
+    .pcr-tabs .nav-tabs { border-bottom: 1px solid #9ec5fe; margin-bottom: 0.4rem; }
+    .pcr-tabs .nav-tabs .nav-link { font-size: 0.8rem; padding: 0.25rem 0.9rem;
+                                    color: #495057; background: #eef4ff;
+                                    border: 1px solid #cfe2ff; border-bottom: none;
+                                    margin-right: 0.2rem; }
+    .pcr-tabs .nav-tabs .nav-link:hover { background: #dbe7ff; }
+    .pcr-tabs .nav-tabs .nav-link.active { background: #cfe2ff; color: #212529;
+                                           font-weight: 600;
+                                           border-color: #9ec5fe; }
+    .pcr-tabs .tab-content { padding-top: 0.2rem; }
+
+    /* supplied-primer grid (amplicon Advanced tab): one row per primer, the
+       column headers standing in for the per-input labels. The sequence column is
+       fixed at ~50 characters — the longest primer worth typing — rather than
+       stretching to the card. */
+    .pcr-grid { display: grid;
+                grid-template-columns: 7.5rem 23rem auto auto;
+                gap: 0.2rem 0.7rem; align-items: center; margin-bottom: 0.3rem;
+                justify-content: start; }
+    .pcr-grid .shiny-input-container { margin-bottom: 0 !important; width: 100%; }
+    .pcr-grid input[type="text"] { font-family: ui-monospace, Menlo, monospace;
+                                   font-size: 0.75rem; }
+    .pcr-head { font-size: 0.75rem; font-weight: 500; color: #6c757d; }
+    .pcr-row-label { font-size: 0.8rem; font-weight: 500; color: #343a40; }
+    .pcr-arm-cell { display: flex; align-items: center; gap: 0.35rem; }
+    .pcr-arm-cell .shiny-input-container { width: 4.5rem; }
+    .pcr-total { font-size: 0.75rem; color: #6c757d; white-space: nowrap; }
+
     /* warning / error notices */
     .ts-warn { font-size: 0.8rem; color: #856404; background: #fff3cd;
                border: 1px solid #ffc107; border-radius: 4px; padding: 0.3rem 0.6rem;
@@ -137,11 +168,19 @@ def reagents_ui():
                         inline=True,
                     ),
 
-                    # Arm length — default set by server when repair_type changes
-                    ui.input_numeric(
-                        "arm_length", "Homology arm length (bp)",
-                        value=500, min=10, max=2000,
+                    # Arm length — default set by server when repair_type changes.
+                    # Wrapped in an addressable div so the server can hide it for
+                    # amplicon, where the Basic/Advanced tabs carry their own.
+                    ui.div(
+                        ui.input_numeric(
+                            "arm_length", "Homology arm length (bp)",
+                            value=500, min=10, max=2000,
+                        ),
+                        class_="arm-length-box",
                     ),
+                    ui.output_ui("arm_length_box_style"),
+                    # outside the hidden box: amplicon still needs the
+                    # stored-arm-length warning, for its own arm inputs
                     ui.output_ui("arm_length_warning"),
 
                     # Repair-type-specific options rendered from server

@@ -354,6 +354,184 @@ def design_pcr_primers(left_arm, right_arm, template, tm_target, phos,
     return ('_F', fwd_seq), ('_R', rev_seq), {'used_fallback': used_fallback}
 
 
+# ── User-supplied PCR primers (advanced mode) ────────────────────────────────
+
+# How many mismatches the binding scan will describe. Acceptance is a separate,
+# usually stricter, max_mismatch — scanning more tolerantly than that is what
+# lets the report say "matches at 12-31 with 1 mismatch" instead of silently
+# shortening the match to the mismatch-free 3' fragment.
+BIND_SCAN_MISMATCH = 4
+
+# Bases at the 3' end that must match for extension to be credible.
+BIND_THREE_PRIME_LEN = 5
+
+PHOS_TAG = '/5Phos/'
+
+
+def strip_phos(seq):
+    """Primer sequence without a leading /5Phos/ modifier, uppercased."""
+    seq = (seq or '').strip().upper()
+    return seq[len(PHOS_TAG):] if seq.startswith(PHOS_TAG) else seq
+
+
+def check_primer_binding(primer, template, max_mismatch=0, min_bind_len=15,
+                         expect_strand=None):
+    """Check that a user-supplied primer anneals to the tag template.
+
+    Finds the primer's best 3'-anchored match in template on either strand: the
+    3' end must sit in the template (that is the end polymerase extends from),
+    while 5' bases may hang off as an unmatched tail, which is normal for a
+    primer carrying a cloning overhang. Mismatch counting and the 3'-end
+    identity test mirror offtarget_local._score_site; the scan itself is a
+    direct walk rather than blastn seeding, since a tag template is short.
+
+    Candidate matches are ranked by bind_len - 3 * mismatches so a longer match
+    with one mismatch beats a short perfect fragment, then by fewest mismatches.
+
+    expect_strand ('+' for the forward primer, '-' for the reverse) makes a
+    primer that only matches the other strand unacceptable, which catches a
+    swapped pair.
+
+    Returns a dict:
+      found           a match of at least min_bind_len exists (any strand)
+      acceptable      found, on the expected strand, mismatches <= max_mismatch,
+                      and the 3' end matches — the gate the caller enforces
+      strand          '+' (template top strand) or '-'
+      start, end      half-open match interval in template coordinates
+      bind_len        matched primer bases
+      mismatches      mismatches inside the matched span
+      three_prime_ok  the last BIND_THREE_PRIME_LEN primer bases all match
+      tm              duplex Tm (°C) of the matched span
+      unmatched_5p    primer bases 5' of the match (overhang/tail)
+      omitted_bases   template bases this primer's side of the amplicon drops,
+                      i.e. tag sequence the PCR would not copy
+      reason          why it is not acceptable ('' when it is)
+    """
+    p = strip_phos(primer)
+    tmpl = (template or '').strip().upper()
+    out = {'found': False, 'acceptable': False, 'strand': None, 'start': None,
+           'end': None, 'bind_len': 0, 'mismatches': 0, 'three_prime_ok': False,
+           'tm': 0.0, 'unmatched_5p': 0, 'omitted_bases': 0, 'reason': ''}
+    if not p:
+        out['reason'] = 'no primer sequence'
+        return out
+    if not tmpl:
+        out['reason'] = 'no template sequence'
+        return out
+    if len(p) < min_bind_len:
+        out['reason'] = 'primer shorter than the {} nt minimum binding length'.format(min_bind_len)
+        return out
+
+    best = None   # (score, -mismatches, bind_len, strand, start, end) in strand coords
+    for strand, s_seq in (('+', tmpl), ('-', reverse_complement(tmpl))):
+        # anchor the primer's 3' base at each template position, then walk 5'
+        for e in range(len(s_seq)):
+            mm = 0
+            for bind_len in range(1, min(len(p), e + 1) + 1):
+                if p[-bind_len] != s_seq[e - bind_len + 1]:
+                    mm += 1
+                    if mm > BIND_SCAN_MISMATCH:
+                        break
+                if bind_len < min_bind_len:
+                    continue
+                cand = (bind_len - 3 * mm, -mm, bind_len, strand,
+                        e - bind_len + 1, e + 1)
+                if best is None or cand > best:
+                    best = cand
+
+    if best is None:
+        out['reason'] = 'no match of at least {} nt in the template'.format(min_bind_len)
+        return out
+
+    _, neg_mm, bind_len, strand, s_start, s_end = best
+    mismatches = -neg_mm
+    site = (tmpl if strand == '+' else reverse_complement(tmpl))[s_start:s_end]
+
+    # map a minus-strand hit back onto template coordinates
+    if strand == '+':
+        t_start, t_end = s_start, s_end
+    else:
+        t_start, t_end = len(tmpl) - s_end, len(tmpl) - s_start
+
+    tail = min(BIND_THREE_PRIME_LEN, bind_len)
+    three_prime_ok = p[-tail:] == site[-tail:]
+
+    try:
+        tm = float(primer3.bindings.calc_heterodimer(
+            p[-bind_len:], reverse_complement(site)).tm)
+    except Exception:
+        tm = calc_tm(site)
+
+    # a forward primer's amplicon starts at its 5'-most matched base; a reverse
+    # primer's ends at its own 5'-most base, which is the higher template coord
+    omitted = t_start if strand == '+' else len(tmpl) - t_end
+
+    out.update({'found': True, 'strand': strand, 'start': t_start, 'end': t_end,
+                'bind_len': bind_len, 'mismatches': mismatches,
+                'three_prime_ok': three_prime_ok, 'tm': tm,
+                'unmatched_5p': len(p) - bind_len, 'omitted_bases': omitted})
+
+    # acceptance, most specific failure first
+    if expect_strand and strand != expect_strand:
+        out['reason'] = ('matches the {} strand, not the {} strand — the forward and '
+                         'reverse primers may be swapped'.format(strand, expect_strand))
+    elif mismatches > max_mismatch:
+        out['reason'] = '{} mismatch{} against the template (limit {})'.format(
+            mismatches, '' if mismatches == 1 else 'es', max_mismatch)
+    elif not three_prime_ok:
+        out['reason'] = "the 3' {} bases do not match the template".format(tail)
+    else:
+        out['acceptable'] = True
+    return out
+
+
+def build_custom_pcr_primers(left_arm, right_arm, fwd_primer, rev_primer,
+                             fwd_arm_len, rev_arm_len, fwd_phos=False, rev_phos=False,
+                             left_arm_wt=None, right_arm_wt=None):
+    """Add independently sized homology arms to two user-supplied PCR primers.
+
+    Same return shape as design_pcr_primers so callers need one branch, but the
+    binding regions are given rather than designed, each arm is truncated to its
+    own length, and each primer is phosphorylated on its own.
+
+    Each side is sized by truncate_arms, so a recut-blocking mutation farther
+    out than the requested length still extends that arm rather than being
+    truncated away — meta['arm_extended'] records it, since an extended arm is
+    exactly what pushes an oligo past its intended total length.
+
+    Returns ((fwd_suffix, fwd_seq), (rev_suffix, rev_seq), meta) with
+    meta = {used_fallback, fwd_bind, rev_bind, fwd_arm, rev_arm, arm_extended}.
+    """
+    fwd_bind = strip_phos(fwd_primer)
+    rev_bind = strip_phos(rev_primer)
+
+    # one call per side, each with that side's target length, so the two arms
+    # can differ while keeping truncate_arms' mutation handling
+    left_trimmed, _ = truncate_arms(left_arm, right_arm, int(fwd_arm_len),
+                                    left_arm_wt=left_arm_wt, right_arm_wt=right_arm_wt)
+    _, right_trimmed = truncate_arms(left_arm, right_arm, int(rev_arm_len),
+                                     left_arm_wt=left_arm_wt, right_arm_wt=right_arm_wt)
+
+    fwd_seq = left_trimmed + fwd_bind
+    rev_seq = _rc_case(right_trimmed) + rev_bind   # preserve exonic/intronic case
+
+    if fwd_phos:
+        fwd_seq = PHOS_TAG + fwd_seq
+    if rev_phos:
+        rev_seq = PHOS_TAG + rev_seq
+
+    meta = {
+        'used_fallback': False,
+        'fwd_bind': fwd_bind,
+        'rev_bind': rev_bind,
+        'fwd_arm': len(left_trimmed),
+        'rev_arm': len(right_trimmed),
+        'arm_extended': (len(left_trimmed) != int(fwd_arm_len)
+                         or len(right_trimmed) != int(rev_arm_len)),
+    }
+    return ('_F', fwd_seq), ('_R', rev_seq), meta
+
+
 # ── Genotyping (screening) primer design ─────────────────────────────────────
 
 def _primer3_offset(res, key):
@@ -931,8 +1109,44 @@ if __name__ == '__main__':
                         help='Primer Tm target (°C) for amplicon (default: 60)')
     parser.add_argument('--pcr_phos',      action='store_true',
                         help='Add 5-phosphate to one PCR primer for lambda-exo')
+    parser.add_argument('--pcr_fwd_primer', default='',
+                        help='Advanced amplicon: forward primer binding sequence. '
+                             'Given with --pcr_rev_primer, these replace the designed '
+                             'binding regions and each arm takes its own length.')
+    parser.add_argument('--pcr_rev_primer', default='',
+                        help='Advanced amplicon: reverse primer binding sequence')
+    parser.add_argument('--pcr_fwd_arm',   type=int, default=None,
+                        help='Advanced amplicon: homology arm length (bp) on the forward '
+                             'primer (default: --arm_length)')
+    parser.add_argument('--pcr_rev_arm',   type=int, default=None,
+                        help='Advanced amplicon: homology arm length (bp) on the reverse '
+                             'primer (default: --arm_length)')
+    parser.add_argument('--pcr_fwd_phos',  action='store_true',
+                        help='Advanced amplicon: 5-phosphorylate the forward primer')
+    parser.add_argument('--pcr_rev_phos',  action='store_true',
+                        help='Advanced amplicon: 5-phosphorylate the reverse primer')
+    parser.add_argument('--pcr_max_mismatch', type=int, default=0,
+                        help='Advanced amplicon: mismatches allowed between a supplied '
+                             'primer and the template (default: 0)')
     parser.add_argument('--output',        required=True, help='Output TSV path')
     args = parser.parse_args()
+
+    # advanced amplicon mode: both primers supplied, checked once against the
+    # template before any row is written (a non-binding primer is an input error)
+    custom_pcr = bool(args.pcr_fwd_primer and args.pcr_rev_primer)
+    if custom_pcr:
+        for which, seq, want in (('forward', args.pcr_fwd_primer, '+'),
+                                 ('reverse', args.pcr_rev_primer, '-')):
+            verdict = check_primer_binding(seq, args.pcr_template,
+                                           max_mismatch=args.pcr_max_mismatch,
+                                           expect_strand=want)
+            if not verdict['acceptable']:
+                sys.exit('ERROR: {} primer does not bind the template: {}'.format(
+                    which, verdict['reason']))
+            if verdict['omitted_bases']:
+                print('WARNING: {} primer binds {} nt inside the template; the amplicon '
+                      'omits those bases'.format(which, verdict['omitted_bases']),
+                      file=sys.stderr)
 
     df   = pd.read_csv(args.reagents_tsv, sep='\t')
     rows = []
@@ -959,6 +1173,30 @@ if __name__ == '__main__':
             )
             rows.append({'name': '{}_ssODN'.format(site), 'sequence': seq,
                          'total_len': total, 'strand': strand})
+            rows.append({'name': '{}_crRNA'.format(site), 'sequence': crrna})
+
+        elif args.repair_type == 'amplicon' and custom_pcr:
+            # sized from the stored arms, since a per-primer arm may be longer
+            # than --arm_length
+            try:
+                (_, fwd), (_, rev), meta = build_custom_pcr_primers(
+                    row['left_arm'], row['right_arm'],
+                    args.pcr_fwd_primer, args.pcr_rev_primer,
+                    args.pcr_fwd_arm if args.pcr_fwd_arm is not None else args.arm_length,
+                    args.pcr_rev_arm if args.pcr_rev_arm is not None else args.arm_length,
+                    args.pcr_fwd_phos, args.pcr_rev_phos,
+                    left_arm_wt=row['left_arm_wt'] if has_wt else None,
+                    right_arm_wt=row['right_arm_wt'] if has_wt else None,
+                )
+            except ValueError as e:
+                print('WARNING: {}'.format(e), file=sys.stderr)
+                continue
+            if meta['arm_extended']:
+                print('WARNING: {} arms extended to {}/{} bp to keep a recut-blocking '
+                      'mutation'.format(site, meta['fwd_arm'], meta['rev_arm']),
+                      file=sys.stderr)
+            rows.append({'name': '{}_F'.format(site), 'sequence': fwd})
+            rows.append({'name': '{}_R'.format(site), 'sequence': rev})
             rows.append({'name': '{}_crRNA'.format(site), 'sequence': crrna})
 
         elif args.repair_type == 'amplicon' and args.pcr_template:
