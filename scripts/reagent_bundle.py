@@ -51,7 +51,7 @@ from reagent_sequences import (  # noqa: E402
 TAGS_PATH = Path(__file__).parent.parent / "tables" / "tags.tsv"
 
 # arm-length defaults by repair type (the Reagents tab's defaults)
-ARM_DEFAULTS = {"ha": 1000, "ssodn": 45, "amplicon": 45, "plasmid": 57}
+ARM_DEFAULTS = {"ha": 1000, "ssodn": 35, "amplicon": 35, "plasmid": 57}
 
 # defaults for the repair-specific options the Reagents tab exposes as inputs.
 # pcr_mode "basic" designs both binding regions from the template (the original
@@ -61,7 +61,7 @@ ARM_DEFAULTS = {"ha": 1000, "ssodn": 45, "amplicon": 45, "plasmid": 57}
 OPTION_DEFAULTS = {"pcr_tm": 60.0, "pcr_phos": False, "pcr_fwd_ext": "", "pcr_rev_ext": "",
                    "pcr_mode": "basic", "pcr_arm": None,
                    "pcr_fwd_primer": "", "pcr_rev_primer": "",
-                   "pcr_fwd_arm": 45, "pcr_rev_arm": 45,
+                   "pcr_fwd_arm": 35, "pcr_rev_arm": 35,
                    "pcr_fwd_phos": False, "pcr_rev_phos": False,
                    "pcr_max_mismatch": 0,
                    "saptrap_tm": 60.0, "saptrap_tolerance": 0.2, "saptrap_genbank": False}

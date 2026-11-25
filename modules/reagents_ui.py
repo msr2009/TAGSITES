@@ -77,7 +77,7 @@ _STYLE = """
        app's own tab bar is untouched; the active tab takes the same light blue as
        the card headers, which the default grey-on-white nav barely distinguishes. */
     .pcr-tabs .nav-tabs { border-bottom: 1px solid #9ec5fe; margin-bottom: 0.4rem; }
-    .pcr-tabs .nav-tabs .nav-link { font-size: 0.8rem; padding: 0.25rem 0.9rem;
+    .pcr-tabs .nav-tabs .nav-link { font-size: 0.875rem; padding: 0.25rem 0.9rem;
                                     color: #495057; background: #eef4ff;
                                     border: 1px solid #cfe2ff; border-bottom: none;
                                     margin-right: 0.2rem; }
@@ -92,17 +92,17 @@ _STYLE = """
        fixed at ~50 characters — the longest primer worth typing — rather than
        stretching to the card. */
     .pcr-grid { display: grid;
-                grid-template-columns: 7.5rem 23rem auto auto;
+                grid-template-columns: 8rem 25rem auto auto;
                 gap: 0.2rem 0.7rem; align-items: center; margin-bottom: 0.3rem;
                 justify-content: start; }
     .pcr-grid .shiny-input-container { margin-bottom: 0 !important; width: 100%; }
     .pcr-grid input[type="text"] { font-family: ui-monospace, Menlo, monospace;
-                                   font-size: 0.75rem; }
-    .pcr-head { font-size: 0.75rem; font-weight: 500; color: #6c757d; }
-    .pcr-row-label { font-size: 0.8rem; font-weight: 500; color: #343a40; }
+                                   font-size: 0.8rem; }
+    .pcr-head { font-size: 0.8rem; font-weight: 500; color: #6c757d; }
+    .pcr-row-label { font-size: 0.875rem; font-weight: 500; color: #343a40; }
     .pcr-arm-cell { display: flex; align-items: center; gap: 0.35rem; }
     .pcr-arm-cell .shiny-input-container { width: 4.5rem; }
-    .pcr-total { font-size: 0.75rem; color: #6c757d; white-space: nowrap; }
+    .pcr-total { font-size: 0.8rem; color: #6c757d; white-space: nowrap; }
 
     /* warning / error notices */
     .ts-warn { font-size: 0.8rem; color: #856404; background: #fff3cd;
@@ -139,106 +139,96 @@ def reagents_ui():
         # ── Run summary ───────────────────────────────────────────────────────
         ui.output_ui("run_header"),
 
-        # ── Output parameters card ────────────────────────────────────────────
-        ui.div(
-            ui.div(
-                ui.div(
-                    ui.span("Output parameters"),
-                    class_="card-header fw-semibold reagents-panel-header",
+        # ── Settings sections ─────────────────────────────────────────────────
+        # One collapsible panel per stage (Tag, Repair, Genotyping primers),
+        # ahead of the per-site accordion. Tag and Repair open by default; the
+        # genotyping panel stays shut until its primers are wanted.
+        ui.accordion(
+            ui.accordion_panel(
+                "Tag",
+                # Tag / insert sequence — select is static to preserve selection;
+                # server populates choices via ui.update_select on session start
+                ui.input_select("tag_name", "Tag / insert sequence",
+                                choices={"Custom": "Custom…"}, selected="Custom"),
+                ui.output_ui("tag_custom_area"),
+                value="tag",
+            ),
+            ui.accordion_panel(
+                "Repair",
+                ui.input_radio_buttons(
+                    "repair_type", "Repair type",
+                    choices={
+                        "ha":       "Homology arm only",
+                        "ssodn":    "ssODN",
+                        "amplicon": "Amplicon (PCR)",
+                        "plasmid":  "SapTrap donor",
+                    },
+                    selected="ha",
+                    inline=True,
                 ),
+
+                # Arm length — default set by server when repair_type changes.
+                # Wrapped in an addressable div so the server can hide it for
+                # amplicon, where the Basic/Advanced tabs carry their own.
                 ui.div(
-                    # Tag / insert sequence — select is static to preserve selection;
-                    # server populates choices via ui.update_select on session start
-                    ui.input_select("tag_name", "Tag / insert sequence",
-                                    choices={"Custom": "Custom…"}, selected="Custom"),
-                    ui.output_ui("tag_custom_area"),
-
-                    ui.hr(style="margin: 0.5rem 0;"),
-
-                    # Repair type
-                    ui.input_radio_buttons(
-                        "repair_type", "Repair type",
-                        choices={
-                            "ha":       "Homology arm only",
-                            "ssodn":    "ssODN",
-                            "amplicon": "Amplicon (PCR)",
-                            "plasmid":  "SapTrap donor",
-                        },
-                        selected="ha",
-                        inline=True,
+                    ui.input_numeric(
+                        "arm_length", "Homology arm length (bp)",
+                        value=500, min=10, max=2000,
                     ),
+                    class_="arm-length-box",
+                ),
+                ui.output_ui("arm_length_box_style"),
+                # outside the hidden box: amplicon still needs the
+                # stored-arm-length warning, for its own arm inputs
+                ui.output_ui("arm_length_warning"),
 
-                    # Arm length — default set by server when repair_type changes.
-                    # Wrapped in an addressable div so the server can hide it for
-                    # amplicon, where the Basic/Advanced tabs carry their own.
-                    ui.div(
+                # Repair-type-specific options rendered from server
+                ui.output_ui("repair_options"),
+                value="repair",
+            ),
+            ui.accordion_panel(
+                "Genotyping primers",
+                ui.p(
+                    "Design screening PCR primers flanking the insertion site for the "
+                    "currently selected sites, using the tag/insert sequence above.",
+                    class_="section-hint",
+                ),
+                ui.output_ui("genotyping_insert_warning"),
+                ui.row(
+                    ui.column(
+                        6,
                         ui.input_numeric(
-                            "arm_length", "Homology arm length (bp)",
-                            value=500, min=10, max=2000,
+                            "primer_opt_tm",
+                            label_with_tip(
+                                "Optimal primer Tm (°C)",
+                                "primer3's PRIMER_OPT_TM — the melting temperature primer3 "
+                                "aims for when picking each primer (searched within ±3°C).",
+                            ),
+                            value=60, min=40, max=80,
                         ),
-                        class_="arm-length-box",
-                    ),
-                    ui.output_ui("arm_length_box_style"),
-                    # outside the hidden box: amplicon still needs the
-                    # stored-arm-length warning, for its own arm inputs
-                    ui.output_ui("arm_length_warning"),
-
-                    # Repair-type-specific options rendered from server
-                    ui.output_ui("repair_options"),
-
-                    class_="card-body",
-                ),
-                class_="card mb-3",
-            ),
-        ),
-
-        # ── Genotyping primers card ───────────────────────────────────────────
-        ui.div(
-            ui.div(
-                ui.div(
-                    ui.span("Genotyping primers"),
-                    class_="card-header fw-semibold reagents-panel-header",
-                ),
-                ui.div(
-                    ui.p(
-                        "Design screening PCR primers flanking the insertion site for the "
-                        "currently selected sites, using the tag/insert sequence above.",
-                        class_="section-hint",
-                    ),
-                    ui.output_ui("genotyping_insert_warning"),
-                    ui.row(
-                        ui.column(
-                            6,
-                            ui.input_numeric(
-                                "primer_opt_tm",
-                                label_with_tip(
-                                    "Optimal primer Tm (°C)",
-                                    "primer3's PRIMER_OPT_TM — the melting temperature primer3 "
-                                    "aims for when picking each primer (searched within ±3°C).",
-                                ),
-                                value=60, min=40, max=80,
+                        ui.input_numeric(
+                            "product_opt_size",
+                            label_with_tip(
+                                "Optimal product size (bp)",
+                                "primer3's PRIMER_PRODUCT_OPT_SIZE — the preferred amplicon "
+                                "length. Acts as a soft target; primer3 still returns the "
+                                "closest feasible product when the actual size is constrained "
+                                "(e.g. a short insert forces a smaller product).",
                             ),
-                            ui.input_numeric(
-                                "product_opt_size",
-                                label_with_tip(
-                                    "Optimal product size (bp)",
-                                    "primer3's PRIMER_PRODUCT_OPT_SIZE — the preferred amplicon "
-                                    "length. Acts as a soft target; primer3 still returns the "
-                                    "closest feasible product when the actual size is constrained "
-                                    "(e.g. a short insert forces a smaller product).",
-                                ),
-                                value=200, min=50,
-                            ),
+                            value=200, min=50,
                         ),
                     ),
-                    ui.input_action_button(
-                        "design_genotyping", "Design genotyping primers",
-                        class_="btn-primary btn-sm mt-2",
-                    ),
-                    class_="card-body",
                 ),
-                class_="card mb-3",
+                ui.input_action_button(
+                    "design_genotyping", "Design genotyping primers",
+                    class_="btn-primary btn-sm mt-2",
+                ),
+                value="genotyping",
             ),
+            id="reagents_settings",
+            multiple=True,
+            open=["tag", "repair"],
+            class_="reagents-accordion mb-3",
         ),
 
         # ── Download row (top) ────────────────────────────────────────────────

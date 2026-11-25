@@ -829,7 +829,7 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                                 "to the homology-arm TSV. An arm is extended past this "
                                 "length when a recut-blocking mutation sits farther out.",
                             ),
-                            value=_ARM_DEFAULTS.get("amplicon", 45), min=10, max=2000,
+                            value=_ARM_DEFAULTS.get("amplicon", 35), min=10, max=2000,
                         ),
                         ui.input_numeric("pcr_tm", "Primer binding Tm target (°C)",
                                          value=60, min=40, max=80),
@@ -862,16 +862,20 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                     id="pcr_mode",
                     selected="basic",
             ), class_="pcr-tabs"))
-            children += [
-                ui.hr(style="margin: 0.5rem 0;"),
-                ui.p("Optional 5′ extensions (e.g. Gibson assembly overhangs, "
-                     "restriction sites, SapI tails). Prepended to the arm overhang.",
-                     class_="section-hint"),
-                ui.input_text("pcr_fwd_ext", "Forward primer 5′ extension", value="",
-                              placeholder="e.g. AAACCCGGG"),
-                ui.input_text("pcr_rev_ext", "Reverse primer 5′ extension", value="",
-                              placeholder="e.g. TTTGGGCCC"),
-            ]
+            # Optional 5′ extensions, retired from the UI. The plumbing stays
+            # live — _bundle_opts keeps pcr_fwd_ext/pcr_rev_ext at "" with the
+            # inputs absent and reagent_bundle.prepend_ext is then a no-op — so
+            # restoring the inputs is the only step needed to bring them back.
+            # children += [
+            #     ui.hr(style="margin: 0.5rem 0;"),
+            #     ui.p("Optional 5′ extensions (e.g. Gibson assembly overhangs, "
+            #          "restriction sites, SapI tails). Prepended to the arm overhang.",
+            #          class_="section-hint"),
+            #     ui.input_text("pcr_fwd_ext", "Forward primer 5′ extension", value="",
+            #                   placeholder="e.g. AAACCCGGG"),
+            #     ui.input_text("pcr_rev_ext", "Reverse primer 5′ extension", value="",
+            #                   placeholder="e.g. TTTGGGCCC"),
+            # ]
             return ui.div(*children)
 
         if repair == "plasmid":
@@ -944,7 +948,8 @@ def reagents_server(input, output, session, shared_json, shared_sites):
             ),
             ui.div(
                 ui.input_numeric("pcr_{}_arm".format(side), None,
-                                 value=40, min=10, max=2000),
+                                 value=_ARM_DEFAULTS.get("amplicon", 35),
+                                 min=10, max=2000),
                 ui.output_ui("pcr_{}_total".format(side), inline=True),
                 class_="pcr-arm-cell",
             ),
