@@ -299,6 +299,19 @@ def _primer3_anchored_single(template, force_pos, pick_left, primer_opt_tm, max_
     return seq, res.get(tm_key)
 
 
+def phos_sides(cut_pos, insert_pos):
+    """(fwd, rev) — which primer carries the 5' phosphate for lambda-exo ssDNA.
+
+    Cut 5' of the insert: antisense ssDNA is wanted, so the forward primer is
+    phosphorylated and lambda exo degrades that strand. Cut at or 3' of it:
+    sense ssDNA, so the reverse primer is. The rule is per site, since cut_pos
+    and insert_pos come from the row, and is shared by the designed-primer and
+    supplied-primer paths so the two cannot drift apart.
+    """
+    fwd = cut_pos < insert_pos
+    return fwd, not fwd
+
+
 def design_pcr_primers(left_arm, right_arm, template, tm_target, phos,
                        cut_pos, insert_pos, max_bind_len=36):
     """Design PCR primers that add homology arms to a tag template.
@@ -344,12 +357,11 @@ def design_pcr_primers(left_arm, right_arm, template, tm_target, phos,
 
     # Phosphorylate the primer that produces the desired repair strand
     if phos:
-        if cut_pos < insert_pos:
-            # want antisense ssDNA after lambda exo → phos fwd primer
-            fwd_seq = '/5Phos/' + fwd_seq
-        else:
-            # want sense ssDNA → phos rev primer
-            rev_seq = '/5Phos/' + rev_seq
+        phos_fwd, phos_rev = phos_sides(cut_pos, insert_pos)
+        if phos_fwd:
+            fwd_seq = PHOS_TAG + fwd_seq
+        if phos_rev:
+            rev_seq = PHOS_TAG + rev_seq
 
     return ('_F', fwd_seq), ('_R', rev_seq), {'used_fallback': used_fallback}
 
@@ -1122,9 +1134,11 @@ if __name__ == '__main__':
                         help='Advanced amplicon: homology arm length (bp) on the reverse '
                              'primer (default: --arm_length)')
     parser.add_argument('--pcr_fwd_phos',  action='store_true',
-                        help='Advanced amplicon: 5-phosphorylate the forward primer')
+                        help='Advanced amplicon: force the 5-phosphate onto the forward '
+                             'primer for every site, instead of following each cut position')
     parser.add_argument('--pcr_rev_phos',  action='store_true',
-                        help='Advanced amplicon: 5-phosphorylate the reverse primer')
+                        help='Advanced amplicon: force the 5-phosphate onto the reverse '
+                             'primer for every site')
     parser.add_argument('--pcr_max_mismatch', type=int, default=0,
                         help='Advanced amplicon: mismatches allowed between a supplied '
                              'primer and the template (default: 0)')
@@ -1176,15 +1190,22 @@ if __name__ == '__main__':
             rows.append({'name': '{}_crRNA'.format(site), 'sequence': crrna})
 
         elif args.repair_type == 'amplicon' and custom_pcr:
-            # sized from the stored arms, since a per-primer arm may be longer
-            # than --arm_length
+            # the phosphate follows this site's cut geometry unless a side is
+            # forced; sized from the stored arms, since a per-primer arm may be
+            # longer than --arm_length
+            if args.pcr_fwd_phos or args.pcr_rev_phos:
+                phos_fwd, phos_rev = args.pcr_fwd_phos, args.pcr_rev_phos
+            elif args.pcr_phos:
+                phos_fwd, phos_rev = phos_sides(cut, ins)
+            else:
+                phos_fwd = phos_rev = False
             try:
                 (_, fwd), (_, rev), meta = build_custom_pcr_primers(
                     row['left_arm'], row['right_arm'],
                     args.pcr_fwd_primer, args.pcr_rev_primer,
                     args.pcr_fwd_arm if args.pcr_fwd_arm is not None else args.arm_length,
                     args.pcr_rev_arm if args.pcr_rev_arm is not None else args.arm_length,
-                    args.pcr_fwd_phos, args.pcr_rev_phos,
+                    phos_fwd, phos_rev,
                     left_arm_wt=row['left_arm_wt'] if has_wt else None,
                     right_arm_wt=row['right_arm_wt'] if has_wt else None,
                 )

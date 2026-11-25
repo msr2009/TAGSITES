@@ -43,6 +43,7 @@ from reagent_sequences import (  # noqa: E402
     check_primer_binding,
     design_pcr_primers,
     load_tags,
+    phos_sides,
     reconstruct_wt_arms,
     truncate_arms,
     truncate_arms_with_tolerance,
@@ -62,7 +63,6 @@ OPTION_DEFAULTS = {"pcr_tm": 60.0, "pcr_phos": False, "pcr_fwd_ext": "", "pcr_re
                    "pcr_mode": "basic", "pcr_arm": None,
                    "pcr_fwd_primer": "", "pcr_rev_primer": "",
                    "pcr_fwd_arm": 35, "pcr_rev_arm": 35,
-                   "pcr_fwd_phos": False, "pcr_rev_phos": False,
                    "pcr_max_mismatch": 0,
                    "saptrap_tm": 60.0, "saptrap_tolerance": 0.2, "saptrap_genbank": False}
 
@@ -336,11 +336,14 @@ def oligos_tsv(rows, names, repair, insert, opts):
             # truncated, so a per-primer arm may exceed the tab's arm length
             # without changing the arms written to the homology-arm TSV
             wt_left, wt_right, wt_is_true = wt_arms_for_row(row)
+            # the phosphate follows this row's cut/insert geometry, exactly as in
+            # basic mode — the primer sequences are shared, the modifier is not
+            phos_fwd, phos_rev = phos_sides(cut, ins)
             (_, fwd), (_, rev), meta = build_custom_pcr_primers(
                 str(row["left_arm"]), str(row["right_arm"]),
                 opts["pcr_fwd_primer"], opts["pcr_rev_primer"],
                 opts["pcr_fwd_arm"], opts["pcr_rev_arm"],
-                opts["pcr_fwd_phos"], opts["pcr_rev_phos"],
+                opts["pcr_phos"] and phos_fwd, opts["pcr_phos"] and phos_rev,
                 left_arm_wt=wt_left if wt_is_true else None,
                 right_arm_wt=wt_right if wt_is_true else None,
             )

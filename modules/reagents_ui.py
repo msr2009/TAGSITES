@@ -92,7 +92,7 @@ _STYLE = """
        fixed at ~50 characters — the longest primer worth typing — rather than
        stretching to the card. */
     .pcr-grid { display: grid;
-                grid-template-columns: 8rem 25rem auto auto;
+                grid-template-columns: 8rem 25rem auto;
                 gap: 0.2rem 0.7rem; align-items: center; margin-bottom: 0.3rem;
                 justify-content: start; }
     .pcr-grid .shiny-input-container { margin-bottom: 0 !important; width: 100%; }
@@ -103,6 +103,13 @@ _STYLE = """
     .pcr-arm-cell { display: flex; align-items: center; gap: 0.35rem; }
     .pcr-arm-cell .shiny-input-container { width: 4.5rem; }
     .pcr-total { font-size: 0.8rem; color: #6c757d; white-space: nowrap; }
+
+    /* 5' phosphate row — the label reads as one line, never wrapped under the box */
+    .pcr-phos-row { margin-top: 0.3rem; }
+    .pcr-phos-row .form-check { display: flex; align-items: center; gap: 0.4rem;
+                                white-space: nowrap; }
+    .pcr-phos-row .form-check-label, .pcr-phos-row label { white-space: nowrap;
+                                                           margin-bottom: 0; }
 
     /* warning / error notices */
     .ts-warn { font-size: 0.8rem; color: #856404; background: #fff3cd;

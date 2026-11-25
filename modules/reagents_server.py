@@ -23,6 +23,7 @@ from reagent_sequences import (
     check_recut_risk,
     design_genotyping_primers,
     design_pcr_primers,
+    phos_sides,
     strip_phos,
     truncate_arms,
     truncate_arms_with_tolerance,
@@ -50,6 +51,12 @@ _TAGS = RB.load_tag_table()
 
 # Arm-length defaults by repair type
 _ARM_DEFAULTS = RB.ARM_DEFAULTS
+
+# Shared by both amplicon tabs: the same choice, worded once. Which primer the
+# phosphate lands on follows each site's cut geometry (reagent_sequences.phos_sides),
+# so the label says "one primer" rather than naming a side.
+_PHOS_LABEL = ("5′ phosphorylate one primer (for making single-stranded templates "
+               "with lambda exonuclease)")
 
 # Genotyping-primer design window: how far off the insert primers must sit
 _GENOTYPING_FLANK_MIN = 50
@@ -504,11 +511,13 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                     # stored arms so each side can exceed the tab's arm length
                     opts = _bundle_opts()
                     if opts["pcr_fwd_primer"] and opts["pcr_rev_primer"]:
+                        phos_fwd, phos_rev = phos_sides(
+                            int(row["cut_pos"]), int(row["insert_pos"]))
                         (_, fwd_seq), (_, rev_seq), custom_meta = build_custom_pcr_primers(
                             str(row["left_arm"]), str(row["right_arm"]),
                             opts["pcr_fwd_primer"], opts["pcr_rev_primer"],
                             opts["pcr_fwd_arm"], opts["pcr_rev_arm"],
-                            opts["pcr_fwd_phos"], opts["pcr_rev_phos"],
+                            opts["pcr_phos"] and phos_fwd, opts["pcr_phos"] and phos_rev,
                             left_arm_wt=wt_left_src if wt_is_true else None,
                             right_arm_wt=wt_right_src if wt_is_true else None,
                         )
@@ -833,11 +842,9 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                         ),
                         ui.input_numeric("pcr_tm", "Primer binding Tm target (°C)",
                                          value=60, min=40, max=80),
-                        ui.input_checkbox(
-                            "pcr_phos",
-                            "5′ phosphorylate one primer (lambda-exo single-strand "
-                            "degradation)",
-                            value=False,
+                        ui.div(
+                            ui.input_checkbox("pcr_phos", _PHOS_LABEL, value=False),
+                            class_="pcr-phos-row",
                         ),
                         value="basic",
                     ),
@@ -846,17 +853,22 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                         ui.p("Each primer is used as given and its homology arm is sized "
                              "on its own, so two primers of different length can still be "
                              "ordered at one total length. Both are checked against the "
-                             "template.", class_="section-hint"),
+                             "template. The phosphate goes on whichever primer each "
+                             "site's cut position calls for, as in Basic.",
+                             class_="section-hint"),
                         ui.div(
                             ui.div("", class_="pcr-head"),
                             ui.div("Sequence (5′→3′)", class_="pcr-head"),
                             ui.div("Homology arm length", class_="pcr-head"),
-                            ui.div("5′ phosphorylate?", class_="pcr-head"),
                             *_pcr_primer_row("fwd", "Forward primer"),
                             *_pcr_primer_row("rev", "Reverse primer"),
                             class_="pcr-grid",
                         ),
                         ui.output_ui("pcr_binding_report"),
+                        ui.div(
+                            ui.input_checkbox("pcr_adv_phos", _PHOS_LABEL, value=False),
+                            class_="pcr-phos-row",
+                        ),
                         value="advanced",
                     ),
                     id="pcr_mode",
@@ -933,11 +945,13 @@ def reagents_server(input, output, session, shared_json, shared_sites):
         return ui.span()   # ha: no extra options
 
     def _pcr_primer_row(side, label):
-        """One grid row for a supplied primer: label, sequence, arm + live total, phos.
+        """One grid row for a supplied primer: label, sequence, arm + live total.
 
-        Returned as a tuple of four cells rather than a div, so the four columns
-        line up across both rows of the enclosing .pcr-grid. The column headers
-        carry the names, so the inputs themselves are label-less.
+        Returned as a tuple of cells rather than a div, so the columns line up
+        across both rows of the enclosing .pcr-grid. The column headers carry the
+        names, so the inputs themselves are label-less. There is no per-primer
+        phosphate cell: which primer carries it follows each site's own cut
+        geometry, so it is one checkbox below the grid, not a column.
         """
         return (
             ui.div(label, class_="pcr-row-label"),
@@ -953,7 +967,6 @@ def reagents_server(input, output, session, shared_json, shared_sites):
                 ui.output_ui("pcr_{}_total".format(side), inline=True),
                 class_="pcr-arm-cell",
             ),
-            ui.div(ui.input_checkbox("pcr_{}_phos".format(side), None, value=False)),
         )
 
     def _pcr_total_text(side):
@@ -1520,7 +1533,10 @@ def reagents_server(input, output, session, shared_json, shared_sites):
         opts = dict(RB.OPTION_DEFAULTS)
         readers = {
             "pcr_tm": lambda: float(input.pcr_tm()),
-            "pcr_phos": lambda: input.pcr_phos(),
+            # both tabs' inputs exist in the DOM at once, so the mode picks which
+            # phosphate checkbox counts
+            "pcr_phos": lambda: bool(input.pcr_adv_phos() if _pcr_mode() == "advanced"
+                                     else input.pcr_phos()),
             "pcr_fwd_ext": lambda: input.pcr_fwd_ext().strip().upper(),
             "pcr_rev_ext": lambda: input.pcr_rev_ext().strip().upper(),
             "pcr_mode": _pcr_mode,
@@ -1529,8 +1545,6 @@ def reagents_server(input, output, session, shared_json, shared_sites):
             "pcr_rev_primer": lambda: input.pcr_rev_primer().strip().upper(),
             "pcr_fwd_arm": lambda: int(input.pcr_fwd_arm()),
             "pcr_rev_arm": lambda: int(input.pcr_rev_arm()),
-            "pcr_fwd_phos": lambda: bool(input.pcr_fwd_phos()),
-            "pcr_rev_phos": lambda: bool(input.pcr_rev_phos()),
             "saptrap_tm": lambda: float(input.saptrap_tm()),
             "saptrap_tolerance": lambda: float(input.saptrap_arm_tolerance()) / 100.0,
             "saptrap_genbank": lambda: bool(input.saptrap_genbank()),
